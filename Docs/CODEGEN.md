@@ -14,21 +14,21 @@ cachebay-cli codegen \
 For each operation file (`MyQuery.graphql`):
 
 ```swift
-public struct MyQuery: Sendable {
-    public struct Variables: Sendable {
+public struct MyQuery: Cachebay.Operation {
+    public struct Variables: Cachebay.OperationVariables {
         public var id: String
         public init(id: String) { self.id = id }
         public var __cachebay: [String: JSONValue] { /* ... */ }
     }
 
-    public struct Data: Sendable {
-        public let __data: [String: JSONValue]
-        public var post: Post? { /* typed accessor */ }
-        public struct Post: Sendable {
+    public struct Data: Cachebay.OperationData {
+        public var __data: [String: JSONValue]
+        public var post: Post? { get { … } set { … } }     // get/set round-trips through __data
+        public struct Post: Cachebay.OperationData {
             public var id: String
             public var title: String
-            public var author: Author?
-            public struct Author: Sendable { /* … */ }
+            public var author: Author? { get { … } set { … } }
+            public struct Author: Cachebay.OperationData { /* … */ }
         }
     }
 
@@ -38,6 +38,13 @@ public struct MyQuery: Sendable {
     public static let document: QueryDocument = .plan(cachePlan)
 }
 ```
+
+Fragments emit the same shape but conform to `Cachebay.Fragment` instead of `Cachebay.Operation`, plus two extra statics:
+
+- `fragmentName` — disambiguates when a source string ships multiple fragment definitions.
+- `onTypename` — the GraphQL type the fragment is declared on (`fragment X on Y { … }` → `"Y"`). Typed APIs (`readFragment<F>`, `b.patch(fragment:id:)`, `b.connection.removeNode(fragment:id:)`) build the canonical cache key from this + the bare entity id.
+
+Connection mutations go through `modifyOptimistic { b.connection(...).addNode/removeNode/patch }` — there are no codegen-emitted helpers on `Data.Posts`. See [OPTIMISTIC_UPDATES.md](./OPTIMISTIC_UPDATES.md).
 
 Plus, in shared files:
 
@@ -137,27 +144,17 @@ apollo-compiler validates against the schema with full diagnostics — typos, mi
 
 ## Using generated code
 
-```swift
-// 1) Construct typed Variables.
-let vars = ListPosts.Variables(
-    first: 20,
-    after: nil,
-    filter: PostFilter(query: nil, sort: .createDateDesc)
-)
+The runtime ships typed overloads for every cache operation — pass `Op.self` (or `Fragment.self`) and a typed `Variables` struct, get back a typed `Data` shape directly. Callers don't touch `JSONValue` for the hot path.
 
-// 2) Hand off to the runtime via the pre-baked plan.
+```swift
+// 1) Execute — typed Variables in, typed result out.
 let result = try await client.executeQuery(
-    query: ListPosts.networkQuery,
-    variables: vars.__cachebay,
+    query: ListPosts.self,
+    variables: .init(first: 20, filter: PostFilter(query: nil, sort: .createDateDesc)),
     cachePolicy: .cacheAndNetwork
 )
-
-// 3) Decode typed Data.
-if let data = result.data {
-    let typed = ListPosts.Data(__data: data.object ?? [:])
-    for edge in typed.posts?.edges ?? [] {
-        print(edge.node.title)
-    }
+for edge in result.data?.posts?.edges ?? [] {
+    print(edge.node.title)
 }
 ```
 
@@ -165,26 +162,59 @@ In a watcher:
 
 ```swift
 let handle = try client.watchQuery(
-    query: ListPosts.networkQuery,
-    options: WatchQueryOptions(
-        variables: vars.__cachebay,
-        immediate: true,
-        onData: { json in
-            let typed = ListPosts.Data(__data: json.object ?? [:])
-            // ... update UI
-        }
-    )
+    query: ListPosts.self,
+    variables: .init(first: 20),
+    immediate: true,
+    onData: { data in
+        // `data` is typed `ListPosts.Data` — no JSON unwrap.
+    }
 )
+```
+
+Read sync against the cache:
+
+```swift
+let cached = client.readQuery(query: ListPosts.self, variables: .init(first: 20))
+let post = client.readFragment(fragment: PostFields.self, id: 42, variables: .init())
+```
+
+Mutations — both entity patches and connection inserts/removes — go through `modifyOptimistic`, which gives you the layered commit/revert flow:
+
+```swift
+let tx = client.modifyOptimistic { b, ctx in
+    // Typed entity patch.
+    b.patch(fragment: PostFields.self, id: 42) { draft in
+        draft.title = "renamed"
+    }
+    // Typed connection prepend (server-confirmed node):
+    b.connection(ConnectionSelector(key: "posts"))
+     .addNode(node: newlyCreated, options: AddNodeOptions(position: .start))
+}
+tx.commit(serverPayload)   // or tx.revert() on failure
+```
+
+See [OPTIMISTIC_UPDATES.md](./OPTIMISTIC_UPDATES.md) for the full builder API.
+
+Subscriptions yield typed events:
+
+```swift
+let stream = try client.executeSubscription(subscription: PostUpdated.self, variables: .init(id: "p1"))
+for try await event in stream {
+    if let post = event.data?.postUpdated { /* … */ }
+}
 ```
 
 ## Currently supported
 
-- Typed `Variables` with `__cachebay: [String: JSONValue]` bridge.
-- Typed input objects (`input X` → `struct X: Sendable`) with their own `__cachebay`.
+- Typed `Variables` with `__cachebay: [String: JSONValue]` bridge — `OperationVariables` conformance.
+- Typed input objects (`input X` → `struct X: Sendable`) with their own `__cachebay`. `@oneOf` inputs encode only the supplied variant.
 - Typed enums (`enum X` → `enum X: String, Sendable, CaseIterable`).
 - Pre-baked `CachePlan` literals — runtime skips parse/lower entirely.
-- Typed `Data` struct tree per operation + standalone fragment.
+- Typed `Data` struct tree per operation/fragment, every selection struct conforming to `OperationData` (mutable `var __data`, `init(__data:)`).
+- Every accessor emits `get`/`set` pairs so the typed `b.patch(fragment:id:_:)` closure-builder (and the `addNode(fragment:options:_:)` form) can write through to `__data` — only fields the closure touches end up in the patch.
 - Interface / union type-case downcasts: `... on Dog { … }` emits `asDog: AsDog?` accessors gated on `__typename`.
+- `CachebaySchema.interfaces` — interface→implementers map for runtime polymorphism (pass to `CachebayOptions.interfaces`).
+- Operation/fragment conformance: queries/mutations/subscriptions conform to `Cachebay.Operation`; fragments conform to `Cachebay.Fragment` (and expose `static let fragmentName` + `static let onTypename`).
 
 ## Diagnostics
 

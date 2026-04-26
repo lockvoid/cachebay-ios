@@ -6,11 +6,20 @@ Cachebay exposes three network operations, all on `CachebayClient`:
 - `executeMutation` — write to the server, merge result into the cache.
 - `executeSubscription` — stream live updates over WebSocket.
 
+Each one ships **two surfaces**:
+
+1. **Typed** (recommended) — pass a generated `Op.Type` + typed `Variables`, get back `OperationResult<Op.Data>`. Callers never touch `JSONValue`.
+2. **JSON-shaped** — pass a source string + `[String: JSONValue]`. Available for ad-hoc operations or when working without codegen.
+
+The typed overloads are zero-cost wrappers around the JSON ones, so behaviour (cache policies, dedupe, normalise, errors) is identical.
+
 For per-shape recipes:
 
 - [Queries](./QUERIES.md) — `executeQuery` + `readQuery` / `writeQuery` / `watchQuery`
-- [Mutations](./MUTATIONS.md)
+- [Mutations](./MUTATIONS.md) — `executeMutation` + `modifyOptimistic` for typed optimistic patches and connection inserts/removes
 - [Subscriptions](./SUBSCRIPTIONS.md)
+- [Fragments](./FRAGMENTS.md) — `readFragment` / `writeFragment` / `watchFragment`
+- [Optimistic Updates](./OPTIMISTIC_UPDATES.md) — typed `b.patch(fragment:id:_:)` + connection `addNode`/`removeNode`
 
 ## Result type
 
@@ -28,6 +37,31 @@ public struct OperationResult<TData: Sendable>: Sendable {
 
 ## `executeQuery`
 
+Typed:
+
+```swift
+@discardableResult
+func executeQuery<Op: Operation>(
+    query: Op.Type,
+    variables: Op.Variables,
+    cachePolicy: CachePolicy? = nil,
+    onCacheData: ((Op.Data, _ willFetchFromNetwork: Bool) -> Void)? = nil,
+    onNetworkData: ((Op.Data) -> Void)? = nil,
+    onError: ((CombinedError) -> Void)? = nil
+) async throws -> OperationResult<Op.Data>
+```
+
+```swift
+let result = try await client.executeQuery(
+    query: GetPost.self,
+    variables: .init(id: "p1"),
+    cachePolicy: .cacheAndNetwork
+)
+print(result.data?.post?.title ?? "—")
+```
+
+JSON-shaped (callable when you don't have codegen for the operation):
+
 ```swift
 @discardableResult
 func executeQuery(
@@ -40,55 +74,52 @@ func executeQuery(
 ) async throws -> OperationResult<JSONValue>
 ```
 
-```swift
-let result = try await client.executeQuery(
-    query: GetPost.networkQuery,
-    variables: ["id": "p1"],
-    cachePolicy: .cacheAndNetwork,
-    onCacheData: { data, willFetchFromNetwork in
-        // Fired synchronously when cache has a hit.
-    }
-)
-```
-
 The closures are imperative side-channels — the same data also flows through `result` and through any active `watchQuery` for the same canonical signature.
 
 For full policy semantics see [SETUP.md#cache-policies](./SETUP.md#cache-policies).
 
 ## `executeMutation`
 
+Typed:
+
 ```swift
 @discardableResult
-func executeMutation(
-    query: String,
-    variables: [String: JSONValue] = [:],
-    onData: ((JSONValue) -> Void)? = nil,
+func executeMutation<Op: Operation>(
+    mutation: Op.Type,
+    variables: Op.Variables,
+    onData: ((Op.Data) -> Void)? = nil,
     onError: ((CombinedError) -> Void)? = nil
-) async throws -> OperationResult<JSONValue>
+) async throws -> OperationResult<Op.Data>
 ```
 
 ```swift
 let result = try await client.executeMutation(
-    query: CreatePost.networkQuery,
-    variables: ["input": .object(["title": "Hello"])]
+    mutation: CreatePost.self,
+    variables: .init(input: .init(title: "Hello"))
 )
+print(result.data?.createPost?.id ?? "—")
 ```
 
 Server response is normalised into the cache under a synthetic `@mutation.N` rootId, then merged into entities by `__typename:id`. Watchers depending on those entities update automatically. See [MUTATIONS.md](./MUTATIONS.md) for optimistic patterns.
 
 ## `executeSubscription`
 
+Typed:
+
 ```swift
-func executeSubscription(
-    query: String,
-    variables: [String: JSONValue] = [:]
-) throws -> AsyncThrowingStream<OperationResult<JSONValue>, Error>
+func executeSubscription<Op: Operation>(
+    subscription: Op.Type,
+    variables: Op.Variables
+) throws -> AsyncThrowingStream<OperationResult<Op.Data>, Error>
 ```
 
 ```swift
-let stream = try client.executeSubscription(query: PostUpdated.networkQuery, variables: ["id": "p1"])
+let stream = try client.executeSubscription(
+    subscription: PostUpdated.self,
+    variables: .init(id: "p1")
+)
 for try await event in stream {
-    if let data = event.data {
+    if let post = event.data?.postUpdated {
         // ... handle frame
     }
 }

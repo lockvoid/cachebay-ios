@@ -11,17 +11,22 @@ Works for **entities** and **Relay connections**. No edge-list churn; updates ar
 ```swift
 // Open a layer.
 let tx = client.modifyOptimistic { b, ctx in
-    // 1) Entity merge.
-    b.patch(.key("Post:p1"), ["title": "Draft…"], mode: .merge)
+    // 1) Typed entity merge — only the touched field lands in the patch.
+    b.patch(fragment: PostFields.self, id: "p1") { draft in
+        draft.title = "Draft…"
+    }
 
-    // 2) Connection prepend.
-    let c = b.connection(ConnectionSelector(parent: .root, key: "posts"))
-    c.addNode(
-        ["__typename": "Post", "id": ctx.data?["id"] ?? .string("temp:1"), "title": "Draft…"],
-        options: AddNodeOptions(position: .start)
-    )
+    // 2) Typed connection prepend — closure builds the optimistic node;
+    //    `__typename` is seeded from PostFields.onTypename so the closure
+    //    only sets domain fields.
+    let c = b.connection(ConnectionSelector(key: "posts"))
+    c.addNode(fragment: PostFields.self, options: AddNodeOptions(position: .start)) { draft in
+        draft.id = ctx.data?["id"]?.string ?? "temp:1"
+        draft.title = "Draft…"
+    }
 
-    // 3) Connection-level patch.
+    // 3) Connection-level patch (JSON-shaped — no fragment surface
+    //    needed for `pageInfo` / `totalCount`).
     c.patch([
         "pageInfo": .object(["hasNextPage": .bool(false)]),
         "totalCount": .int(42)
@@ -38,6 +43,50 @@ tx.revert()
 ---
 
 ## Builder API
+
+The runtime exposes both **typed** overloads (driven by codegen — preferred for everyday use) and **JSON-shaped** primitives (escape hatch for cases the typed shape can't express, like cross-variant interface patches).
+
+### Typed (codegen-driven)
+
+```swift
+public extension OptimisticBuilder {
+    // Entity patch via fragment + bare id. Only fields the closure
+    // touches end up in the patch; setters write through to `__data`.
+    func patch<F: Fragment, ID: LosslessStringConvertible>(
+        fragment: F.Type,
+        id: ID,
+        mode: EntityPatchMode = .merge,
+        _ build: (inout F.Data) -> Void
+    )
+
+    // Entity delete keyed by typed id.
+    func delete<F: Fragment, ID: LosslessStringConvertible>(
+        fragment: F.Type,
+        id: ID
+    )
+}
+
+public extension ConnectionAPI {
+    // Typed node from a server response (or anywhere with a complete typed Data).
+    func addNode<N: OperationData>(node: N, options: AddNodeOptions)
+
+    // Typed closure-builder for optimistic nodes (no server data yet).
+    // `__typename` is seeded from F.onTypename so callers only set domain fields.
+    func addNode<F: Fragment>(
+        fragment: F.Type,
+        options: AddNodeOptions,
+        _ build: (inout F.Data) -> Void
+    )
+
+    // Typed remove keyed by bare id.
+    func removeNode<F: Fragment, ID: LosslessStringConvertible>(
+        fragment: F.Type,
+        id: ID
+    )
+}
+```
+
+### JSON-shaped (primitives)
 
 ```swift
 public protocol OptimisticBuilder: AnyObject, Sendable {

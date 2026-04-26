@@ -230,11 +230,34 @@ fn render_plan(plan: &Plan, _module: &str) -> String {
     };
 
     s.push_str(&format!("/// {} {}: {}\n", struct_kind, plan.name, plan.source_path));
-    s.push_str(&format!("public struct {}: Sendable {{\n", plan.name));
+    // Q/M/S conform to `Cachebay.Operation`; fragments to `Cachebay.Fragment`.
+    // Both protocols share the typed surface (`networkQuery`, `document`,
+    // `Variables`, `Data`) so the typed overloads (`executeMutation<Op>`,
+    // `readFragment<F>`, …) pick the right one up via overload resolution
+    // on the protocol constraint.
+    let is_operation = !matches!(plan.operation_kind, OpKind::Fragment);
+    let is_fragment = matches!(plan.operation_kind, OpKind::Fragment);
+    let conforms = if is_operation {
+        ": Cachebay.Operation"
+    } else {
+        ": Cachebay.Fragment"
+    };
+    s.push_str(&format!("public struct {}{} {{\n", plan.name, conforms));
 
-    // Variables
+    // Variables — conforms to `OperationVariables` whether this is an
+    // operation or a fragment (both protocols have an `associatedtype
+    // Variables: OperationVariables`). With-variables structs get an
+    // explicit struct; zero-variable structs alias to `EmptyVariables`
+    // so typed overloads always have a valid `Variables` to construct
+    // — caller writes `.init()` regardless of which side of the
+    // op/fragment fence the operation lives on.
     if !plan.variables.is_empty() {
-        s.push_str("    public struct Variables: Sendable {\n");
+        let var_conforms = if is_operation || is_fragment {
+            ": Cachebay.OperationVariables"
+        } else {
+            ": Sendable"
+        };
+        s.push_str(&format!("    public struct Variables{} {{\n", var_conforms));
         for v in &plan.variables {
             s.push_str(&format!("        public var {}: {}\n", swift_identifier(&v.name), v.swift_type));
         }
@@ -264,12 +287,33 @@ fn render_plan(plan: &Plan, _module: &str) -> String {
         s.push_str("            return out\n");
         s.push_str("        }\n");
         s.push_str("    }\n\n");
+    } else if is_operation || is_fragment {
+        s.push_str("    public typealias Variables = Cachebay.EmptyVariables\n\n");
     }
 
     // Data struct — partitioned by type condition so polymorphic roots emit
-    // `asX: AsX?` downcasts exactly like nested selections.
+    // `asX: AsX?` downcasts exactly like nested selections. Every selection
+    // struct (root + nested + polymorphic narrowings) conforms to
+    // `Cachebay.OperationData`; the codegen already emits the required
+    // `init(__data:)` and `var __data`, and uniform conformance lets typed
+    // helpers like `prepend(node:)` accept any node shape.
+    //
+    // `extensions` collects connection helper extensions (`prepend(node:)`,
+    // `remove(where:)`) that we need to emit at file scope — Swift won't
+    // accept extensions nested inside another type body. The full type
+    // path (e.g. `Projects.Data.Projects`) is threaded through so each
+    // emitted extension targets the right nested struct.
+    let mut extensions: Vec<String> = Vec::new();
     if !plan.root.is_empty() {
-        s.push_str(&render_selection_struct("Data", &plan.root_typename, &plan.root, "    "));
+        let data_path = format!("{}.Data", plan.name);
+        s.push_str(&render_selection_struct(
+            "Data",
+            &plan.root_typename,
+            &plan.root,
+            "    ",
+            &data_path,
+            &mut extensions,
+        ));
         s.push_str("\n");
     }
 
@@ -302,7 +346,26 @@ fn render_plan(plan: &Plan, _module: &str) -> String {
 
     s.push_str("    public static let document: QueryDocument = .plan(cachePlan)\n");
 
+    // Fragments expose `fragmentName` so the typed `readFragment<F>` /
+    // `writeFragment<F>` overloads can disambiguate when a single
+    // source string ships multiple fragment definitions, and
+    // `onTypename` so the typed APIs can build the canonical cache key
+    // from a bare entity id (`"\(onTypename):\(id)"`).
+    if is_fragment {
+        s.push_str(&format!("    public static let fragmentName: String = \"{}\"\n", plan.name));
+        s.push_str(&format!("    public static let onTypename: String = \"{}\"\n", plan.root_typename));
+    }
+
     s.push_str("}\n");
+
+    // File-scope extensions: connection helpers for any nested struct
+    // whose selection has a Relay-style `pageInfo` + `edges { node }`
+    // shape. Emitted outside the operation struct because Swift forbids
+    // extensions inside another type body.
+    for ext in &extensions {
+        s.push_str("\n");
+        s.push_str(ext);
+    }
     s
 }
 
@@ -474,10 +537,90 @@ fn render_field_accessor(f: &PlanField, indent: &str) -> String {
     let rk = &f.response_key;
     let swift_name = swift_identifier(rk);
     let type_str = swift_type_for_field(f);
+
+    // Every accessor is `get`/`set`. Setters are required for the typed
+    // optimistic-patch closure pattern to work — `b.patch(fragment:F.self,
+    // target:) { draft in draft.title = "x" }` builds the patch by
+    // assigning into `draft`, and only fields the closure touches end
+    // up in `__data` (so the patch stays minimal). Without setters the
+    // closure couldn't write at all, and the user would be back to
+    // hand-rolled `[String: JSONValue]` literals.
     s.push_str(&format!("{indent}public var {swift_name}: {type_str} {{\n"));
-    s.push_str(&format!("{indent}    return {}\n", read_expr_for_field(f, "__data", rk)));
+    s.push_str(&format!("{indent}    get {{ {} }}\n", read_expr_for_field(f, "__data", rk)));
+    s.push_str(&format!("{indent}    set {{ __data[\"{rk}\"] = {} }}\n", write_expr_for_field(f, "newValue")));
     s.push_str(&format!("{indent}}}\n"));
     s
+}
+
+/// Build the `JSONValue` expression that round-trips a typed `newValue`
+/// back into the underlying `__data` dict for the setter. Mirrors
+/// `read_expr_for_field` in reverse — both shapes (object + leaf) and
+/// both modes (single + list) are covered so the setter works for any
+/// typed field on a generated selection struct.
+fn write_expr_for_field(f: &PlanField, value: &str) -> String {
+    match &f.output_shape {
+        OutputShape::Object { nullable, list } => {
+            if *list {
+                if *nullable {
+                    format!("({value}).map {{ arr in Cachebay.JSONValue.array(arr.map {{ Cachebay.JSONValue.object($0.__data) }}) }} ?? .null")
+                } else {
+                    format!("Cachebay.JSONValue.array(({value}).map {{ Cachebay.JSONValue.object($0.__data) }})")
+                }
+            } else if *nullable {
+                format!("({value}).map {{ Cachebay.JSONValue.object($0.__data) }} ?? .null")
+            } else {
+                format!("Cachebay.JSONValue.object(({value}).__data)")
+            }
+        }
+        OutputShape::Leaf { nullable, list } => {
+            let scalar_wrap = leaf_scalar_write_wrap(&f.named_type);
+            if *list {
+                if is_builtin_scalar(&f.named_type) {
+                    if *nullable {
+                        format!("({value}).map {{ arr in Cachebay.JSONValue.array(arr.map {{ {} }}) }} ?? .null", scalar_wrap.replace("$0", "$0"))
+                    } else {
+                        format!("Cachebay.JSONValue.array(({value}).map {{ {} }})", scalar_wrap.replace("$0", "$0"))
+                    }
+                } else {
+                    // Custom-scalar list (JSONValue passthrough).
+                    if *nullable {
+                        format!("({value}).map {{ Cachebay.JSONValue.array($0) }} ?? .null")
+                    } else {
+                        format!("Cachebay.JSONValue.array({value})")
+                    }
+                }
+            } else if *nullable {
+                if is_builtin_scalar(&f.named_type) {
+                    format!("({value}).map {{ {} }} ?? .null", scalar_wrap.replace("$0", "$0"))
+                } else {
+                    // Custom scalar nullable — `JSONValue?` -> use as-is or null.
+                    format!("({value}) ?? .null")
+                }
+            } else {
+                if is_builtin_scalar(&f.named_type) {
+                    scalar_wrap.replace("$0", value)
+                } else {
+                    // Custom scalar non-null — JSONValue passthrough.
+                    value.to_string()
+                }
+            }
+        }
+    }
+}
+
+/// Wrap a Swift scalar binding into a `Cachebay.JSONValue`. The placeholder
+/// is `$0`; consumers `replace("$0", actual)` to specialise. Used by both
+/// the leaf setter codegen and (in spirit) the leaf list element wrap.
+fn leaf_scalar_write_wrap(named: &str) -> String {
+    match named {
+        "String" | "ID" => "Cachebay.JSONValue.string($0)".into(),
+        "Int" => "Cachebay.JSONValue.int(Int64($0))".into(),
+        "Float" => "Cachebay.JSONValue.double($0)".into(),
+        "Boolean" => "Cachebay.JSONValue.bool($0)".into(),
+        // Custom scalar — the typed accessor surfaces `JSONValue`, so
+        // pass it through unchanged.
+        _ => "$0".into(),
+    }
 }
 
 fn read_expr_for_field(f: &PlanField, container: &str, key: &str) -> String {
@@ -588,9 +731,15 @@ fn swift_type_for_field(f: &PlanField) -> String {
     }
 }
 
-fn render_nested_type(f: &PlanField, indent: &str) -> String {
+fn render_nested_type(
+    f: &PlanField,
+    indent: &str,
+    type_path: &str,
+    extensions: &mut Vec<String>,
+) -> String {
     let name = title_case(&f.response_key);
-    render_selection_struct(&name, &f.named_type, &f.children, indent)
+    let nested_path = format!("{type_path}.{name}");
+    render_selection_struct(&name, &f.named_type, &f.children, indent, &nested_path, extensions)
 }
 
 /// Partition children into "shared" (no type condition, or condition equal to
@@ -612,12 +761,29 @@ fn partition_children<'a>(parent_named_type: &str, children: &'a [PlanField]) ->
 
 /// Emit a typed selection struct — possibly with `asX: AsX?` accessors when
 /// the children include inline-fragment type conditions that narrow `parent_named_type`.
-fn render_selection_struct(swift_name: &str, parent_named_type: &str, children: &[PlanField], indent: &str) -> String {
+/// Every selection struct conforms to `Cachebay.OperationData` so the typed
+/// runtime helpers (`updateQuery`, `prepend(node:)`, …) can manipulate any
+/// nested shape uniformly.
+///
+/// `type_path` is the full Swift dotted path to this struct from file scope
+/// (e.g. `"Projects.Data.Projects"`); it's used when emitting connection
+/// helper extensions for nested children, since extensions can't live
+/// inside another type body. `extensions` is the shared collector — each
+/// connection-shaped nested type pushes its file-scope extension here,
+/// and `render_plan` flushes them after the operation struct.
+fn render_selection_struct(
+    swift_name: &str,
+    parent_named_type: &str,
+    children: &[PlanField],
+    indent: &str,
+    type_path: &str,
+    extensions: &mut Vec<String>,
+) -> String {
     let (shared, by_condition) = partition_children(parent_named_type, children);
 
     let mut s = String::new();
-    s.push_str(&format!("{indent}public struct {swift_name}: Sendable {{\n"));
-    s.push_str(&format!("{indent}    public let __data: [String: Cachebay.JSONValue]\n"));
+    s.push_str(&format!("{indent}public struct {swift_name}: Cachebay.OperationData {{\n"));
+    s.push_str(&format!("{indent}    public var __data: [String: Cachebay.JSONValue]\n"));
     s.push_str(&format!("{indent}    public init(__data: [String: Cachebay.JSONValue]) {{ self.__data = __data }}\n"));
 
     // Shared accessors.
@@ -638,7 +804,7 @@ fn render_selection_struct(swift_name: &str, parent_named_type: &str, children: 
     // Nested selection types for shared children.
     for child in &shared {
         if !child.children.is_empty() {
-            s.push_str(&render_nested_type(child, &format!("{indent}    ")));
+            s.push_str(&render_nested_type(child, &format!("{indent}    "), type_path, extensions));
         }
     }
 
@@ -646,8 +812,9 @@ fn render_selection_struct(swift_name: &str, parent_named_type: &str, children: 
     // apply) plus the case-specific fields.
     for (tc, fields) in &by_condition {
         let as_name = format!("As{tc}");
-        s.push_str(&format!("{indent}    public struct {as_name}: Sendable {{\n"));
-        s.push_str(&format!("{indent}        public let __data: [String: Cachebay.JSONValue]\n"));
+        let as_path = format!("{type_path}.{as_name}");
+        s.push_str(&format!("{indent}    public struct {as_name}: Cachebay.OperationData {{\n"));
+        s.push_str(&format!("{indent}        public var __data: [String: Cachebay.JSONValue]\n"));
         s.push_str(&format!("{indent}        public init(__data: [String: Cachebay.JSONValue]) {{ self.__data = __data }}\n"));
         for shared_child in &shared {
             s.push_str(&render_field_accessor(shared_child, &format!("{indent}        ")));
@@ -657,12 +824,12 @@ fn render_selection_struct(swift_name: &str, parent_named_type: &str, children: 
         }
         for shared_child in &shared {
             if !shared_child.children.is_empty() {
-                s.push_str(&render_nested_type(shared_child, &format!("{indent}        ")));
+                s.push_str(&render_nested_type(shared_child, &format!("{indent}        "), &as_path, extensions));
             }
         }
         for field in fields {
             if !field.children.is_empty() {
-                s.push_str(&render_nested_type(field, &format!("{indent}        ")));
+                s.push_str(&render_nested_type(field, &format!("{indent}        "), &as_path, extensions));
             }
         }
         s.push_str(&format!("{indent}    }}\n"));

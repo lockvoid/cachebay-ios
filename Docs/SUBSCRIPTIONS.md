@@ -2,29 +2,32 @@
 
 **Streaming updates** with Cachebay.
 
-- Core API: `executeSubscription` → `AsyncThrowingStream<OperationResult<JSONValue>, Error>`
+- Core API: `executeSubscription` → `AsyncThrowingStream<OperationResult<Op.Data>, Error>` (typed) or `AsyncThrowingStream<OperationResult<JSONValue>, Error>` (JSON-shaped).
 - Default transport: `URLSessionWebSocketTransport` implementing the `graphql-transport-ws` subprotocol.
 
 ---
 
 ## `executeSubscription`
 
+Typed:
+
 ```swift
 let stream = try client.executeSubscription(
-    query: PostUpdated.networkQuery,
-    variables: ["id": "p1"]
+    subscription: PostUpdated.self,
+    variables: .init(id: "p1")
 )
 
 for try await event in stream {
-    if let data = event.data {
-        let typed = PostUpdated.Data(__data: data.object ?? [:])
-        // ... update UI
+    if let post = event.data?.postUpdated {
+        // ... update UI with typed `post`
     }
     if let err = event.error {
         // partial-data error from the server
     }
 }
 ```
+
+JSON-shaped overload (`query: String`, `variables: [String: JSONValue]`) is also available for ad-hoc subscriptions without codegen.
 
 Each emitted frame is normalised into the cache under a synthetic `@subscription.N` rootId, then merged into entities by `__typename:id`. Watchers depending on those entities update automatically — your `for try await` is just one way to observe.
 

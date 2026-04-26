@@ -13,20 +13,13 @@ Sends a write to the server and merges the result into the cache.
 
 ```swift
 let result = try await client.executeMutation(
-    query: CreatePost.networkQuery,
-    variables: ["input": .object([
-        "title": "Hello",
-        "category": "General"
-    ])]
+    mutation: CreatePost.self,
+    variables: .init(input: .init(title: "Hello", category: "General"))
 )
-
-if let data = result.data {
-    let typed = CreatePost.Data(__data: data.object ?? [:])
-    print(typed.createPost?.post?.id ?? "—")
-}
+print(result.data?.createPost?.post?.id ?? "—")
 ```
 
-See [OPERATIONS.md#executemutation](./OPERATIONS.md#executemutation) for the full signature.
+The JSON-shaped overload (`query: String`, `variables: [String: JSONValue]`) is also available; see [OPERATIONS.md#executemutation](./OPERATIONS.md#executemutation).
 
 Notes:
 
@@ -47,12 +40,12 @@ let tx = client.modifyOptimistic { b, _ in
 
 do {
     let result = try await client.executeMutation(
-        query: UpdatePost.networkQuery,
-        variables: ["input": .object(["id": "p1", "title": "Real Title"])]
+        mutation: UpdatePost.self,
+        variables: .init(input: .init(id: "p1", title: "Real Title"))
     )
-    tx.commit(result.data?["updatePost"]?["post"])    // promote with server data
+    tx.commit(result.data.map { .object($0.__data) })   // promote with server data
 } catch {
-    tx.revert()                                       // roll back
+    tx.revert()                                         // roll back
     throw error
 }
 ```
@@ -83,11 +76,11 @@ let tx = client.modifyOptimistic { b, ctx in
 
 do {
     let result = try await client.executeMutation(
-        query: CreatePost.networkQuery,
-        variables: ["input": .object(["title": .string(title)])]
+        mutation: CreatePost.self,
+        variables: .init(input: .init(title: title))
     )
-    if let post = result.data?["createPost"]?["post"] {
-        tx.commit(post)
+    if let post = result.data?.createPost?.post {
+        tx.commit(.object(post.__data))
     } else {
         tx.revert()
     }
@@ -111,8 +104,8 @@ let tx = client.modifyOptimistic { b, _ in
 
 do {
     _ = try await client.executeMutation(
-        query: DeletePost.networkQuery,
-        variables: ["input": .object(["id": .string(id)])]
+        mutation: DeletePost.self,
+        variables: .init(input: .init(id: id))
     )
     tx.commit(nil)
 } catch {
@@ -142,10 +135,14 @@ let tx = client.modifyOptimistic { b, ctx in
 
 do {
     let result = try await client.executeMutation(
-        query: UpdatePost.networkQuery,
-        variables: ["input": .object(input.toCachebay())]
+        mutation: UpdatePost.self,
+        variables: .init(input: input)
     )
-    tx.commit(result.data?["updatePost"]?["post"])
+    if let post = result.data?.updatePost?.post {
+        tx.commit(.object(post.__data))
+    } else {
+        tx.revert()
+    }
 } catch {
     tx.revert()
 }

@@ -5,6 +5,10 @@
 - High-level: `executeQuery` (respects policies, hits the network).
 - Low-level: `readQuery` / `writeQuery` / `watchQuery`.
 
+Each one ships in **typed** and **JSON-shaped** flavours — typed is recommended; the JSON shape is the underlying primitive.
+
+> Cache mutations go through `modifyOptimistic` (entity patches via `b.patch(fragment:id:_:)`, connection mutations via `b.connection.addNode(...)` / `removeNode`). See [OPTIMISTIC_UPDATES.md](./OPTIMISTIC_UPDATES.md). `writeQuery` here is for non-layered seeding (test fixtures, SSR restore) — it bypasses the commit/revert machinery.
+
 ---
 
 ## `executeQuery`
@@ -13,20 +17,15 @@ Full lifecycle: cache check → policy decision → network if needed → normal
 
 ```swift
 let result = try await client.executeQuery(
-    query: GetPost.networkQuery,
-    variables: ["id": "p1"],
+    query: GetPost.self,
+    variables: .init(id: "p1"),
     cachePolicy: .cacheAndNetwork
 )
-
-if let data = result.data {
-    let typed = GetPost.Data(__data: data.object ?? [:])
-    print(typed.post?.title ?? "—")
-}
-
+print(result.data?.post?.title ?? "—")
 result.meta?.source     // .cache | .network
 ```
 
-See [OPERATIONS.md](./OPERATIONS.md#executequery) for the full signature.
+JSON-shaped variant accepts `query: String` + `[String: JSONValue]`. See [OPERATIONS.md](./OPERATIONS.md#executequery) for the full signature.
 
 ---
 
@@ -39,25 +38,25 @@ For manual cache control without going through the network.
 Materialise from cache only.
 
 ```swift
-let json = client.readQuery(query: GetPost.networkQuery, variables: ["id": "p1"])
-if let typed = json.map({ GetPost.Data(__data: $0.object ?? [:]) }) {
-    print(typed.post?.title ?? "—")
-}
+let data = client.readQuery(query: GetPost.self, variables: .init(id: "p1"))
+print(data?.post?.title ?? "—")
 ```
 
 Returns `nil` on a cache miss (no exception).
 
 ### `writeQuery`
 
-Write raw data into the cache using a query shape — the same path as a network response.
+Write typed data into the cache using a query shape — same normalisation path as a network response.
 
 ```swift
 try client.writeQuery(
-    query: GetPost.networkQuery,
-    variables: ["id": "p1"],
-    data: .object([
+    query: GetPost.self,
+    variables: .init(id: "p1"),
+    data: GetPost.Data(__data: [
         "post": .object([
-            "__typename": "Post", "id": "p1", "title": "Hello"
+            "__typename": .string("Post"),
+            "id": .string("p1"),
+            "title": .string("Hello"),
         ])
     ])
 )
@@ -67,26 +66,23 @@ Watchers and fragments tracking `Post:p1` fire automatically on the next graph f
 
 ### `watchQuery`
 
-Watch a query and re-emit when dependent records change.
+Watch a query and re-emit when dependent records change. The typed overload hands `onData` a typed `Op.Data` directly:
 
 ```swift
 let handle = try client.watchQuery(
-    query: GetPost.networkQuery,
-    options: WatchQueryOptions(
-        variables: ["id": "p1"],
-        immediate: true,    // emit current cache value if present
-        onData: { json in
-            let typed = GetPost.Data(__data: json.object ?? [:])
-            // ... update UI on main thread
-        },
-        onError: { err in
-            // network error or partial-data misery
-        }
-    )
+    query: GetPost.self,
+    variables: .init(id: "p1"),
+    immediate: true,
+    onData: { data in
+        // `data` is typed `GetPost.Data` — no JSON unwrap.
+    },
+    onError: { err in
+        // network error or partial-data misery
+    }
 )
 
 // Later — change the variables (re-runs through the cache, no extra fetch):
-handle.update(["id": "p2"], true)
+handle.update(["id": .string("p2")], true)
 
 // On scope exit:
 handle.unsubscribe()
@@ -109,15 +105,15 @@ For Relay-style `@connection` queries, change `variables` (e.g. `after: endCurso
 ```swift
 // Initial load.
 _ = try await client.executeQuery(
-    query: ListPosts.networkQuery,
-    variables: ["first": 20, "after": .null, "filter": .null],
+    query: ListPosts.self,
+    variables: .init(first: 20),
     cachePolicy: .cacheAndNetwork
 )
 
 // Load more.
 _ = try await client.executeQuery(
-    query: ListPosts.networkQuery,
-    variables: ["first": 20, "after": "cursor-20", "filter": .null]
+    query: ListPosts.self,
+    variables: .init(first: 20, after: "cursor-20")
 )
 ```
 
@@ -140,17 +136,16 @@ struct PostsList: View {
         List(rows) { row in PostRowView(row: row) }
             .task {
                 watcher = try? client.watchQuery(
-                    query: ListPosts.networkQuery,
-                    options: WatchQueryOptions(
-                        immediate: true,
-                        onData: { data in
-                            Task { @MainActor in
-                                rows = parse(data)
-                            }
+                    query: ListPosts.self,
+                    variables: .init(),
+                    immediate: true,
+                    onData: { data in
+                        Task { @MainActor in
+                            rows = parse(data)
                         }
-                    )
+                    }
                 )
-                _ = try? await client.executeQuery(query: ListPosts.networkQuery)
+                _ = try? await client.executeQuery(query: ListPosts.self, variables: .init())
             }
             .onDisappear { watcher?.unsubscribe() }
     }
