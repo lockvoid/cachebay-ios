@@ -181,8 +181,16 @@ fn lower_selection_set(
             Selection::FragmentSpread(spread) => {
                 if let Some(frag) = exec_doc.fragments.get(&spread.fragment_name) {
                     let lowered = lower_selection_set(&frag.selection_set, frag.type_condition().as_str(), ctx, exec_doc);
+                    let frag_tc = frag.type_condition().to_string();
                     out.extend(lowered.into_iter().map(|mut f| {
-                        f.type_condition = Some(frag.type_condition().to_string());
+                        // Preserve a narrower type condition that the inner
+                        // selection already attached (e.g. fields inside
+                        // `... on VideoElement` keep `"VideoElement"`).
+                        // Only stamp the fragment's own condition when none
+                        // was set by a deeper selection.
+                        if f.type_condition.is_none() {
+                            f.type_condition = Some(frag_tc.clone());
+                        }
                         f
                     }));
                 }
@@ -195,7 +203,9 @@ fn lower_selection_set(
                     .unwrap_or_else(|| parent_typename.to_string());
                 let lowered = lower_selection_set(&inline.selection_set, &type_cond, ctx, exec_doc);
                 out.extend(lowered.into_iter().map(|mut f| {
-                    f.type_condition = Some(type_cond.clone());
+                    if f.type_condition.is_none() {
+                        f.type_condition = Some(type_cond.clone());
+                    }
                     f
                 }));
             }

@@ -470,7 +470,26 @@ fn primitive_read(named: &str, container: &str, key: &str, nullable: bool) -> St
         Some(a) => format!("{container}[\"{key}\"]?{}", a),
         None => format!("{container}[\"{key}\"]"),
     };
-    if nullable { base } else { format!("({})!", base) }
+    if nullable {
+        base
+    } else {
+        // Required scalars get a safe default rather than force-unwrap.
+        // The materialiser can hand back a partially-resolved row (e.g.
+        // an unresolved `.ref(...)` or a polymorphic-only field accessed
+        // from the wrong subtype variant), and crashing the consumer
+        // is strictly worse than handing them a sentinel they can
+        // detect (`id.isEmpty`, `count == 0`, etc.). Schema-required
+        // fields should never be missing in well-formed cache data;
+        // when they are, that's a bug to log, not a process abort.
+        let default = match named {
+            "String" | "ID" => "\"\"".to_string(),
+            "Int" => "0".to_string(),
+            "Float" => "0.0".to_string(),
+            "Boolean" => "false".to_string(),
+            _ => "Cachebay.JSONValue.null".to_string(),
+        };
+        format!("({}) ?? {}", base, default)
+    }
 }
 
 fn is_builtin_scalar(named: &str) -> bool {
