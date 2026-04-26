@@ -25,6 +25,15 @@ thiserror = "1"
 # Filesystem / globbing
 walkdir = "2"
 
+# Introspection HTTP client — minimal, blocking, no async runtime.
+# `rustls` rather than native-tls so the CLI builds without OpenSSL on
+# fresh dev boxes (we hit localhost in dev and HTTPS in prod).
+ureq = { version = "2", default-features = false, features = ["json", "tls"] }
+
+# Introspection request/response shaping.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
 [profile.release]
 opt-level = 3
 lto = "thin"

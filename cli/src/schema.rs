@@ -21,6 +21,12 @@ pub struct EnumTypeDef {
 pub struct InputTypeDef {
     pub name: String,
     pub fields: Vec<InputField>,
+    /// `true` when the schema declares this input as `@oneOf`. Exactly
+    /// one field must be provided to the server, and the others MUST be
+    /// omitted (the server rejects `null` siblings — see `@oneOf` spec).
+    /// The emitter encodes these inputs by branching on the present
+    /// field instead of writing every key.
+    pub is_one_of: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -112,7 +118,8 @@ pub fn collect_referenced_input_types(ctx: &CompilerContext) -> BTreeMap<String,
                     shape,
                 });
             }
-            out.insert(name.clone(), InputTypeDef { name, fields });
+            let is_one_of = input.directives.iter().any(|d| d.name.as_str() == "oneOf");
+            out.insert(name.clone(), InputTypeDef { name, fields, is_one_of });
         }
     }
     out

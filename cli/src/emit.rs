@@ -103,12 +103,36 @@ fn render_inputs(inputs: &BTreeMap<String, InputTypeDef>) -> String {
 
         // __cachebay bridge
         s.push_str("    public var __cachebay: Cachebay.JSONValue {\n");
-        s.push_str("        var out: [String: Cachebay.JSONValue] = [:]\n");
-        for f in &t.fields {
-            let ident = swift_identifier(&f.name);
-            s.push_str(&format!("        out[\"{}\"] = {}\n", f.name, json_expr_for(&ident, &f.shape)));
+        if t.is_one_of {
+            // `@oneOf` input objects: exactly one field must be present
+            // in the wire payload, and the others MUST be omitted —
+            // emitting them as `null` produces a server-side validation
+            // error ("Field X must be non-null"). Every field on a
+            // `@oneOf` input is nullable in the schema (the spec
+            // requires it), so each carries an inner non-null value
+            // we forward unmodified.
+            s.push_str("        var out: [String: Cachebay.JSONValue] = [:]\n");
+            for f in &t.fields {
+                let ident = swift_identifier(&f.name);
+                let inner_shape = TypeShape {
+                    nullable: false,
+                    ..f.shape.clone()
+                };
+                s.push_str(&format!(
+                    "        if let {ident} = {ident} {{ out[\"{}\"] = {} }}\n",
+                    f.name,
+                    json_expr_for(&ident, &inner_shape)
+                ));
+            }
+            s.push_str("        return .object(out)\n");
+        } else {
+            s.push_str("        var out: [String: Cachebay.JSONValue] = [:]\n");
+            for f in &t.fields {
+                let ident = swift_identifier(&f.name);
+                s.push_str(&format!("        out[\"{}\"] = {}\n", f.name, json_expr_for(&ident, &f.shape)));
+            }
+            s.push_str("        return .object(out)\n");
         }
-        s.push_str("        return .object(out)\n");
         s.push_str("    }\n");
         s.push_str("}\n\n");
     }

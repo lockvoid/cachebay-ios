@@ -17,6 +17,7 @@ use clap::Parser;
 mod config;
 mod emit;
 mod errors;
+mod introspect;
 mod load;
 mod plan;
 mod schema;
@@ -26,8 +27,29 @@ mod schema;
 enum Cli {
     /// Generate Swift sources from a schema + operation files.
     Codegen(CodegenArgs),
+    /// Fetch a GraphQL endpoint's introspection result and write it as
+    /// SDL on disk. Replaces `apollo-ios-cli`'s schema-fetch step and
+    /// preserves `@oneOf` (which apollo's SDL output dropped).
+    Introspect(IntrospectArgs),
     /// Print the version and exit.
     Version,
+}
+
+#[derive(Parser, Debug)]
+struct IntrospectArgs {
+    /// GraphQL endpoint to introspect.
+    #[arg(long, short)]
+    endpoint: String,
+
+    /// Output path for the SDL file.
+    #[arg(long, short = 'o')]
+    output: PathBuf,
+
+    /// Optional value forwarded as the `Authorization` header (e.g.
+    /// `Bearer …`). Required by some staging environments before they
+    /// will respond to introspection.
+    #[arg(long)]
+    auth: Option<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -53,6 +75,13 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli {
         Cli::Codegen(args) => match run_codegen(args) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("{e:?}");
+                ExitCode::FAILURE
+            }
+        },
+        Cli::Introspect(args) => match introspect::run(&args.endpoint, &args.output, args.auth.as_deref()) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("{e:?}");
