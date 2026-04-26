@@ -98,6 +98,34 @@ pub fn collect_referenced_enums(ctx: &CompilerContext) -> BTreeMap<String, EnumT
     out
 }
 
+/// Walk every `type X implements Y` in the schema to build the
+/// `interface name → [implementer typename]` map the runtime needs to
+/// resolve interface-typed selection sets against concrete records.
+/// Without this map, `CachebayClient`'s `selectionApplies` rejects
+/// every interface-level field during normalisation and the cache
+/// loses `id`/`track`/etc. on polymorphic records.
+///
+/// Unions are intentionally excluded: their members behave the same
+/// runtime-wise but the schema models the relation differently and
+/// the codegen doesn't currently emit field-level selection sets
+/// against unions.
+pub fn collect_interface_implementations(ctx: &CompilerContext) -> BTreeMap<String, Vec<String>> {
+    let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (typename, ty) in ctx.schema.types.iter() {
+        if let ExtendedType::Object(obj) = ty {
+            for iface in obj.implements_interfaces.iter() {
+                out.entry(iface.to_string())
+                    .or_default()
+                    .push(typename.to_string());
+            }
+        }
+    }
+    for impls in out.values_mut() {
+        impls.sort();
+    }
+    out
+}
+
 pub fn collect_referenced_input_types(ctx: &CompilerContext) -> BTreeMap<String, InputTypeDef> {
     let mut queue: Vec<String> = Vec::new();
     collect_input_types_from_doc(&ctx.document, &mut queue);

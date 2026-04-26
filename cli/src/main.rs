@@ -113,16 +113,18 @@ fn run_codegen(args: CodegenArgs) -> anyhow::Result<()> {
     let plans = plan::build_plans(&ctx)?;
     let inputs = schema::collect_referenced_input_types(&ctx);
     let enums = schema::collect_referenced_enums(&ctx);
+    let interfaces = schema::collect_interface_implementations(&ctx);
 
     // Emit Swift.
     std::fs::create_dir_all(&args.output)?;
-    emit::write_all(&plans, &inputs, &enums, &args.output, &args.module)?;
+    emit::write_all(&plans, &inputs, &enums, &interfaces, &args.output, &args.module)?;
 
     println!(
-        "cachebay-cli: wrote {} operation(s) + {} input type(s) + {} enum(s) to {}",
+        "cachebay-cli: wrote {} operation(s) + {} input type(s) + {} enum(s) + {} interface(s) to {}",
         plans.len(),
         inputs.len(),
         enums.len(),
+        interfaces.len(),
         args.output.display()
     );
     Ok(())
