@@ -1,0 +1,11 @@
+query ListSpells($first: Int, $after: String, $filter: SpellFilter) {
+  spells(first: $first, after: $after, filter: $filter)
+    @connection(mode: "infinite", filters: ["filter"]) {
+    totalCount
+    edges {
+      cursor
+      node { id name category effect creator light imageUrl }
+    }
+    pageInfo { hasNextPage endCursor }
+  }
+}

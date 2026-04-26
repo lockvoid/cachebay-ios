@@ -1,0 +1,49 @@
+name: HarryPotterDemo
+options:
+  bundleIdPrefix: com.lockvoid.cachebay
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+  defaultConfig: Debug
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+
+packages:
+  Cachebay:
+    path: ../../
+
+targets:
+  HarryPotterDemo:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: HarryPotterDemo
+        excludes:
+          - "**/*.graphql"
+    dependencies:
+      - package: Cachebay
+        product: Cachebay
+    info:
+      path: HarryPotterDemo/Info.plist
+      properties:
+        CFBundleDisplayName: Harry Potter
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+          NSAllowsArbitraryLoads: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lockvoid.cachebay.HarryPotterDemo
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        DEVELOPMENT_ASSET_PATHS: "\"HarryPotterDemo/Preview Content\""
+        ENABLE_PREVIEWS: YES
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: ""

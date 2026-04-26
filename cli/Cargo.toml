@@ -1,0 +1,32 @@
+[package]
+name = "cachebay-cli"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "GraphQL codegen for the Cachebay Swift client"
+license = "MIT"
+
+[[bin]]
+name = "cachebay-cli"
+path = "src/main.rs"
+
+[dependencies]
+# GraphQL parser + validator from Apollo. Spec-compliant, error-recovering,
+# lossless CST. We use the HIR (`apollo-compiler`) for validated operations.
+apollo-compiler = "1"
+
+# CLI argument parsing
+clap = { version = "4", features = ["derive"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+
+# Filesystem / globbing
+walkdir = "2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

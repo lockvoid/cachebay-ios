@@ -1,0 +1,14 @@
+mutation CreateSpell($input: CreateSpellInput!) {
+  createSpell(input: $input) {
+    spell {
+      id
+      name
+      category
+      creator
+      effect
+      light
+      imageUrl
+      wikiUrl
+    }
+  }
+}

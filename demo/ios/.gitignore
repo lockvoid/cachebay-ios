@@ -1,0 +1,23 @@
+# The Xcode project is generated from project.yml by `xcodegen`.
+# Run `make project` (or `make all`) to regenerate it.
+HarryPotterDemo.xcodeproj/
+HarryPotterDemo.xcworkspace/
+
+# Xcode build / user state
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+*.hmap
+*.ipa
+*.dSYM
+*.dSYM.zip
+
+# SwiftPM (resolved by Xcode at build time)
+.build/
+.swiftpm/
+Package.resolved
+
+# macOS
+.DS_Store
+._*

@@ -1,0 +1,16 @@
+query SpellDetail($id: ID!) {
+  spell(id: $id) {
+    ...SpellFields
+  }
+}
+
+fragment SpellFields on Spell {
+  id
+  name
+  category
+  creator
+  effect
+  light
+  imageUrl
+  wikiUrl
+}

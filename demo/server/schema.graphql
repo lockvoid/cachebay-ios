@@ -1,0 +1,92 @@
+type Query {
+  spell(id: ID!): Spell
+  spells(first: Int, after: String, filter: SpellFilter): SpellConnection!
+  hogwartsTime: HogwartsTime!
+}
+
+type Mutation {
+  createSpell(input: CreateSpellInput!): CreateSpellPayload!
+  updateSpell(input: UpdateSpellInput!): UpdateSpellPayload!
+  deleteSpell(input: DeleteSpellInput!): Boolean!
+}
+
+type Subscription {
+  hogwartsTimeUpdated: HogwartsTime!
+}
+
+type Spell {
+  id: ID!
+  name: String!
+  category: String!
+  creator: String
+  effect: String!
+  light: String
+  imageUrl: String
+  wikiUrl: String
+}
+
+type HogwartsTime {
+  id: ID!
+  time: String!
+}
+
+type SpellConnection {
+  edges: [SpellEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type SpellEdge {
+  cursor: String!
+  node: Spell!
+}
+
+type PageInfo {
+  hasNextPage: Boolean!
+  hasPreviousPage: Boolean!
+  startCursor: String
+  endCursor: String
+}
+
+enum SpellSort {
+  NAME_ASC
+  CREATE_DATE_DESC
+}
+
+input SpellFilter {
+  query: String
+  sort: SpellSort
+}
+
+input CreateSpellInput {
+  name: String!
+  category: String!
+  creator: String
+  effect: String!
+  light: String
+  imageUrl: String
+  wikiUrl: String
+}
+
+input UpdateSpellInput {
+  id: ID!
+  name: String
+  category: String
+  creator: String
+  effect: String
+  light: String
+  imageUrl: String
+  wikiUrl: String
+}
+
+input DeleteSpellInput {
+  id: ID!
+}
+
+type CreateSpellPayload {
+  spell: Spell
+}
+
+type UpdateSpellPayload {
+  spell: Spell
+}

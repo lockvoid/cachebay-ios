@@ -1,0 +1,14 @@
+# Rust build output
+target/
+
+# Cargo.lock is committed — this is a binary crate, deterministic builds matter.
+# Don't add it here.
+
+# macOS
+.DS_Store
+._*
+
+# Editors
+.idea/
+.vscode/
+*.swp

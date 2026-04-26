@@ -1,0 +1,6 @@
+subscription HogwartsTime {
+  hogwartsTimeUpdated {
+    id
+    time
+  }
+}

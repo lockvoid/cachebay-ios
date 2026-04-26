@@ -1,0 +1,62 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Cachebay-iOS root .gitignore
+# Per-tool nested .gitignore files live in demo/ios, demo/server, cli.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# macOS noise
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd
+Icon?
+
+# Swift / SwiftPM
+.build/
+.swiftpm/
+Package.resolved
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# Xcode build & user state
+xcuserdata/
+*.xcuserstate
+*.xcuserdatad/
+DerivedData/
+build/
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# CocoaPods (not used here, but ignore in case anyone adds them)
+Pods/
+*.xcworkspace/contents.xcworkspacedata.swp
+
+# Carthage / fastlane / Swift Playgrounds — not used, kept for safety
+Carthage/Build/
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+
+# Editors / IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.netrwhist
+
+# Local secrets / env files
+.env
+.env.local
+*.local.xcconfig
+
+# Misc
+*.log
+tmp/
+.coverage/
+*.profdata

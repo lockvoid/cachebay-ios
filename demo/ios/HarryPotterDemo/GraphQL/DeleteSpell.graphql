@@ -1,0 +1,3 @@
+mutation DeleteSpell($input: DeleteSpellInput!) {
+  deleteSpell(input: $input)
+}

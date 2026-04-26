@@ -1,0 +1,25 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Lockfile policy: keep pnpm-lock.yaml committed (deterministic installs across contributors).
+# Comment in the next line if you switch to npm/yarn and prefer not to commit theirs.
+# package-lock.json
+# yarn.lock
+
+# Build / runtime
+dist/
+.tsbuildinfo
+*.log
+
+# macOS
+.DS_Store
+._*
+
+# Editors
+.idea/
+.vscode/
+*.swp
