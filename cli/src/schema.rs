@@ -8,7 +8,8 @@ use apollo_compiler::ast::Type;
 use apollo_compiler::schema::ExtendedType;
 use apollo_compiler::Schema;
 
-use crate::load::{CompilerContext, ExecutableDoc};
+use crate::load::CompilerContext;
+use apollo_compiler::ExecutableDocument;
 
 #[derive(Debug, Clone)]
 pub struct EnumTypeDef {
@@ -62,11 +63,9 @@ pub fn collect_referenced_enums(ctx: &CompilerContext) -> BTreeMap<String, EnumT
     let schema: &Schema = &ctx.schema;
 
     // Seed from every operation variable.
-    for doc in &ctx.documents {
-        for op in doc.doc.operations.iter() {
-            for v in op.variables.iter() {
-                queue.push(v.ty.inner_named_type().to_string());
-            }
+    for op in ctx.document.operations.iter() {
+        for v in op.variables.iter() {
+            queue.push(v.ty.inner_named_type().to_string());
         }
     }
 
@@ -95,9 +94,7 @@ pub fn collect_referenced_enums(ctx: &CompilerContext) -> BTreeMap<String, EnumT
 
 pub fn collect_referenced_input_types(ctx: &CompilerContext) -> BTreeMap<String, InputTypeDef> {
     let mut queue: Vec<String> = Vec::new();
-    for doc in &ctx.documents {
-        collect_input_types_from_doc(doc, &mut queue);
-    }
+    collect_input_types_from_doc(&ctx.document, &mut queue);
     let mut out: BTreeMap<String, InputTypeDef> = BTreeMap::new();
     let schema: &Schema = &ctx.schema;
     while let Some(name) = queue.pop() {
@@ -121,8 +118,8 @@ pub fn collect_referenced_input_types(ctx: &CompilerContext) -> BTreeMap<String,
     out
 }
 
-fn collect_input_types_from_doc(doc: &ExecutableDoc, out: &mut Vec<String>) {
-    for op in doc.doc.operations.iter() {
+fn collect_input_types_from_doc(doc: &ExecutableDocument, out: &mut Vec<String>) {
+    for op in doc.operations.iter() {
         for v in op.variables.iter() {
             collect_input_types_from_type(&v.ty, out);
         }
@@ -143,26 +140,32 @@ pub fn shape_of(schema: &Schema, ty: &Type) -> TypeShape {
     let mut list = false;
     let mut inner_nullable = true;
     let mut cursor = ty.clone();
+    // Walk only the *outermost* wrapping. Once we identify the list/non-null
+    // shell, the inner type's own NonNull/List wrapping is already captured
+    // in `inner_nullable` — continuing to step deeper would let an inner
+    // `NonNullNamed` overwrite `nullable`, flipping a nullable list of
+    // non-null items into a non-null list. The bug surfaced on
+    // `[UpsertClipInput!]`: the outer list is nullable but `nullable` was
+    // ending up false because the inner `!` got read as outer non-null.
     loop {
         cursor = match cursor {
             Type::NonNullNamed(inner) => { nullable = false; Type::Named(inner) }
             Type::NonNullList(inner) => {
                 nullable = false; list = true;
-                // Peek the inner wrapping for inner_nullable.
                 let peeked = *inner.clone();
                 inner_nullable = match peeked { Type::NonNullNamed(_) | Type::NonNullList(_) => false, _ => true };
-                Type::List(inner)
+                break;
             }
             Type::List(inner) => {
                 list = true;
                 let peeked = *inner.clone();
                 inner_nullable = match peeked { Type::NonNullNamed(_) | Type::NonNullList(_) => false, _ => true };
-                *inner
+                break;
             }
             Type::Named(_) => break,
         };
     }
-    let named = cursor.inner_named_type().to_string();
+    let named = ty.inner_named_type().to_string();
     let kind = kind_for_named(schema, &named);
     TypeShape { named, kind, nullable, list, inner_nullable }
 }

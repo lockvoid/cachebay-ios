@@ -3,7 +3,7 @@
 //!
 //! The generated code is deliberately minimal: typed `Variables` structs,
 //! typed `Data` structs with thin accessors over the cache's materialized
-//! `[String: JSONValue]`, and a pre-baked `CachePlan` constant per operation.
+//! `[String: Cachebay.JSONValue]`, and a pre-baked `CachePlan` constant per operation.
 //!
 //! Nothing exotic — no enum generation, no input-object generation in this MVP.
 //! Those extend cleanly once the pipeline is proven.
@@ -102,8 +102,8 @@ fn render_inputs(inputs: &BTreeMap<String, InputTypeDef>) -> String {
         s.push_str("    }\n");
 
         // __cachebay bridge
-        s.push_str("    public var __cachebay: JSONValue {\n");
-        s.push_str("        var out: [String: JSONValue] = [:]\n");
+        s.push_str("    public var __cachebay: Cachebay.JSONValue {\n");
+        s.push_str("        var out: [String: Cachebay.JSONValue] = [:]\n");
         for f in &t.fields {
             let ident = swift_identifier(&f.name);
             s.push_str(&format!("        out[\"{}\"] = {}\n", f.name, json_expr_for(&ident, &f.shape)));
@@ -115,7 +115,7 @@ fn render_inputs(inputs: &BTreeMap<String, InputTypeDef>) -> String {
     s
 }
 
-/// Build the JSONValue expression that encodes a Swift binding of the given
+/// Build the Cachebay.JSONValue expression that encodes a Swift binding of the given
 /// shape. Handles nullability, list wrapping, input-object recursion, and
 /// primitive scalars. Single source of truth used by both input-object
 /// codecs and per-operation `Variables.__cachebay`.
@@ -127,7 +127,7 @@ fn json_expr_for(ident: &str, shape: &TypeShape) -> String {
                 "Int" => format!(".int(Int64({inner}))"),
                 "Float" => format!(".double({inner})"),
                 "Boolean" => format!(".bool({inner})"),
-                _ => "JSONValue.null".into(),
+                _ => "Cachebay.JSONValue.null".into(),
             },
             TypeKind::CustomScalar => inner.to_string(),
             // Typed enum — bridge via rawValue; cachebay stores the server-side string.
@@ -148,9 +148,9 @@ fn json_expr_for(ident: &str, shape: &TypeShape) -> String {
             format!("{{ {} }}", wrap_leaf("$0", &leaf_shape))
         };
         if shape.nullable {
-            format!("({ident}).map {{ arr in JSONValue.array(arr.map {item_expr}) }} ?? .null")
+            format!("({ident}).map {{ arr in Cachebay.JSONValue.array(arr.map {item_expr}) }} ?? .null")
         } else {
-            format!("JSONValue.array({ident}.map {item_expr})")
+            format!("Cachebay.JSONValue.array({ident}.map {item_expr})")
         }
     } else if shape.nullable {
         format!("({ident}).map {{ {} }} ?? .null", wrap_leaf("$0", shape))
@@ -198,8 +198,8 @@ fn render_plan(plan: &Plan, _module: &str) -> String {
             s.push_str(&format!("            self.{ident} = {ident}\n"));
         }
         s.push_str("        }\n");
-        s.push_str("        public var __cachebay: [String: JSONValue] {\n");
-        s.push_str("            var out: [String: JSONValue] = [:]\n");
+        s.push_str("        public var __cachebay: [String: Cachebay.JSONValue] {\n");
+        s.push_str("            var out: [String: Cachebay.JSONValue] = [:]\n");
         for v in &plan.variables {
             let ident = swift_identifier(&v.name);
             s.push_str(&format!("            out[\"{}\"] = {}\n", v.name, json_expr_for(&ident, &v.shape)));
@@ -383,7 +383,7 @@ fn render_arg_value(tokens: &[&ArgPiece]) -> String {
         }
     }
     // Composite literal (list or object) — reconstruct the raw JSON fragment
-    // and fall back to runtime-parse via a helper on `JSONValue`.
+    // and fall back to runtime-parse via a helper on `Cachebay.JSONValue`.
     let mut frag = String::new();
     for t in tokens {
         match t {
@@ -392,7 +392,7 @@ fn render_arg_value(tokens: &[&ArgPiece]) -> String {
             ArgPiece::Raw(s) => frag.push_str(s),
         }
     }
-    format!(".literal(JSONValue.parseLiteral({:?}))", frag)
+    format!(".literal(Cachebay.JSONValue.parseLiteral({:?}))", frag)
 }
 
 fn json_literal_to_swift(json: &str) -> String {
@@ -404,7 +404,7 @@ fn json_literal_to_swift(json: &str) -> String {
     }
     if let Ok(i) = json.parse::<i64>() { return format!(".int({})", i); }
     if let Ok(d) = json.parse::<f64>() { return format!(".double({})", d); }
-    format!("JSONValue.parseLiteral({:?})", json)
+    format!("Cachebay.JSONValue.parseLiteral({:?})", json)
 }
 
 fn render_string_literal(s: &str) -> String {
@@ -427,10 +427,16 @@ fn read_expr_for_field(f: &PlanField, container: &str, key: &str) -> String {
     match &f.output_shape {
         OutputShape::Leaf { nullable, list } => {
             if *list {
-                // [T]? or [T]
-                let swift_leaf = leaf_primitive_swift(&f.named_type);
-                let base = format!("({container}[\"{key}\"]?.array)?.compactMap {{ {} }}", primitive_extract_compactmap(&swift_leaf));
-                if *nullable { base } else { format!("{} ?? []", base) }
+                if is_builtin_scalar(&f.named_type) {
+                    let body = primitive_extract_compactmap(&f.named_type);
+                    let base = format!("({container}[\"{key}\"]?.array)?.compactMap {{ {body} }}");
+                    if *nullable { base } else { format!("{} ?? []", base) }
+                } else {
+                    // Custom scalars (e.g. JSON) stay as `[JSONValue]` — no
+                    // extraction, the elements are already the right type.
+                    let base = format!("{container}[\"{key}\"]?.array");
+                    if *nullable { base } else { format!("{} ?? []", base) }
+                }
             } else {
                 primitive_read(&f.named_type, container, key, *nullable)
             }
@@ -449,24 +455,36 @@ fn read_expr_for_field(f: &PlanField, container: &str, key: &str) -> String {
 }
 
 fn primitive_read(named: &str, container: &str, key: &str, nullable: bool) -> String {
-    let accessor = match named {
-        "String" | "ID" => ".string",
-        "Int" => ".int.map(Int.init)",
-        "Float" => ".double",
-        "Boolean" => ".bool",
-        _ => ".object", // custom scalar as JSONValue-object; fallback path
+    // Builtin scalars use the typed JSONValue accessor (`.string`, `.int`, …)
+    // which already coerces. Custom scalars stay as `Cachebay.JSONValue` —
+    // there's no narrower Swift type to extract them as, and `.object` would
+    // produce `[String: JSONValue]` which mismatches the declared field type.
+    let accessor: Option<&'static str> = match named {
+        "String" | "ID" => Some(".string"),
+        "Int" => Some(".int.map(Int.init)"),
+        "Float" => Some(".double"),
+        "Boolean" => Some(".bool"),
+        _ => None,
     };
-    let base = format!("{container}[\"{key}\"]?{}", accessor);
-    if nullable {
-        base
-    } else {
-        // Non-null fields: unwrap (well-formed cache hits shouldn't produce nil here).
-        format!("({})!", base)
-    }
+    let base = match accessor {
+        Some(a) => format!("{container}[\"{key}\"]?{}", a),
+        None => format!("{container}[\"{key}\"]"),
+    };
+    if nullable { base } else { format!("({})!", base) }
 }
 
-fn primitive_extract_compactmap(leaf: &str) -> String {
-    format!("if case .string(let s) = $0 {{ return s as {leaf}? }} else {{ return nil }}")
+fn is_builtin_scalar(named: &str) -> bool {
+    matches!(named, "String" | "ID" | "Int" | "Float" | "Boolean")
+}
+
+fn primitive_extract_compactmap(named: &str) -> String {
+    match named {
+        "String" | "ID" => "if case .string(let v) = $0 { return v } else { return nil }".into(),
+        "Int" => "if case .int(let v) = $0 { return Int(v) } else { return nil }".into(),
+        "Float" => "if case .double(let v) = $0 { return v } else { return nil }".into(),
+        "Boolean" => "if case .bool(let v) = $0 { return v } else { return nil }".into(),
+        _ => "return $0".into(),
+    }
 }
 
 fn leaf_primitive_swift(named: &str) -> &'static str {
@@ -475,7 +493,7 @@ fn leaf_primitive_swift(named: &str) -> &'static str {
         "Int" => "Int",
         "Float" => "Double",
         "Boolean" => "Bool",
-        _ => "JSONValue",
+        _ => "Cachebay.JSONValue",
     }
 }
 
@@ -523,8 +541,8 @@ fn render_selection_struct(swift_name: &str, parent_named_type: &str, children: 
 
     let mut s = String::new();
     s.push_str(&format!("{indent}public struct {swift_name}: Sendable {{\n"));
-    s.push_str(&format!("{indent}    public let __data: [String: JSONValue]\n"));
-    s.push_str(&format!("{indent}    public init(__data: [String: JSONValue]) {{ self.__data = __data }}\n"));
+    s.push_str(&format!("{indent}    public let __data: [String: Cachebay.JSONValue]\n"));
+    s.push_str(&format!("{indent}    public init(__data: [String: Cachebay.JSONValue]) {{ self.__data = __data }}\n"));
 
     // Shared accessors.
     for child in &shared {
@@ -553,8 +571,8 @@ fn render_selection_struct(swift_name: &str, parent_named_type: &str, children: 
     for (tc, fields) in &by_condition {
         let as_name = format!("As{tc}");
         s.push_str(&format!("{indent}    public struct {as_name}: Sendable {{\n"));
-        s.push_str(&format!("{indent}        public let __data: [String: JSONValue]\n"));
-        s.push_str(&format!("{indent}        public init(__data: [String: JSONValue]) {{ self.__data = __data }}\n"));
+        s.push_str(&format!("{indent}        public let __data: [String: Cachebay.JSONValue]\n"));
+        s.push_str(&format!("{indent}        public init(__data: [String: Cachebay.JSONValue]) {{ self.__data = __data }}\n"));
         for shared_child in &shared {
             s.push_str(&render_field_accessor(shared_child, &format!("{indent}        ")));
         }

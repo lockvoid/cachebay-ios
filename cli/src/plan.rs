@@ -4,9 +4,9 @@
 
 use apollo_compiler::ast::{DirectiveList, OperationType, Type, Value};
 use apollo_compiler::executable::{Field, Fragment, Operation, Selection, SelectionSet};
-use apollo_compiler::{ExecutableDocument, Name};
+use apollo_compiler::{ExecutableDocument, Name, Node};
 
-use crate::load::{CompilerContext, ExecutableDoc};
+use crate::load::CompilerContext;
 use crate::schema::{shape_of, TypeShape};
 
 #[derive(Debug, Clone)]
@@ -86,23 +86,21 @@ pub enum OutputShape {
 
 pub fn build_plans(ctx: &CompilerContext) -> anyhow::Result<Vec<Plan>> {
     let mut plans = Vec::new();
-    for doc in &ctx.documents {
-        for op in doc.doc.operations.iter() {
-            plans.push(build_operation_plan(doc, op, ctx)?);
-        }
-        for (_, frag) in doc.doc.fragments.iter() {
-            plans.push(build_fragment_plan(doc, frag, ctx)?);
-        }
+    let exec_doc = &ctx.document;
+    for op in exec_doc.operations.iter() {
+        plans.push(build_operation_plan(op, ctx)?);
+    }
+    for (_, frag) in exec_doc.fragments.iter() {
+        plans.push(build_fragment_plan(frag, ctx)?);
     }
     Ok(plans)
 }
 
 fn build_operation_plan(
-    doc: &ExecutableDoc,
-    op: &Operation,
+    op: &Node<Operation>,
     ctx: &CompilerContext,
 ) -> anyhow::Result<Plan> {
-    let exec_doc: &ExecutableDocument = &doc.doc;
+    let exec_doc: &ExecutableDocument = &ctx.document;
     let name = op.name.as_ref().map(|n| n.to_string()).unwrap_or_else(|| "Anonymous".to_string());
     let kind = match op.operation_type {
         OperationType::Query => OpKind::Query,
@@ -132,7 +130,7 @@ fn build_operation_plan(
         .collect();
 
     let root = lower_selection_set(&op.selection_set, &root_typename, ctx, exec_doc);
-    let network_query = render_network_query(doc, op);
+    let network_query = render_network_query(op, exec_doc);
 
     Ok(Plan {
         name,
@@ -141,16 +139,15 @@ fn build_operation_plan(
         variables,
         root,
         network_query,
-        source_path: doc.source_path.to_string_lossy().into_owned(),
+        source_path: ctx.source_path_for(op.location()),
     })
 }
 
 fn build_fragment_plan(
-    doc: &ExecutableDoc,
-    frag: &Fragment,
+    frag: &Node<Fragment>,
     ctx: &CompilerContext,
 ) -> anyhow::Result<Plan> {
-    let exec_doc: &ExecutableDocument = &doc.doc;
+    let exec_doc: &ExecutableDocument = &ctx.document;
     let root_typename = frag.type_condition().to_string();
     let root = lower_selection_set(&frag.selection_set, &root_typename, ctx, exec_doc);
     Ok(Plan {
@@ -160,7 +157,7 @@ fn build_fragment_plan(
         variables: Vec::new(),
         root,
         network_query: frag.serialize().to_string(),
-        source_path: doc.source_path.to_string_lossy().into_owned(),
+        source_path: ctx.source_path_for(frag.location()),
     })
 }
 
@@ -209,11 +206,46 @@ fn lower_selection_set(
     if !seen_typename && !has_typename_after_merge && parent_typename != "" && !out.is_empty() {
         out.push(synthetic_typename_field());
     }
-    // Dedupe by response_key: fragment spreads expand their children into the
-    // parent selection set; the same field may legally appear from multiple
-    // spreads, but the emitter needs a single Swift accessor per response key.
-    let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    out.retain(|f| seen.insert(f.response_key.clone()));
+    // Dedupe respecting polymorphism: shared fields (no type condition, or
+    // condition matching the parent) take precedence and exclude any
+    // identically-named field from a narrower type case. Within the per-type
+    // groups, dedupe by `(response_key, type_condition)` so each `As<Type>`
+    // struct sees its full field set.
+    //
+    // Naïvely deduping by `response_key` alone collapsed every type case
+    // into the first one encountered — e.g. `...VideoClipFields` would
+    // survive but `...SpeechClipFields` and `...MusicClipFields` got
+    // silently dropped, so only `asVideoClip` accessors were emitted.
+    let mut shared_keys: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for f in &out {
+        let is_shared = match &f.type_condition {
+            None => true,
+            Some(tc) => tc == parent_typename,
+        };
+        if is_shared {
+            shared_keys.insert(f.response_key.clone());
+        }
+    }
+    let mut seen_pairs: std::collections::BTreeSet<(String, Option<String>)> =
+        std::collections::BTreeSet::new();
+    out.retain(|f| {
+        let is_shared = match &f.type_condition {
+            None => true,
+            Some(tc) => tc == parent_typename,
+        };
+        if is_shared {
+            // Shared keys: dedupe by name only (collapsing identical fields
+            // pulled in by multiple fragment spreads on the parent type).
+            seen_pairs.insert((f.response_key.clone(), None))
+        } else {
+            // Drop type-narrowed entries that the parent already surfaces as
+            // shared — the AsX struct will inherit them via the shared list.
+            if shared_keys.contains(&f.response_key) {
+                return false;
+            }
+            seen_pairs.insert((f.response_key.clone(), f.type_condition.clone()))
+        }
+    });
     out
 }
 
@@ -397,15 +429,19 @@ fn shape_for_type(ty: &Type, has_children: bool) -> OutputShape {
 /// user-defined input objects / enums.
 pub fn swift_type_for_shape(shape: &TypeShape) -> String {
     use crate::schema::TypeKind;
+    // Always qualify `JSONValue` with the `Cachebay.` module prefix so that
+    // host apps which also import other GraphQL clients (Apollo's
+    // `JSONValue` is a frequent collision during migration) get an
+    // unambiguous type lookup.
     let base: String = match shape.kind {
         TypeKind::Scalar => match shape.named.as_str() {
             "String" | "ID" => "String".into(),
             "Int" => "Int".into(),
             "Float" => "Double".into(),
             "Boolean" => "Bool".into(),
-            _ => "JSONValue".into(),
+            _ => "Cachebay.JSONValue".into(),
         },
-        TypeKind::CustomScalar => "JSONValue".into(),
+        TypeKind::CustomScalar => "Cachebay.JSONValue".into(),
         TypeKind::Enum => shape.named.clone(),
         TypeKind::InputObject => shape.named.clone(),
     };
@@ -458,14 +494,13 @@ fn fingerprint_field(
     parts.join(":")
 }
 
-fn render_network_query(doc: &ExecutableDoc, op: &Operation) -> String {
+fn render_network_query(op: &Operation, exec_doc: &ExecutableDocument) -> String {
     // Strategy (matches Swift `buildNetworkQuery`): serialize the operation +
     // required named fragments with `@connection` removed. apollo-compiler's
     // `serialize()` gives us a byte-identical round trip, so we post-process.
     let serialized = op.serialize().to_string();
     let mut pieces = vec![strip_connection_directive(&serialized)];
     // Attach every referenced fragment definition used (transitively).
-    let exec_doc: &ExecutableDocument = &doc.doc;
     let referenced = collect_referenced_fragments(op, exec_doc);
     for frag_name in referenced {
         if let Some(frag) = exec_doc.fragments.get(&frag_name) {
