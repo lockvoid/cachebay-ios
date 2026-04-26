@@ -38,7 +38,12 @@ public extension OptimisticBuilder {
         var draft = F.Data(__data: [:])
         build(&draft)
         if draft.__data.isEmpty { return }
-        patch(.key("\(F.onTypename):\(id)"), draft.__data, mode: mode)
+        // Route via the canonical interface namespace when `F.onTypename`
+        // is a registered impl (e.g. `SpeechClip` → `TimelineClip`),
+        // otherwise use it as-is. Keeps a typed patch on a variant
+        // fragment landing on the same cache record as patches on the
+        // interface fragment.
+        patch(.key("\(canonicalTypename(F.onTypename)):\(id)"), draft.__data, mode: mode)
     }
 
     /// Typed entity delete keyed by bare id — fragment supplies the
@@ -47,7 +52,7 @@ public extension OptimisticBuilder {
         fragment: F.Type,
         id: ID
     ) {
-        delete(.key("\(F.onTypename):\(id)"))
+        delete(.key("\(canonicalTypename(F.onTypename)):\(id)"))
     }
 }
 
@@ -95,11 +100,12 @@ public extension ConnectionAPI {
     }
 
     /// Typed connection remove keyed by bare id — fragment supplies the
-    /// typename. Wraps `removeNode(_ ref: EntityRef)`.
+    /// typename, canonicalised through the interfaces map so a variant
+    /// fragment targets the right canonical entity record.
     func removeNode<F: Fragment, ID: LosslessStringConvertible>(
         fragment: F.Type,
         id: ID
     ) {
-        removeNode(.key("\(F.onTypename):\(id)"))
+        removeNode(.key("\(canonicalTypename(F.onTypename)):\(id)"))
     }
 }

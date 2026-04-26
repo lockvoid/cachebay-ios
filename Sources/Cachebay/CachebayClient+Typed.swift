@@ -154,7 +154,7 @@ public extension CachebayClient {
         id: ID,
         variables: F.Variables
     ) -> F.Data? {
-        let cacheKey = "\(F.onTypename):\(id)"
+        let cacheKey = "\(graph.canonicalTypename(F.onTypename)):\(id)"
         guard let plan = try? planner.getPlan(F.document, fragmentName: F.fragmentName) else { return nil }
         guard let raw = fragments.readFragment(plan: plan, rootId: cacheKey, variables: variables.__cachebay),
               case .object(let obj) = raw else { return nil }
@@ -170,7 +170,7 @@ public extension CachebayClient {
         variables: F.Variables,
         data: F.Data
     ) throws {
-        let cacheKey = "\(F.onTypename):\(id)"
+        let cacheKey = "\(graph.canonicalTypename(F.onTypename)):\(id)"
         let plan = try planner.getPlan(F.document, fragmentName: F.fragmentName)
         fragments.writeFragment(plan: plan, rootId: cacheKey, variables: variables.__cachebay, data: .object(data.__data))
         graph.flush()
@@ -190,7 +190,7 @@ public extension CachebayClient {
         onData: @escaping @Sendable (F.Data) -> Void,
         onError: (@Sendable (CombinedError) -> Void)? = nil
     ) throws -> WatchFragmentHandle {
-        let cacheKey = "\(F.onTypename):\(id)"
+        let cacheKey = "\(graph.canonicalTypename(F.onTypename)):\(id)"
         let plan = try planner.getPlan(F.document, fragmentName: F.fragmentName)
         return fragments.watchFragment(
             plan: plan,

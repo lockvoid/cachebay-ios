@@ -58,6 +58,13 @@ public protocol OptimisticBuilder: AnyObject, Sendable {
     func delete(_ target: EntityRef)
     func connection(_ selector: ConnectionSelector) -> ConnectionAPI
     func connection(key canonicalKey: CacheKey) -> ConnectionAPI
+    /// Resolve a typename to the canonical interface namespace if it
+    /// implements one (e.g. `"SpeechClip"` → `"TimelineClip"` when the
+    /// `interfaces` option registers SpeechClip as a TimelineClip impl).
+    /// Returns the input unchanged when there's no interface mapping.
+    /// Used by the typed `patch<F>(fragment:id:_:)` overloads so a
+    /// variant-rooted fragment lands on the canonical entity key.
+    func canonicalTypename(_ typename: String) -> String
 }
 
 public protocol ConnectionAPI: AnyObject, Sendable {
@@ -65,6 +72,10 @@ public protocol ConnectionAPI: AnyObject, Sendable {
     func addNode(_ node: [String: JSONValue], options: AddNodeOptions)
     func removeNode(_ ref: EntityRef)
     func patch(_ update: [String: JSONValue])
+    /// See `OptimisticBuilder.canonicalTypename(_:)` — exposed here so
+    /// the typed `removeNode<F>(fragment:id:)` overload can canonicalise
+    /// the fragment's `onTypename` to the right cache namespace.
+    func canonicalTypename(_ typename: String) -> String
 }
 
 public final class Optimistic: @unchecked Sendable {
@@ -441,6 +452,10 @@ public final class Optimistic: @unchecked Sendable {
         func connection(key canonicalKey: CacheKey) -> ConnectionAPI {
             return ConnectionAPIImpl(optimistic: optimistic, layer: layer, recording: recording, canonicalKey: canonicalKey)
         }
+
+        func canonicalTypename(_ typename: String) -> String {
+            optimistic.graph.canonicalTypename(typename)
+        }
     }
 
     fileprivate final class ConnectionAPIImpl: ConnectionAPI, @unchecked Sendable {
@@ -497,6 +512,10 @@ public final class Optimistic: @unchecked Sendable {
                 layer.connectionOps.append(op)
             }
             optimistic.applyConnectionOp(op)
+        }
+
+        func canonicalTypename(_ typename: String) -> String {
+            optimistic.graph.canonicalTypename(typename)
         }
     }
 }

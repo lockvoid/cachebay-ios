@@ -414,6 +414,62 @@ final class TypedAPITests: XCTestCase {
         XCTAssertEqual(client.readFragment(fragment: TestPostFields.self, id: 42, variables: .init())?.title, "via int id")
     }
 
+    func test_typedPatch_variantFragment_routesViaInterfaceCanonicalKey() throws {
+        // Configure interfaces: SpeechClip implements TimelineClip.
+        let transport = MockHTTPTransport()
+        let client = CachebayClient(options: CachebayOptions(
+            transport: Transport(http: transport, ws: nil),
+            cachePolicy: .cacheFirst,
+            interfaces: ["TimelineClip": ["SpeechClip", "VideoClip", "MusicClip"]],
+            suspensionTimeout: 0
+        ))
+
+        // Define a variant fragment rooted on the concrete impl.
+        struct SpeechClipMutables: Cachebay.Fragment {
+            static let networkQuery = "fragment SpeechClipMutables on SpeechClip { id muted volume }"
+            static let document: QueryDocument = .source(networkQuery)
+            static let fragmentName = "SpeechClipMutables"
+            static let onTypename = "SpeechClip"
+            typealias Variables = Cachebay.EmptyVariables
+            struct Data: Sendable, Cachebay.OperationData {
+                var __data: [String: JSONValue]
+                init(__data: [String: JSONValue]) { self.__data = __data }
+                var muted: Bool {
+                    get { (__data["muted"]?.bool) ?? false }
+                    set { __data["muted"] = .bool(newValue) }
+                }
+                var volume: Double {
+                    get { (__data["volume"]?.double) ?? 0.0 }
+                    set { __data["volume"] = .double(newValue) }
+                }
+            }
+        }
+
+        // Seed the canonical record under the interface key.
+        let seed: [String: JSONValue] = [
+            "__typename": .string("SpeechClip"),
+            "id": .string("c1"),
+            "muted": .bool(false),
+            "volume": .double(1.0),
+        ]
+        client.graph.putRecord("TimelineClip:c1", seed)
+
+        let tx = client.modifyOptimistic { b, _ in
+            b.patch(fragment: SpeechClipMutables.self, id: "c1") { d in
+                d.muted = true
+                d.volume = 0.5
+            }
+        }
+        _ = tx
+
+        // Patch must have landed on the canonical interface key, not on
+        // a separate `SpeechClip:c1` record.
+        let canonical = client.graph.getRecord("TimelineClip:c1")
+        XCTAssertEqual(canonical?["muted"]?.bool, true)
+        XCTAssertEqual(canonical?["volume"]?.double, 0.5)
+        XCTAssertNil(client.graph.getRecord("SpeechClip:c1"), "variant fragment must NOT create a parallel record at the concrete typename key")
+    }
+
     func test_typedDelete_removesEntity() throws {
         let (client, _, _) = makeClient()
         try client.writeFragment(
