@@ -53,6 +53,25 @@ public struct EmptyVariables: OperationVariables {
     public var __cachebay: [String: JSONValue] { [:] }
 }
 
+public extension OperationData {
+    /// Reinterpret this typed selection struct as a fragment's `Data`
+    /// shape, sharing the underlying `__data`. Use this when a query
+    /// or subscription's typed nested struct shares its selection set
+    /// with a fragment (`...PostFields` spread):
+    ///
+    /// ```swift
+    /// let msg = event.data?.projectMessageCreated?.as(ProjectMessageFields.self)
+    /// ```
+    ///
+    /// Both ends MUST select the same fields — the runtime trusts the
+    /// caller and just lifts the dict into `F.Data`. Mismatched shapes
+    /// would surface as missing/wrong-typed accessors at read time, not
+    /// as a compile error here.
+    func `as`<F: Fragment>(_ fragment: F.Type) -> F.Data {
+        F.Data(__data: __data)
+    }
+}
+
 /// Mirror of `Operation` for GraphQL fragment definitions. Fragments
 /// aren't executed against the network; they describe a sub-shape of
 /// some entity that can be read/written/watched against the cache by

@@ -621,6 +621,25 @@ final class TypedAPITests: XCTestCase {
         ))
     }
 
+    func test_operationData_as_fragment_reinterpretsViaSharedData() {
+        // A subscription's typed nested struct shares its selection with
+        // a fragment's `Data` shape — `.as(F.self)` lifts the underlying
+        // `__data` into the fragment without any callsite-level
+        // dictionary access.
+        struct MockSubscriptionRow: Cachebay.OperationData {
+            var __data: [String: JSONValue]
+            init(__data: [String: JSONValue]) { self.__data = __data }
+        }
+        let row = MockSubscriptionRow(__data: [
+            "__typename": .string("Post"),
+            "id": .string("p1"),
+            "title": .string("via .as()"),
+        ])
+        let fragment = row.as(TestPostFields.self)
+        XCTAssertEqual(fragment.id, "p1")
+        XCTAssertEqual(fragment.title, "via .as()")
+    }
+
     func test_typedFragment_acceptsIntId() throws {
         let (client, _, _) = makeClient()
         try client.writeFragment(
