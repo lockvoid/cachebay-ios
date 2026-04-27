@@ -37,8 +37,8 @@ final class ClientTests: XCTestCase {
         _ = client.writeQuery as Any
         _ = client.watchQuery as Any
 
-        // Optimistic API
-        _ = client.modifyOptimistic as Any
+        // Optimistic API — disambiguate against the autoCommit overload.
+        _ = client.modifyOptimistic as (@escaping @Sendable (_ tx: OptimisticBuilder, _ ctx: BuilderContext) -> Void) -> OptimisticTransaction
 
         // Operations API
         _ = client.executeQuery as Any

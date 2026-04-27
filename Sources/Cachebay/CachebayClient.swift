@@ -273,6 +273,47 @@ public final class CachebayClient: @unchecked Sendable {
         return optimistic.modifyOptimistic(builder)
     }
 
+    /// Single-phase variant: `autoCommit: true` skips the optimistic
+    /// phase entirely and runs the builder once with
+    /// `phase: .commit, data: nil`, applying ops directly to the
+    /// base graph without recording a layer (no double-write).
+    ///
+    /// Use when you've already awaited the server's response and
+    /// only want to write the result through the builder API:
+    ///
+    /// ```swift
+    /// let result = try await client.executeMutation(...)
+    /// guard let created = result.data?.createProject else { throw ... }
+    /// client.modifyOptimistic(autoCommit: true) { b, _ in
+    ///     for key in keys {
+    ///         b.connection(key: key).addNode(node: created,
+    ///                                         fragment: ProjectFields.self,
+    ///                                         options: .init(position: .start))
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// `autoCommit: false` (or the unlabeled overload) gives the
+    /// standard two-phase semantics: closure runs once at `.optimistic`
+    /// recording a revertible layer, returned tx lets caller commit
+    /// (closure replays in `.commit` phase) or revert.
+    public func modifyOptimistic(
+        autoCommit: Bool,
+        _ builder: @escaping @Sendable (_ tx: OptimisticBuilder, _ ctx: BuilderContext) -> Void
+    ) {
+        if autoCommit {
+            optimistic.applyAutoCommit(builder)
+        } else {
+            // Caller asked for two-phase but discarded the tx — they
+            // intend the layer to act as auto-commit but with a
+            // recorded optimistic phase. Run the standard path; tx
+            // is dropped (layer stays applied indefinitely until
+            // explicitly committed/reverted by another reference).
+            // Discouraged path; prefer the unlabeled overload.
+            _ = optimistic.modifyOptimistic(builder)
+        }
+    }
+
     // MARK: - Operations
 
     @discardableResult

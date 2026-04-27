@@ -67,6 +67,59 @@ public struct AddNodeOptions: Sendable {
 public struct OptimisticTransaction: Sendable {
     public let commit: @Sendable (_ data: JSONValue?) -> Void
     public let revert: @Sendable () -> Void
+    /// Drop the layer without restoring baselines or re-running the
+    /// builder closure. Use when the server's response was already
+    /// normalized into the cache (via `executeMutation`'s pipeline)
+    /// and is authoritative — calling `commit(_:)` here would
+    /// `replaceRecord` each touched entity with the pre-optimistic
+    /// snapshot, **wiping any server-side updates** to fields that
+    /// the optimistic patch didn't touch (e.g. `Project.clips`
+    /// updated on the server when only `Project.updatedAt` was
+    /// optimistically patched).
+    ///
+    /// Semantics:
+    ///   * Layer removed from pending. Future replays of other layers
+    ///     ignore this one.
+    ///   * Baselines for records touched ONLY by this layer are
+    ///     dropped. Records still referenced by surviving layers keep
+    ///     their baseline.
+    ///   * Graph state is NOT modified — whatever the cache holds
+    ///     after `executeMutation`'s normalize is the final state.
+    ///
+    /// ```swift
+    /// let tx = client.modifyOptimistic { tx, _ in
+    ///     tx.patch(fragment: ProjectFields.self, id: id) { p in
+    ///         p.updatedAt = Date().iso8601String
+    ///     }
+    /// }
+    /// let result = try await client.executeMutation(...)
+    /// if result.error != nil { tx.revert(); throw ... }
+    /// tx.dispose()  // server already normalized; just drop the layer
+    /// ```
+    public let dispose: @Sendable () -> Void
+}
+
+public extension OptimisticTransaction {
+    /// Typed commit for callers that have a typed mutation/operation
+    /// response. Wraps the typed `__data` into the `JSONValue.object`
+    /// shape the underlying `commit(_:)` closure expects, so the
+    /// builder closure's `BuilderContext.data` (`ctx.data`) sees the
+    /// canonical server data during the replay-commit cycle.
+    ///
+    /// Use this instead of `.commit(nil)` whenever you have a typed
+    /// server response on the success branch — `.commit(nil)`
+    /// discards the server data, which is correct only when no server
+    /// response is available (or when the optimistic ops are already
+    /// idempotent against the server's state).
+    ///
+    /// ```swift
+    /// let result = try await client.executeMutation(...)
+    /// // … typed entity available on result.data …
+    /// optimistic.commit(result.data)
+    /// ```
+    func commit<O: OperationData>(_ data: O?) {
+        commit(data.map { JSONValue.object($0.__data) })
+    }
 }
 
 public enum BuilderPhase: Sendable { case optimistic; case commit }
@@ -172,8 +225,36 @@ public final class Optimistic: @unchecked Sendable {
             },
             revert: { [weak weakSelf] in
                 weakSelf?.revert(layer: layer)
+            },
+            dispose: { [weak weakSelf] in
+                weakSelf?.dispose(layer: layer)
             }
         )
+    }
+
+    /// Single-phase variant of `modifyOptimistic`. Skips the
+    /// optimistic phase entirely and runs the builder once with
+    /// `phase: .commit, data: nil`, applying ops directly to the
+    /// base graph without recording a layer.
+    ///
+    /// Use this when you've already awaited the server's response
+    /// and only want to write the result into cache via the builder
+    /// API (`b.connection(...).addNode(...)` etc.). Avoids the
+    /// "double-write" of the standard form, where the closure runs
+    /// at both `.optimistic` AND `.commit` phases — wasteful when
+    /// you know there's no temp/optimistic state to project.
+    ///
+    /// Mirrors cachebay-web's "commit-only" pattern for
+    /// post-mutation cache writes; iOS callers reach it via
+    /// `client.modifyOptimistic(autoCommit: true) { … }`.
+    public func applyAutoCommit(_ builder: @Sendable (_ tx: OptimisticBuilder, _ ctx: BuilderContext) -> Void) {
+        // Dummy layer — never appended to `layers`, never replayed,
+        // never reverted. Held only so BuilderImpl has a stable
+        // reference; in non-recording mode it's never read.
+        let dummy = Layer(id: 0, builder: { _, _ in })
+        let b = BuilderImpl(optimistic: self, layer: dummy, recording: false)
+        builder(b, BuilderContext(phase: .commit, data: nil))
+        graph.flush()
     }
 
     /// Replay summary: which entity keys were added (`addNode`) and
@@ -232,6 +313,29 @@ public final class Optimistic: @unchecked Sendable {
     //      cached for future reverts).
     //   3. Replay surviving layers' ops in id order on the affected records
     //      so stacked layers keep their effects.
+
+    /// Drop the layer's bookkeeping without restoring any baselines
+    /// or re-running the builder. Used when the server's response is
+    /// authoritative and `executeMutation`'s normalize already wrote
+    /// the canonical state into the graph — calling `commit(_:)`
+    /// here would revert touched records to the pre-optimistic
+    /// snapshot, wiping the server normalize.
+    ///
+    /// Semantics: layer removed from pending; baselines dropped for
+    /// records this layer was the SOLE toucher of (records still
+    /// referenced by surviving layers keep their baseline so future
+    /// reverts work correctly).
+    private func dispose(layer: Layer) {
+        lock.lock(); defer { lock.unlock() }
+        let idx = layers.firstIndex { $0.id == layer.id }
+        guard let i = idx else { return }
+        layers.remove(at: i)
+        let touched = layer.touched
+        let stillReferenced = Set(layers.flatMap { $0.touched })
+        for r in touched where !stillReferenced.contains(r) {
+            committedBaselines.removeValue(forKey: r)
+        }
+    }
 
     private func commit(layer: Layer, data: JSONValue?) {
         lock.lock()
