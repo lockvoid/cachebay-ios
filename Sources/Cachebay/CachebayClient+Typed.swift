@@ -51,8 +51,21 @@ public extension CachebayClient {
         onData: @escaping @Sendable (Op.Data) -> Void,
         onError: (@Sendable (CombinedError) -> Void)? = nil
     ) throws -> WatchQueryHandle {
-        try watchQuery(
-            query: Op.networkQuery,
+        // Use `Op.document` (precompiled plan with `@connection`
+        // metadata intact), NOT `Op.networkQuery` (which is the
+        // directive-stripped string sent to the server). Routing
+        // through the string overload would re-parse the stripped
+        // query and produce a plan where every connection field has
+        // `isConnection = false` — `readConnection` would never run,
+        // and the watcher's deps would land on the strict per-page
+        // record (`@.posts({…})`) instead of the canonical
+        // (`@connection.posts({…})`). `addNode` writes the canonical,
+        // so a strict-keyed watcher silently misses every optimistic
+        // update. See `TypedAPIDocumentRoutingTests`.
+        let plan = try planner.getPlan(Op.document)
+        return queries.watchQuery(
+            plan: plan,
+            document: Op.document,
             options: WatchQueryOptions(
                 variables: variables.__cachebay,
                 immediate: immediate,
@@ -97,14 +110,23 @@ public extension CachebayClient {
                 typed(Op.Data(__data: obj))
             }
         }
-        let result = try await executeQuery(
-            query: Op.networkQuery,
+        // Use `Op.document` (precompiled plan) — same reasoning as
+        // `watchQuery<Op>` above. Routing through the string overload
+        // would re-parse `Op.networkQuery` (directive-stripped), kill
+        // `isConnection` on every connection field, and produce a plan
+        // whose materialize takes the non-connection path. The result
+        // then propagates through `notifyDataBySignature` and overwrites
+        // the watcher's deps with strict-page-keyed entries — `addNode`
+        // against the canonical fans out to nothing.
+        let plan = try planner.getPlan(Op.document)
+        let opts = ExecuteQueryOptions(
             variables: variables.__cachebay,
             cachePolicy: cachePolicy,
             onCacheData: cacheCb,
             onNetworkData: netCb,
             onError: onError
         )
+        let result = await operations.executeQuery(plan: plan, options: opts)
         return result.mapData { (json: JSONValue) -> Op.Data? in
             guard case .object(let obj) = json else { return nil }
             return Op.Data(__data: obj)
@@ -130,12 +152,22 @@ public extension CachebayClient {
                 typed(Op.Data(__data: obj))
             }
         }
-        let result = try await executeMutation(
-            query: Op.networkQuery,
+        // Use `Op.document` (precompiled plan with `@connection`
+        // metadata) — same reasoning as `watchQuery<Op>` /
+        // `executeQuery<Op>`. Routing through the string overload would
+        // re-parse `Op.networkQuery` (directive-stripped) and produce
+        // a plan where `isConnection = false`. Mutations whose
+        // response includes a connection-decorated field would then
+        // normalize without ever invoking `Canonical.updateConnection`,
+        // so the canonical record is never written and watchers
+        // depending on it silently miss every mutation-driven update.
+        let plan = try planner.getPlan(Op.document)
+        let opts = ExecuteMutationOptions(
             variables: variables.__cachebay,
             onData: dataCb,
             onError: onError
         )
+        let result = await operations.executeMutation(plan: plan, options: opts)
         return result.mapData { (json: JSONValue) -> Op.Data? in
             guard case .object(let obj) = json else { return nil }
             return Op.Data(__data: obj)
@@ -217,9 +249,19 @@ public extension CachebayClient {
         subscription op: Op.Type,
         variables: Op.Variables
     ) throws -> AsyncThrowingStream<OperationResult<Op.Data>, Error> {
-        let stream = try executeSubscription(
-            query: Op.networkQuery,
-            variables: variables.__cachebay
+        // Use `Op.document` (precompiled plan with `@connection`
+        // metadata) — same reasoning as `executeMutation<Op>` /
+        // `watchQuery<Op>` / `executeQuery<Op>`. Routing through the
+        // string overload would re-parse `Op.networkQuery` (directive-
+        // stripped) and produce a plan where every connection field
+        // has `isConnection = false`. Subscription frames yielding a
+        // connection payload would normalize without invoking
+        // `Canonical.updateConnection`, so the canonical record never
+        // lands.
+        let plan = try planner.getPlan(Op.document)
+        let stream = operations.executeSubscription(
+            plan: plan,
+            options: ExecuteSubscriptionOptions(variables: variables.__cachebay)
         )
         return AsyncThrowingStream<OperationResult<Op.Data>, Error> { continuation in
             let task = Task<Void, Never> {

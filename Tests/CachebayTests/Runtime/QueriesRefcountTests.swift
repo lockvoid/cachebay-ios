@@ -222,6 +222,118 @@ final class QueriesRefcountTests: XCTestCase {
         rotator.unsubscribe()
     }
 
+    // MARK: - inspect() public surface
+    // Web parity: queries-refcount.test.ts `inspect()` block. iOS exposes a
+    // narrower `inspect()` returning `(total, signatures)`; we verify those
+    // counters track watcher creation/unsubscribe and per-signature grouping.
+
+    /// Mirrors web `inspect: returns empty state when no watchers`.
+    func test_inspect_emptyWhenNoWatchers() {
+        let client = makeClient()
+        let state = client.queries.inspect()
+        XCTAssertEqual(state.total, 0)
+        XCTAssertEqual(state.signatures, 0)
+    }
+
+    /// Mirrors web `inspect: increments cache ref count when watcher is
+    /// created`. After one watcher, total == 1 and one signature is
+    /// registered.
+    func test_inspect_incrementsTotalAndSignatures_onWatcherCreate() throws {
+        let client = makeClient()
+        try seedPost(client, id: "p1", title: "v1")
+
+        XCTAssertEqual(client.queries.inspect().total, 0)
+
+        let h = try client.watchQuery(
+            query: postQuery,
+            options: WatchQueryOptions(
+                variables: ["id": .string("p1")],
+                immediate: false,
+                onData: { _ in }
+            )
+        )
+        let state = client.queries.inspect()
+        XCTAssertEqual(state.total, 1)
+        XCTAssertEqual(state.signatures, 1)
+
+        h.unsubscribe()
+    }
+
+    /// Mirrors web `inspect: increments cache ref count for multiple
+    /// watchers with same variables`. Three watchers with same vars → one
+    /// signature, total 3.
+    func test_inspect_multipleWatchersSameVars_singleSignature() throws {
+        let client = makeClient()
+        try seedPost(client, id: "p1", title: "v1")
+
+        let h1 = try client.watchQuery(
+            query: postQuery,
+            options: WatchQueryOptions(variables: ["id": .string("p1")], immediate: false, onData: { _ in })
+        )
+        let h2 = try client.watchQuery(
+            query: postQuery,
+            options: WatchQueryOptions(variables: ["id": .string("p1")], immediate: false, onData: { _ in })
+        )
+        let h3 = try client.watchQuery(
+            query: postQuery,
+            options: WatchQueryOptions(variables: ["id": .string("p1")], immediate: false, onData: { _ in })
+        )
+
+        let state = client.queries.inspect()
+        XCTAssertEqual(state.total, 3)
+        XCTAssertEqual(state.signatures, 1, "all three watchers share a signature")
+
+        h1.unsubscribe(); h2.unsubscribe(); h3.unsubscribe()
+    }
+
+    /// Mirrors web `inspect: tracks separate cache ref counts for
+    /// different variables`. Two watchers with distinct vars → two
+    /// signatures.
+    func test_inspect_tracksSeparateSignatures_perVariable() throws {
+        let client = makeClient()
+        try seedPost(client, id: "p1", title: "v1")
+        try seedPost(client, id: "p2", title: "v2")
+
+        let h1 = try client.watchQuery(
+            query: postQuery,
+            options: WatchQueryOptions(variables: ["id": .string("p1")], immediate: false, onData: { _ in })
+        )
+        let h2 = try client.watchQuery(
+            query: postQuery,
+            options: WatchQueryOptions(variables: ["id": .string("p2")], immediate: false, onData: { _ in })
+        )
+
+        let state = client.queries.inspect()
+        XCTAssertEqual(state.total, 2)
+        XCTAssertEqual(state.signatures, 2, "two distinct vars ⇒ two signatures")
+
+        h1.unsubscribe(); h2.unsubscribe()
+    }
+
+    /// Mirrors web `inspect: decrements cache ref count on unsubscribe`.
+    /// Drops back to 0 after final unsubscribe.
+    func test_inspect_decrementsOnUnsubscribe() throws {
+        let client = makeClient()
+        try seedPost(client, id: "p1", title: "v1")
+
+        let h1 = try client.watchQuery(
+            query: postQuery,
+            options: WatchQueryOptions(variables: ["id": .string("p1")], immediate: false, onData: { _ in })
+        )
+        let h2 = try client.watchQuery(
+            query: postQuery,
+            options: WatchQueryOptions(variables: ["id": .string("p1")], immediate: false, onData: { _ in })
+        )
+        XCTAssertEqual(client.queries.inspect().total, 2)
+
+        h1.unsubscribe()
+        XCTAssertEqual(client.queries.inspect().total, 1)
+
+        h2.unsubscribe()
+        XCTAssertEqual(client.queries.inspect().total, 0)
+        XCTAssertEqual(client.queries.inspect().signatures, 0, "no signatures remain after last unsubscribe")
+    }
+
     // MARK: - Repeated update() rotations across many keys
 
     func test_repeatedRotations_depSetAlwaysReflectsCurrentVars() throws {

@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 public struct WatchQueryOptions: Sendable {
     public var variables: [String: JSONValue]
@@ -31,6 +32,7 @@ public final class Queries: @unchecked Sendable {
     private let graph: Graph
     private let planner: Planner
     private let documents: Documents
+    private let logger: Logger?
     private let lock = NSRecursiveLock()
 
     private struct WatcherState {
@@ -52,10 +54,11 @@ public final class Queries: @unchecked Sendable {
     private var signatureToWatchers: [String: Set<Int>] = [:]
     private var watcherSeq: Int = 0
 
-    public init(graph: Graph, planner: Planner, documents: Documents) {
+    public init(graph: Graph, planner: Planner, documents: Documents, logger: Logger? = nil) {
         self.graph = graph
         self.planner = planner
         self.documents = documents
+        self.logger = logger
     }
 
     // MARK: - readQuery / writeQuery
@@ -104,13 +107,13 @@ public final class Queries: @unchecked Sendable {
             options.onData(data)
             return makeHandle(id: id)
         }
-        if result.source == .none {
-            // deps already merged above
-        } else {
-            state.lastData = result.data
-            state.lastFingerprints = result.fingerprints
-            watchers[id] = state
-        }
+        // Match cachebay-web: when `immediate: false`, do NOT seed
+        // `lastData` from the initial materialize. Seeding it means the
+        // first dep-driven re-materialize compares the new data against
+        // the seeded snapshot via `isDataDeepEqual`; if equal, the
+        // emission is suppressed and the watcher never gets its first
+        // `onData`. With `lastData` left as `nil`, the first dep change
+        // reliably fires.
         lock.unlock()
         return makeHandle(id: id)
     }
@@ -259,7 +262,16 @@ public final class Queries: @unchecked Sendable {
                 affected.formUnion(set)
             }
         }
-        if affected.isEmpty { lock.unlock(); return }
+        if affected.isEmpty {
+            // Useful diagnostic: a flush touched records but no watcher
+            // depends on any of them. Indexed by `touched` shows whether
+            // a connection canonical update is being missed because no
+            // watcher registered the canonical key as a dependency.
+            logger?.debug("[Cachebay] dep-fanout: touched=\(touched.count, privacy: .public) affected=0 watchersTotal=\(self.watchers.count, privacy: .public)")
+            lock.unlock()
+            return
+        }
+        logger?.debug("[Cachebay] dep-fanout: touched=\(touched.count, privacy: .public) affected=\(affected.count, privacy: .public) watchersTotal=\(self.watchers.count, privacy: .public)")
 
         var emits: [(@Sendable (JSONValue) -> Void, JSONValue)] = []
         for id in affected {
@@ -267,7 +279,15 @@ public final class Queries: @unchecked Sendable {
             if w.skipNextPropagate { continue }
             let result = documents.materialize(plan: w.plan, variables: w.variables, options: .init(canonical: true, fingerprint: true, preferCache: false, updateCache: true))
             updateDependenciesLocked(id: id, next: result.dependencies)
-            if result.source == .none { continue }
+            if result.source == .none {
+                // Affected watcher couldn't materialize — the dep change
+                // landed but the cache shape doesn't satisfy the watcher's
+                // selection set. The per-field warning from `Documents`
+                // names the culprit; this log gives the watcher identity
+                // so you can correlate the two.
+                logger?.warning("[Cachebay] watcher silenced: id=\(id, privacy: .public) signature=\(w.signature, privacy: .public) — dep changed but materialize returned .none (see materialize miss warnings above)")
+                continue
+            }
             let recycled = recycleSnapshots(w.lastData ?? .undefined, result.data, w.lastFingerprints ?? .undefined, result.fingerprints)
             if !isDataDeepEqual(recycled, w.lastData ?? .undefined) {
                 w.lastData = recycled
@@ -285,24 +305,30 @@ public final class Queries: @unchecked Sendable {
     /// Evict all watchers' lastData and return a list of (plan, vars) for
     /// refetching. Mirrors cachebay-web `notifyEvictAll`.
     public func notifyEvictAll() -> [(plan: CachePlan, document: QueryDocument, variables: [String: JSONValue])] {
-        lock.lock(); defer { lock.unlock() }
+        // Match the architecture rule (see CachebayClient.swift): do
+        // not invoke watcher callbacks while holding `lock`. Even with
+        // `NSRecursiveLock` (safe for same-thread re-entry), a callback
+        // that crosses a thread boundary and tries to acquire `lock`
+        // from another thread blocks against this one. Collect the
+        // resets while locked, release, then fan out.
+        lock.lock()
         var refetchMap: [String: (plan: CachePlan, document: QueryDocument, variables: [String: JSONValue])] = [:]
+        var resetCallbacks: [@Sendable (JSONValue) -> Void] = []
         for (id, _) in watchers {
             guard var w = watchers[id] else { continue }
             if w.lastData != nil {
                 w.lastData = nil
                 w.lastFingerprints = nil
                 watchers[id] = w
-                let cb = w.onData
-                let undef: JSONValue = .undefined
-                // Intentional; we want watchers to observe a reset.
-                // Do not deadlock — callback can read but not mutate state while we hold the lock.
-                cb(undef)
+                resetCallbacks.append(w.onData)
             }
             if refetchMap[w.signature] == nil {
                 refetchMap[w.signature] = (w.plan, w.document, w.variables)
             }
         }
+        lock.unlock()
+        let undef: JSONValue = .undefined
+        for cb in resetCallbacks { cb(undef) }
         return Array(refetchMap.values)
     }
 

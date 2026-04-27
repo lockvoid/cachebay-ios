@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 public enum MaterializeSource: Hashable, Sendable {
     case canonical
@@ -48,14 +49,16 @@ public final class Documents: @unchecked Sendable {
     private let graph: Graph
     private let planner: Planner
     private let canonical: Canonical
+    private let logger: Logger?
 
     private let lock = NSLock()
     private var materializeCache: [String: MaterializeResult] = [:]
 
-    public init(graph: Graph, planner: Planner, canonical: Canonical) {
+    public init(graph: Graph, planner: Planner, canonical: Canonical, logger: Logger? = nil) {
         self.graph = graph
         self.planner = planner
         self.canonical = canonical
+        self.logger = logger
     }
 
     // MARK: - Normalize
@@ -415,7 +418,8 @@ public final class Documents: @unchecked Sendable {
             graph: graph,
             variables: variables,
             canonical: options.canonical,
-            fingerprint: options.fingerprint
+            fingerprint: options.fingerprint,
+            logger: logger
         )
 
         var data: [String: JSONValue] = [:]
@@ -492,6 +496,32 @@ public final class Documents: @unchecked Sendable {
         }
 
         let requestedOK = options.canonical ? context.canonicalOK : context.strictOK
+        // Match cachebay-web: aggregate root-level field fingerprints
+        // into `fingerprints[__version]` for query/mutation/subscription
+        // reads. Fragment reads already get a `__version` because
+        // `readEntity` writes one onto its `fpOut` directly. Without
+        // this top-level aggregation, a watcher's `recycleSnapshots`
+        // can't short-circuit via root identity and may emit duplicate
+        // data on every dep change.
+        if options.fingerprint, requestedOK, options.rootId == nil || options.rootId == CachebayConstants.rootID || (options.rootId?.hasPrefix("@mutation.") ?? false) || (options.rootId?.hasPrefix("@subscription.") ?? false) {
+            var rootFps: [UInt32] = []
+            for field in plan.root {
+                if let fp = fingerprints[field.responseKey] {
+                    if case .object(let o) = fp, case .int(let v) = o[CachebayConstants.fingerprintKey] ?? .undefined {
+                        rootFps.append(UInt32(truncatingIfNeeded: v))
+                    } else if case .array(let arr) = fp {
+                        for item in arr {
+                            if case .object(let o) = item, case .int(let v) = o[CachebayConstants.fingerprintKey] ?? .undefined {
+                                rootFps.append(UInt32(truncatingIfNeeded: v))
+                            }
+                        }
+                    }
+                }
+            }
+            if !rootFps.isEmpty {
+                fingerprints[CachebayConstants.fingerprintKey] = .int(Int64(fingerprintNodes(0, rootFps)))
+            }
+        }
         let result: MaterializeResult = !requestedOK
             ? MaterializeResult(
                 data: .undefined, fingerprints: .undefined,
@@ -543,6 +573,7 @@ struct MaterializeContext {
     let variables: [String: JSONValue]
     let canonical: Bool
     let fingerprint: Bool
+    let logger: Logger?
 
     var strictOK: Bool = true
     var canonicalOK: Bool = true
@@ -625,9 +656,11 @@ struct MaterializeContext {
                 case .none, .some(.undefined):
                     out[outKey] = .undefined
                     strictOK = false; canonicalOK = false
+                    logger?.warning("[Cachebay] materialize miss: record \(id, privacy: .public) has no field '\(storeKey, privacy: .public)' (selection set required) — likely a mutation/fragment wrote a partial entity that doesn't satisfy a watching query's selection set")
                 default:
                     out[outKey] = .undefined
                     strictOK = false; canonicalOK = false
+                    logger?.warning("[Cachebay] materialize miss: record \(id, privacy: .public) field '\(storeKey, privacy: .public)' has unexpected link shape — selection set requires ref/refList/null")
                 }
                 continue
             }
@@ -641,14 +674,30 @@ struct MaterializeContext {
     }
 
     mutating func readConnection(parentId: CacheKey, field: PlanField, out: inout [String: JSONValue], outKey: String, fpOut: inout [String: JSONValue], path: String) {
-        let baseKey = canonical
+        // Mirror cachebay-web: track BOTH OK flags (canonical + strict)
+        // regardless of the read mode. Reading canonical mode must still
+        // flip `strictOK = false` if the per-page strict record is
+        // absent — and vice versa — so `cacheFirst` policy correctly
+        // detects "we don't have the exact page" even when the
+        // canonical merger has data.
+        let baseIsCanonical = canonical
+        let baseKey = baseIsCanonical
             ? Keys.buildConnectionCanonicalKey(field: field, parentId: parentId, variables: variables)
             : Keys.buildConnectionKey(field: field, parentId: parentId, variables: variables)
         dependencies.insert(baseKey)
 
-        guard let page = graph.getRecord(baseKey) else {
-            strictOK = false
-            canonicalOK = false
+        let page = graph.getRecord(baseKey)
+        if baseIsCanonical {
+            if page == nil { canonicalOK = false }
+            let strictKey = Keys.buildConnectionKey(field: field, parentId: parentId, variables: variables)
+            if graph.getRecord(strictKey) == nil { strictOK = false }
+        } else {
+            if page == nil { strictOK = false }
+            let canonicalKey = Keys.buildConnectionCanonicalKey(field: field, parentId: parentId, variables: variables)
+            if graph.getRecord(canonicalKey) == nil { canonicalOK = false }
+        }
+
+        guard let page else {
             out[outKey] = .object([CachebayConstants.connectionEdgesField: .array([]), CachebayConstants.connectionPageInfoField: .object([:])])
             return
         }
@@ -700,6 +749,20 @@ struct MaterializeContext {
             // Non-edges / non-pageInfo connection-level fields.
             if childField.selectionSet == nil {
                 readScalar(page, field: childField, parentId: baseKey, into: &conn, outKey: childField.responseKey, path: "\(path).\(childField.responseKey)")
+                continue
+            }
+
+            // Match cachebay-web: a connection field nested inside the
+            // connection-level selection (rare, but valid — e.g.
+            // `posts { tagsConnection @connection { ... } }`) is read
+            // via `readConnection` recursively, NOT via the generic
+            // ref/refList path below. Without this branch, the nested
+            // connection's canonical/strict key would never be reached
+            // and watchers depending on it would never fanout.
+            if childField.isConnection {
+                var childFp: [String: JSONValue] = [:]
+                readConnection(parentId: baseKey, field: childField, out: &conn, outKey: childField.responseKey, fpOut: &childFp, path: "\(path).\(childField.responseKey)")
+                if fingerprint { fpOut[childField.responseKey] = .object(childFp) }
                 continue
             }
 
@@ -801,9 +864,30 @@ struct MaterializeContext {
         if let v = record[storeKey] {
             out[outKey] = v
         } else {
+            // Scalar miss is a SOFT miss — write `.undefined` and emit a
+            // diagnostic, but do NOT fail `canonicalOK`/`strictOK`. This
+            // mirrors `cachebay-web`'s `readScalar` semantics: a single
+            // missing scalar (e.g. an optimistic edge that has no
+            // `cursor` because the caller didn't supply edge meta) must
+            // not silence the entire watcher. Hard misses are entity
+            // records and ref-link absences only — those have their
+            // own `canonicalOK = false` paths above.
             out[outKey] = .undefined
-            strictOK = false
-            canonicalOK = false
+            // Only warn when the parent record exists — a wholly-absent
+            // record is a cold-cache read, not an actionable bug. A
+            // present record missing a single scalar means a writer
+            // (mutation, fragment, optimistic patch) populated the
+            // record without the field this query selects.
+            if !record.isEmpty {
+                // Soft scalar miss — does NOT flip canonicalOK/strictOK.
+                // Common during optimistic transactions (e.g. server-
+                // assigned `cursor` field on a freshly added edge) and
+                // recoverable on the next normalize. Logged at debug
+                // level so it doesn't surface as an error in Console
+                // for normal operation. Use `OS_ACTIVITY_MODE=enable`
+                // or a `.debug` filter to see them while debugging.
+                logger?.debug("[Cachebay] materialize soft miss: record \(parentId, privacy: .public) has no scalar '\(storeKey, privacy: .public)' (no OK flip; field returned undefined)")
+            }
         }
     }
 

@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 // MARK: - Concurrency model
 //
@@ -65,6 +66,14 @@ public struct CachebayOptions: Sendable {
     /// Optional persistent storage. When set, every graph write is replicated to
     /// disk asynchronously, and initial records are loaded at client creation.
     public var storage: StorageAdapterFactory?
+    /// Optional logger for runtime diagnostics. When set, Cachebay emits
+    /// warnings for actionable cache problems — e.g. a watcher's materialize
+    /// failing because an entity record exists but is missing a field its
+    /// selection set requires (typical cause: a mutation's response shape
+    /// is a subset of the consuming query's selection set, so an
+    /// optimistic `addNode` lands a partial entity that silently breaks
+    /// the watcher).
+    public var logger: Logger?
 
     public init(
         transport: Transport,
@@ -72,7 +81,8 @@ public struct CachebayOptions: Sendable {
         keys: [String: KeyFunction] = [:],
         interfaces: [String: [String]] = [:],
         suspensionTimeout: TimeInterval = 1.0,
-        storage: StorageAdapterFactory? = nil
+        storage: StorageAdapterFactory? = nil,
+        logger: Logger? = nil
     ) {
         self.transport = transport
         self.cachePolicy = cachePolicy
@@ -80,6 +90,7 @@ public struct CachebayOptions: Sendable {
         self.interfaces = interfaces
         self.suspensionTimeout = suspensionTimeout
         self.storage = storage
+        self.logger = logger
     }
 }
 
@@ -103,10 +114,10 @@ public final class CachebayClient: @unchecked Sendable {
         let graph = Graph(options: GraphOptions(keys: options.keys, interfaces: options.interfaces, onChange: nil))
         let planner = Planner()
         let canonical = Canonical(graph: graph)
-        let documents = Documents(graph: graph, planner: planner, canonical: canonical)
-        let queries = Queries(graph: graph, planner: planner, documents: documents)
+        let documents = Documents(graph: graph, planner: planner, canonical: canonical, logger: options.logger)
+        let queries = Queries(graph: graph, planner: planner, documents: documents, logger: options.logger)
         let fragments = Fragments(planner: planner, documents: documents)
-        let optimistic = Optimistic(graph: graph)
+        let optimistic = Optimistic(graph: graph, planner: planner)
         canonical.setReplayer(optimistic)
         let operations = Operations(
             transport: options.transport, planner: planner, documents: documents, queries: queries,
@@ -286,6 +297,16 @@ public final class CachebayClient: @unchecked Sendable {
     // MARK: - Evict
 
     public func evictAll() async {
+        // Clear persistent storage FIRST so on next launch (or in this
+        // process if the storage is shared) records don't resurrect
+        // from disk. Mirrors cachebay-web's `evictAll →
+        // storageAdapter.evictAll() → evictInMemoryAndRefetch()` flow.
+        // Without this, `evictAll` is a no-op across app restarts: the
+        // in-memory graph wipes, the storage adapter still holds the
+        // records, and `storage.load()` re-hydrates them.
+        if let storage {
+            try? await storage.evictAll()
+        }
         optimistic.evictAll()
         documents.evictAll()
         graph.evictAll()

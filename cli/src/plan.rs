@@ -156,7 +156,7 @@ fn build_fragment_plan(
         root_typename,
         variables: Vec::new(),
         root,
-        network_query: frag.serialize().to_string(),
+        network_query: inject_typename(&strip_connection_directive(&frag.serialize().to_string()), false),
         source_path: ctx.source_path_for(frag.location()),
     })
 }
@@ -505,17 +505,24 @@ fn fingerprint_field(
 }
 
 fn render_network_query(op: &Operation, exec_doc: &ExecutableDocument) -> String {
-    // Strategy (matches Swift `buildNetworkQuery`): serialize the operation +
-    // required named fragments with `@connection` removed. apollo-compiler's
-    // `serialize()` gives us a byte-identical round trip, so we post-process.
+    // Strategy (matches Swift `buildNetworkQuery` + `Typename.injectNested`):
+    // serialize the operation + required named fragments, strip
+    // `@connection`, and inject `__typename` into every nested selection
+    // set. apollo-compiler's `serialize()` gives us a byte-identical
+    // round trip, so we post-process. The injection contract MUST match
+    // `CachePlan.networkQuery`'s docstring ("Network-safe query string
+    // (with `__typename` added, `@connection` stripped)") — without
+    // it the iOS runtime sends a query with no `__typename`, the server
+    // omits it from the response, and `graph.identify` falls back to
+    // synthetic record paths instead of `Type:id` keys.
     let serialized = op.serialize().to_string();
-    let mut pieces = vec![strip_connection_directive(&serialized)];
+    let mut pieces = vec![inject_typename(&strip_connection_directive(&serialized), true)];
     // Attach every referenced fragment definition used (transitively).
     let referenced = collect_referenced_fragments(op, exec_doc);
     for frag_name in referenced {
         if let Some(frag) = exec_doc.fragments.get(&frag_name) {
             let s = frag.serialize().to_string();
-            pieces.push(strip_connection_directive(&s));
+            pieces.push(inject_typename(&strip_connection_directive(&s), false));
         }
     }
     pieces.join("\n\n")
@@ -539,6 +546,79 @@ fn collect_referenced_fragments(op: &Operation, exec_doc: &ExecutableDocument) -
         }
     }
     out
+}
+
+/// Inject `__typename` into every selection set that opens with `{`,
+/// mirroring Swift `Typename.injectNested` / `injectRecursive`.
+///
+/// `skip_first_brace = true` for **operation** definitions (`query`/
+/// `mutation`/`subscription`) — Swift's `injectNested` does not add
+/// `__typename` to the root selection set because root types' typename
+/// is fixed (`"Query"`/`"Mutation"`/`"Subscription"`).
+/// `skip_first_brace = false` for **fragment** definitions — Swift's
+/// `injectRecursive` injects `__typename` into the top-level selection
+/// set as well as every nested one (fragments are spread anywhere, so
+/// the typename of the spread context matters).
+///
+/// Selection-set braces are distinguished from argument-literal braces
+/// by tracking parenthesis depth: any `{` reached while
+/// `paren_depth == 0` opens a selection set; braces inside `(...)` are
+/// argument input objects and are left alone.
+///
+/// Idempotent — if the immediate selection set already opens with
+/// `__typename` (textual lookup), no injection happens.
+fn inject_typename(src: &str, skip_first_brace: bool) -> String {
+    let bytes = src.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len() + 32);
+    let mut paren_depth: i32 = 0;
+    let mut brace_count: usize = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if paren_depth > 0 {
+            // Inside argument literal — pass through, only adjust paren
+            // depth on `(` / `)`. Braces here are input-object literals.
+            if b == b'(' { paren_depth += 1; }
+            else if b == b')' { paren_depth -= 1; }
+            out.push(b);
+            i += 1;
+            continue;
+        }
+        if b == b'(' {
+            paren_depth += 1;
+            out.push(b);
+            i += 1;
+            continue;
+        }
+        if b == b'{' {
+            out.push(b);
+            i += 1;
+            brace_count += 1;
+            // Decide whether to inject. Operations skip brace #1 (the
+            // operation body); fragments inject at every brace.
+            let should_inject = !(skip_first_brace && brace_count == 1);
+            if should_inject {
+                // Peek ahead to see if the first non-whitespace token in
+                // this selection set is already `__typename` — if so,
+                // skip to keep idempotency.
+                let mut j = i;
+                while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t' || bytes[j] == b'\n' || bytes[j] == b'\r') {
+                    j += 1;
+                }
+                let already = bytes[j..].starts_with(b"__typename");
+                if !already {
+                    // Insert a leading newline + indent, then the field,
+                    // then a trailing space so the next character spaces
+                    // away from `__typename`.
+                    out.extend_from_slice(b"\n  __typename ");
+                }
+            }
+            continue;
+        }
+        out.push(b);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|_| src.to_string())
 }
 
 fn strip_connection_directive(src: &str) -> String {

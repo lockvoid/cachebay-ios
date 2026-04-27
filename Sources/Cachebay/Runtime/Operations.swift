@@ -94,12 +94,24 @@ public final class Operations: @unchecked Sendable {
             cached = documents.materialize(plan: plan, variables: vars, options: .init(canonical: true, fingerprint: true, preferCache: true, updateCache: true))
         }
 
+        // Mirror cachebay-web: when a cached read fires `onCacheData` but
+        // no watcher consumes it via `notifyDataBySignature`, the
+        // materialize cache entry is now stale relative to any future
+        // graph mutation that doesn't fan out to a watcher. Invalidate
+        // it so the next read re-materializes from the graph.
+        @Sendable func deliverCached(_ c: MaterializeResult, willFetchFromNetwork: Bool) {
+            options.onCacheData?(c.data, willFetchFromNetwork)
+            let propagated = queries.notifyDataBySignature(canonicalSig, data: c.data, fingerprints: c.fingerprints, dependencies: c.dependencies)
+            if !propagated {
+                documents.invalidate(plan: plan, variables: vars, canonical: true, fingerprint: true)
+            }
+        }
+
         // Suspension window: a recent result for this signature → serve cached terminally
         // to de-dupe a burst of equivalent requests.
         if isWithinSuspension(strictSig) {
             if let c = cached, c.source != .none {
-                options.onCacheData?(c.data, false)
-                _ = queries.notifyDataBySignature(canonicalSig, data: c.data, fingerprints: c.fingerprints, dependencies: c.dependencies)
+                deliverCached(c, willFetchFromNetwork: false)
                 return OperationResult(data: c.data, error: nil, meta: .init(source: .cache))
             }
         }
@@ -107,8 +119,7 @@ public final class Operations: @unchecked Sendable {
         switch policy {
         case .cacheOnly:
             if let c = cached, c.source != .none {
-                options.onCacheData?(c.data, false)
-                _ = queries.notifyDataBySignature(canonicalSig, data: c.data, fingerprints: c.fingerprints, dependencies: c.dependencies)
+                deliverCached(c, willFetchFromNetwork: false)
                 return OperationResult(data: c.data, error: nil, meta: .init(source: .cache))
             }
             let err = CombinedError.cacheMiss()
@@ -118,16 +129,14 @@ public final class Operations: @unchecked Sendable {
 
         case .cacheFirst:
             if let c = cached, c.canonicalOK, c.strictOK, c.strictSignature == strictSig {
-                options.onCacheData?(c.data, false)
-                _ = queries.notifyDataBySignature(canonicalSig, data: c.data, fingerprints: c.fingerprints, dependencies: c.dependencies)
+                deliverCached(c, willFetchFromNetwork: false)
                 return OperationResult(data: c.data, error: nil, meta: .init(source: .cache))
             }
             return await performRequest(plan: plan, options: options, canonicalSig: canonicalSig, strictSig: strictSig)
 
         case .cacheAndNetwork:
             if let c = cached, c.canonicalOK {
-                options.onCacheData?(c.data, true)
-                _ = queries.notifyDataBySignature(canonicalSig, data: c.data, fingerprints: c.fingerprints, dependencies: c.dependencies)
+                deliverCached(c, willFetchFromNetwork: true)
             }
             return await performRequest(plan: plan, options: options, canonicalSig: canonicalSig, strictSig: strictSig)
 
@@ -154,14 +163,30 @@ public final class Operations: @unchecked Sendable {
                 documents.normalize(plan: plan, variables: options.variables, data: data)
                 let fresh = documents.materialize(plan: plan, variables: options.variables, options: .init(canonical: true, fingerprint: true, preferCache: false, updateCache: true))
                 if fresh.source == .none {
+                    // Match cachebay-web: a materialization failure
+                    // after a successful network write is reported back
+                    // to the caller via `onError` and the return value
+                    // only — it is NOT a network error broadcast to all
+                    // watchers. (Web fans out errors only on network/
+                    // transport failures, not on cache-shape failures.)
                     let err = CombinedError(networkMessage: "[cachebay] Query materialization failed after network write")
                     options.onError?(err)
-                    _ = queries.notifyErrorBySignature(canonicalSig, error: err)
                     return OperationResult(data: nil, error: err)
                 }
                 markEmitted(strictSig)
                 options.onNetworkData?(fresh.data)
-                _ = queries.notifyDataBySignature(canonicalSig, data: fresh.data, fingerprints: fresh.fingerprints, dependencies: fresh.dependencies)
+                let propagated = queries.notifyDataBySignature(canonicalSig, data: fresh.data, fingerprints: fresh.fingerprints, dependencies: fresh.dependencies)
+                if !propagated {
+                    // Match cachebay-web: when no watcher consumes the
+                    // network result, invalidate the materialize cache
+                    // so the next read re-materializes from the freshly
+                    // normalized graph state. Without this, a direct
+                    // `executeQuery` call (no watcher) leaves a stale
+                    // `materializeCache` entry from before the network
+                    // write that wins on the next `preferCache: true`
+                    // read.
+                    documents.invalidate(plan: plan, variables: options.variables, canonical: true, fingerprint: true)
+                }
                 return OperationResult(data: fresh.data, error: result.error, meta: .init(source: .network))
             }
 
@@ -197,10 +222,22 @@ public final class Operations: @unchecked Sendable {
                     return OperationResult(data: nil, error: err)
                 }
                 if result.error == nil {
-                    options.onData?(fresh.data)
-                    // Also notify any watcher with this canonical signature (mutation replays).
+                    // Match cachebay-web ordering: watcher fanout
+                    // first, then per-call `onData`. If `onData`
+                    // synchronously triggers UI work that depends on
+                    // watcher state (e.g. reads from a ProjectsView
+                    // backed by the mutated connection), the watcher
+                    // must already have been notified or the UI sees
+                    // stale data for one tick.
                     let sig = plan.makeSignature(canonical: true, variables: options.variables)
-                    _ = queries.notifyDataBySignature(sig, data: fresh.data, fingerprints: fresh.fingerprints, dependencies: fresh.dependencies)
+                    let propagated = queries.notifyDataBySignature(sig, data: fresh.data, fingerprints: fresh.fingerprints, dependencies: fresh.dependencies)
+                    if !propagated {
+                        // Match cachebay-web: invalidate materialize
+                        // cache when no watcher consumed the mutation
+                        // result.
+                        documents.invalidate(plan: plan, variables: options.variables, canonical: true, fingerprint: true)
+                    }
+                    options.onData?(fresh.data)
                 }
                 if let err = result.error { options.onError?(err) }
                 return OperationResult(data: fresh.data, error: result.error)

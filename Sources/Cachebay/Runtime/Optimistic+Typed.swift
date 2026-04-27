@@ -71,6 +71,54 @@ public extension ConnectionAPI {
         addNode(node.__data, options: options)
     }
 
+    /// Plan-aware typed add — pass the typed entity AND the fragment
+    /// that governs its shape. The fragment plan is used to (a)
+    /// initialize nested `@connection` canonicals as empty (or from
+    /// inline `edges`/`pageInfo` in the node data) and (b) strip
+    /// selection-set fields from the entity-record patch so existing
+    /// ref/refList links stay intact.
+    ///
+    /// Use this when adding an entity returned from a mutation
+    /// response (e.g. `result.data?.createProject`) to a connection
+    /// that watches the same entity through a fragment with
+    /// connection-shaped subfields:
+    ///
+    /// ```swift
+    /// b.connection(key: key)
+    ///  .addNode(node: created, fragment: ProjectFields.self,
+    ///           options: .init(position: .start))
+    /// ```
+    ///
+    /// Mirrors cachebay-web's `addNode(node, { fragment, fragmentName, variables })`
+    /// (`optimistic.ts:952`).
+    func addNode<N: OperationData, F: Fragment>(
+        node: N,
+        fragment: F.Type,
+        variables: [String: JSONValue] = [:],
+        options: AddNodeOptions = AddNodeOptions()
+    ) {
+        var opts = options
+        opts.fragmentDocument = F.document
+        opts.fragmentName = F.fragmentName
+        opts.fragmentVariables = variables
+        addNode(node.__data, options: opts)
+    }
+
+    /// Plan-aware typed add for a fragment-shaped entity. Same as the
+    /// `OperationData` overload but takes `F.Data` directly.
+    func addNode<F: Fragment>(
+        node: F.Data,
+        fragment: F.Type,
+        variables: [String: JSONValue] = [:],
+        options: AddNodeOptions = AddNodeOptions()
+    ) {
+        var opts = options
+        opts.fragmentDocument = F.document
+        opts.fragmentName = F.fragmentName
+        opts.fragmentVariables = variables
+        addNode(node.__data, options: opts)
+    }
+
     /// Typed connection add via closure-builder — for optimistic inserts
     /// where you don't have server data yet. Builds a minimal node draft
     /// out of the fragment shape; only fields the closure touches land in

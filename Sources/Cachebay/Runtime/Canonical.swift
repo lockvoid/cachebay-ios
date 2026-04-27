@@ -2,7 +2,8 @@ import Foundation
 
 /// Protocol so we can inject an optimistic replayer without importing Optimistic.
 public protocol OptimisticReplayer: Sendable {
-    func replay(connectionKeys: [CacheKey])
+    @discardableResult
+    func replay(connectionKeys: [CacheKey]) -> Optimistic.ReplayResult
 }
 
 /// Canonical connection merger — Relay-style cursor pagination.
@@ -122,15 +123,33 @@ public final class Canonical: @unchecked Sendable {
             }
         }
 
-        // Merge edges: prefix + incoming (dedup against existing) + suffix.
+        // Merge edges: prefix + incoming (dedup against KEPT existing) + suffix.
         var merged: [CacheKey] = []
         merged.reserveCapacity(prefixEnd + incomingEdgeRefs.count + (existingEdges.count - suffixStart))
 
-        // Build set of existing node keys (for de-dup) + record of existing edges by node
+        // Dedup against the existing edges that will SURVIVE the merge —
+        // i.e. the prefix range + the suffix range. Edges outside that
+        // range are about to be discarded by the splice, so deduping
+        // incoming against them would incorrectly drop incoming nodes
+        // whose ids happened to also be in stale (about-to-be-dropped)
+        // edges. In particular, leader mode (prefixEnd=0,
+        // suffixStart=existingEdges.count) means no existing is kept,
+        // so no dedup runs and incoming lands as-is.
         var existingNodeToEdge: [CacheKey: (index: Int, edgeKey: CacheKey)] = [:]
-        for (i, ek) in existingEdges.enumerated() {
-            if let edge = graph.getRecord(ek), let node = edge[CachebayConstants.connectionNodeField]?.ref {
-                existingNodeToEdge[node] = (i, ek)
+        if prefixEnd > 0 {
+            for i in 0..<prefixEnd {
+                let ek = existingEdges[i]
+                if let edge = graph.getRecord(ek), let node = edge[CachebayConstants.connectionNodeField]?.ref {
+                    existingNodeToEdge[node] = (i, ek)
+                }
+            }
+        }
+        if suffixStart < existingEdges.count {
+            for i in suffixStart..<existingEdges.count {
+                let ek = existingEdges[i]
+                if let edge = graph.getRecord(ek), let node = edge[CachebayConstants.connectionNodeField]?.ref {
+                    existingNodeToEdge[node] = (i, ek)
+                }
             }
         }
 
@@ -212,11 +231,19 @@ public final class Canonical: @unchecked Sendable {
         let suffixLen = existingEdges.count - suffixStart
 
         if prefixLen == 0 {
-            if let hp = incomingPageInfo["hasPreviousPage"] { pageInfo["hasPreviousPage"] = hp }
+            // Match cachebay-web's `!!hasPreviousPage`: coerce non-bool
+            // values (notably `null`) to `false`. Server payloads that
+            // send `hasPreviousPage: null` would otherwise persist as
+            // `null` on iOS, while web stores `false`.
+            if let hp = incomingPageInfo["hasPreviousPage"] {
+                pageInfo["hasPreviousPage"] = .bool(hp.bool ?? false)
+            }
             if let sc = incomingPageInfo["startCursor"] { pageInfo["startCursor"] = sc }
         }
         if suffixLen == 0 {
-            if let hn = incomingPageInfo["hasNextPage"] { pageInfo["hasNextPage"] = hn }
+            if let hn = incomingPageInfo["hasNextPage"] {
+                pageInfo["hasNextPage"] = .bool(hn.bool ?? false)
+            }
             if let ec = incomingPageInfo["endCursor"] { pageInfo["endCursor"] = ec }
         }
         // Infer from first/last edges if still nil.

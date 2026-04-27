@@ -33,10 +33,34 @@ public struct AddNodeOptions: Sendable {
     public var position: EdgePosition = .end
     public var anchor: EntityRef? = nil
     public var edge: [String: JSONValue]? = nil
+    /// Optional fragment plan for plan-aware entity writes. When provided,
+    /// `addNode` walks the fragment plan to (a) initialize nested
+    /// `@connection` canonicals as empty (or from inline `edges`/`pageInfo`
+    /// in the node data) and (b) strip selection-set fields from the
+    /// entity-record patch so existing ref/refList links stay intact.
+    /// Mirrors cachebay-web's `addNode(node, { fragment, fragmentName, variables })`.
+    public var fragmentDocument: QueryDocument? = nil
+    public var fragmentName: String? = nil
+    public var fragmentVariables: [String: JSONValue] = [:]
     public init(position: EdgePosition = .end, anchor: EntityRef? = nil, edge: [String: JSONValue]? = nil) {
         self.position = position
         self.anchor = anchor
         self.edge = edge
+    }
+    public init(
+        position: EdgePosition = .end,
+        anchor: EntityRef? = nil,
+        edge: [String: JSONValue]? = nil,
+        fragmentDocument: QueryDocument?,
+        fragmentName: String? = nil,
+        fragmentVariables: [String: JSONValue] = [:]
+    ) {
+        self.position = position
+        self.anchor = anchor
+        self.edge = edge
+        self.fragmentDocument = fragmentDocument
+        self.fragmentName = fragmentName
+        self.fragmentVariables = fragmentVariables
     }
 }
 
@@ -55,6 +79,13 @@ public struct BuilderContext: Sendable {
 /// The builder surface used inside `cache.modifyOptimistic { tx, ctx in ... }`.
 public protocol OptimisticBuilder: AnyObject, Sendable {
     func patch(_ target: EntityRef, _ patch: [String: JSONValue], mode: EntityPatchMode)
+    /// Closure form mirroring `cachebay-web`'s
+    /// `b.patch(target, prev => ({...}))`. The closure receives the
+    /// current cache snapshot of the entity (`[:]` if absent) and
+    /// returns the patch dict to apply. Use this for read-modify-write
+    /// flows like incrementing a counter where the optimistic value
+    /// depends on the latest cached value.
+    func patch(_ target: EntityRef, mode: EntityPatchMode, _ build: @Sendable (_ prev: [String: JSONValue]) -> [String: JSONValue])
     func delete(_ target: EntityRef)
     func connection(_ selector: ConnectionSelector) -> ConnectionAPI
     func connection(key canonicalKey: CacheKey) -> ConnectionAPI
@@ -72,6 +103,14 @@ public protocol ConnectionAPI: AnyObject, Sendable {
     func addNode(_ node: [String: JSONValue], options: AddNodeOptions)
     func removeNode(_ ref: EntityRef)
     func patch(_ update: [String: JSONValue])
+    /// Closure-builder form mirroring cachebay-web's
+    /// `c.patch(prev => ({...}))`. The closure receives the current
+    /// snapshot of the connection canonical record (`[:]` if absent)
+    /// and returns the patch dict to merge into it. Use this for
+    /// read-modify-write on connection-level scalars (e.g.
+    /// `totalCount` increments) where the optimistic value depends on
+    /// the latest cached value.
+    func patch(_ build: @Sendable (_ prev: [String: JSONValue]) -> [String: JSONValue])
     /// See `OptimisticBuilder.canonicalTypename(_:)` — exposed here so
     /// the typed `removeNode<F>(fragment:id:)` overload can canonicalise
     /// the fragment's `onTypename` to the right cache namespace.
@@ -80,6 +119,7 @@ public protocol ConnectionAPI: AnyObject, Sendable {
 
 public final class Optimistic: @unchecked Sendable {
     private let graph: Graph
+    private let planner: Planner?
     private let lock = NSRecursiveLock()
 
     fileprivate enum EntityOpKind: Sendable { case write(patch: [String: JSONValue], mode: EntityPatchMode); case delete }
@@ -109,8 +149,9 @@ public final class Optimistic: @unchecked Sendable {
     /// any layer. Restored on revert/commit before replaying surviving layers.
     private var committedBaselines: [CacheKey: [String: JSONValue]?] = [:]
 
-    public init(graph: Graph) {
+    public init(graph: Graph, planner: Planner? = nil) {
         self.graph = graph
+        self.planner = planner
     }
 
     public func modifyOptimistic(_ builder: @escaping @Sendable (_ tx: OptimisticBuilder, _ ctx: BuilderContext) -> Void) -> OptimisticTransaction {
@@ -135,18 +176,43 @@ public final class Optimistic: @unchecked Sendable {
         )
     }
 
-    public func replay(connectionKeys: [CacheKey]) {
+    /// Replay summary: which entity keys were added (`addNode`) and
+    /// which were removed (`removeNode`) within the scope of this
+    /// replay. Mirrors cachebay-web's
+    /// `replayOptimistic({connections}) → {added: Set, removed: Set}`.
+    public struct ReplayResult: Sendable {
+        public let added: Set<CacheKey>
+        public let removed: Set<CacheKey>
+        public init(added: Set<CacheKey> = [], removed: Set<CacheKey> = []) {
+            self.added = added
+            self.removed = removed
+        }
+    }
+
+    @discardableResult
+    public func replay(connectionKeys: [CacheKey]) -> ReplayResult {
         lock.lock()
         let sorted = layers.sorted { $0.id < $1.id }
         lock.unlock()
         let scope = connectionKeys.isEmpty ? nil : Set(connectionKeys)
+        var added: Set<CacheKey> = []
+        var removed: Set<CacheKey> = []
         for layer in sorted {
             for op in layer.entityOps { applyEntityOp(op) }
             for op in layer.connectionOps {
                 if let scope, !scope.contains(op.connectionKey) { continue }
                 applyConnectionOp(op)
+                switch op.kind {
+                case .addNode(let entityKey, _, _, _):
+                    added.insert(entityKey)
+                case .removeNode(let entityKey):
+                    removed.insert(entityKey)
+                case .patch:
+                    break
+                }
             }
         }
+        return ReplayResult(added: added, removed: removed)
     }
 
     public func evictAll() {
@@ -333,6 +399,24 @@ public final class Optimistic: @unchecked Sendable {
         graph.replaceRecord(canonicalKey, canonical)
         ConnectionIndex.insert(graph: graph, canonicalKey: canonicalKey, nodeKey: entityKey, edgeKey: edgeKey)
 
+        // Maintain `::cursorIndex` (cursor → position) — match cachebay-
+        // web's `shiftCursorIndicesAfter` + `addCursorToIndex`. Without
+        // this, the cursor index is stale after every optimistic
+        // add/remove and the next paginate-after-cursor splices at the
+        // wrong slot.
+        if let insertPos = edgeRefs.firstIndex(of: edgeKey) {
+            var index = readCursorIndex(canonicalKey)
+            // Shift positions >= insertPos by +1.
+            for (k, v) in index where v >= insertPos {
+                index[k] = v + 1
+            }
+            // Add the new cursor (only if the edge meta included one).
+            if let cursor = getEdgeCursor(edgeKey) {
+                index[cursor] = insertPos
+            }
+            writeCursorIndex(canonicalKey, index)
+        }
+
         // Unused counter hint silences the "nextIndex unused" warning if any.
         _ = nextIndex
     }
@@ -344,11 +428,53 @@ public final class Optimistic: @unchecked Sendable {
         var canonical = graph.getRecord(canonicalKey) ?? [:]
         var edgeRefs = canonical[CachebayConstants.connectionEdgesField]?.refList ?? []
         if let idx = edgeRefs.firstIndex(of: targetEdge) {
+            // Capture the removed cursor + position BEFORE we drop the
+            // edge from the list so we can update `::cursorIndex`.
+            let removedCursor = getEdgeCursor(targetEdge)
             edgeRefs.remove(at: idx)
             canonical[CachebayConstants.connectionEdgesField] = .refList(edgeRefs)
             graph.replaceRecord(canonicalKey, canonical)
+
+            // Maintain cursor index — match cachebay-web's
+            // `removeCursorFromIndex` + `shiftCursorIndicesAfter(_, -1)`.
+            var index = readCursorIndex(canonicalKey)
+            if let c = removedCursor {
+                index.removeValue(forKey: c)
+            }
+            for (k, v) in index where v > idx {
+                index[k] = v - 1
+            }
+            writeCursorIndex(canonicalKey, index)
         }
         ConnectionIndex.remove(graph: graph, canonicalKey: canonicalKey, nodeKey: entityKey)
+    }
+
+    // MARK: - Cursor index helpers (mirror Canonical's so Optimistic
+    // can maintain the index without a circular dep on Canonical).
+
+    private func cursorIndexKey(_ canonicalKey: CacheKey) -> CacheKey {
+        "\(canonicalKey)::cursorIndex"
+    }
+
+    private func readCursorIndex(_ canonicalKey: CacheKey) -> [String: Int] {
+        guard let rec = graph.getRecord(cursorIndexKey(canonicalKey)) else { return [:] }
+        var out: [String: Int] = [:]
+        out.reserveCapacity(rec.count)
+        for (k, v) in rec {
+            if case .int(let i) = v { out[k] = Int(i) }
+        }
+        return out
+    }
+
+    private func writeCursorIndex(_ canonicalKey: CacheKey, _ index: [String: Int]) {
+        var rec: [String: JSONValue] = [:]
+        rec.reserveCapacity(index.count)
+        for (k, v) in index { rec[k] = .int(Int64(v)) }
+        graph.replaceRecord(cursorIndexKey(canonicalKey), rec)
+    }
+
+    private func getEdgeCursor(_ edgeKey: CacheKey) -> String? {
+        graph.getField(edgeKey, "cursor")?.string
     }
 
     private func applyConnectionPatch(_ canonicalKey: CacheKey, _ update: [String: JSONValue]) {
@@ -423,6 +549,189 @@ public final class Optimistic: @unchecked Sendable {
         return Keys.buildConnectionCanonicalKey(field: field, parentId: parentId, variables: filters)
     }
 
+    // MARK: - Plan-aware addNode helpers
+
+    /// Stamp `__typename` from the plan's `rootTypename` when the node
+    /// data omits it. Mirrors web's `processedNode = { __typename: plan.rootTypename, ...processedNode }`
+    /// (`optimistic.ts:961`).
+    fileprivate func stampTypenameFromPlan(_ node: [String: JSONValue], plan: CachePlan) -> [String: JSONValue] {
+        if node[CachebayConstants.typenameField] != nil { return node }
+        if plan.rootTypename.isEmpty { return node }
+        var out = node
+        out[CachebayConstants.typenameField] = .string(plan.rootTypename)
+        return out
+    }
+
+    /// Strip fields with selection sets (entities, sub-entities, connections)
+    /// from the entity-record patch. Without this, the merge in
+    /// `graph.putRecord(entityKey, node)` would overwrite existing
+    /// `ref`/`refList`/`null` links with raw arrays/objects from the
+    /// node's `__data`, triggering "unexpected link shape" misses on
+    /// the materialize path. We keep `__typename`, scalars, and
+    /// scalar-array fields. Selection-set fields are handled by
+    /// `initializeNestedConnections` (or by the server-cycle normalize).
+    ///
+    /// Two-pass strip:
+    ///   1. **Plan-aware** — every field the fragment plan marks with
+    ///      a selection set, regardless of the data shape. Catches the
+    ///      "fragment field with empty array data" case
+    ///      (`clips: []` for a connection-typed field).
+    ///   2. **Shape-aware** — for fields the plan doesn't know about
+    ///      (e.g. extra selections on the operation outside the
+    ///      fragment), strip values that look like sub-entities: an
+    ///      `.object(...)` carrying `__typename`, or an `.array(...)`
+    ///      whose first object element carries `__typename`. Catches
+    ///      mutation-level extras like `elements { ... }` selected
+    ///      outside the spread fragment.
+    ///
+    /// Plain JSON-scalar objects (no `__typename`) and scalar arrays
+    /// survive both passes — those are valid graph values.
+    fileprivate func stripSelectionSetFields(_ node: [String: JSONValue], fromPlanFields fields: [PlanField]) -> [String: JSONValue] {
+        var out = node
+        // Pass 1: plan-aware strip.
+        for field in fields where field.selectionSet != nil {
+            out.removeValue(forKey: field.responseKey)
+        }
+        // Pass 2: shape-aware strip for fields the plan didn't cover.
+        for (k, v) in out {
+            if k == CachebayConstants.typenameField || k == CachebayConstants.idField { continue }
+            if isEntityShaped(v) { out.removeValue(forKey: k) }
+        }
+        return out
+    }
+
+    /// True when the value carries entity-record shape: a typed object
+    /// (`__typename`) or an array of typed objects. These need refs in
+    /// the graph, never inline storage on the parent record.
+    fileprivate func isEntityShaped(_ value: JSONValue) -> Bool {
+        switch value {
+        case .object(let o):
+            return o[CachebayConstants.typenameField] != nil
+        case .array(let arr):
+            for item in arr {
+                if case .object(let o) = item, o[CachebayConstants.typenameField] != nil { return true }
+            }
+            return false
+        default:
+            return false
+        }
+    }
+
+    /// Walk the fragment plan's root and initialize empty `@connection`
+    /// canonical records for every connection field. Idempotent — skips
+    /// connections that already exist in the graph. Uses inline
+    /// `edges`/`pageInfo` from `data` when present (rare for optimistic
+    /// adds, common for fragment-with-inline-data tests). Mirrors web
+    /// `initializeNestedConnections` (`optimistic.ts:742`).
+    fileprivate func initializeNestedConnections(
+        layer: Layer,
+        recording: Bool,
+        parentKey: CacheKey,
+        fields: [PlanField],
+        variables: [String: JSONValue],
+        data: [String: JSONValue]
+    ) {
+        for field in fields {
+            if field.isConnection {
+                let connectionKey = Keys.buildConnectionCanonicalKey(field: field, parentId: parentKey, variables: variables)
+                // Idempotency: existing canonical wins. Optimistic
+                // re-init must never destroy server-merged pagination
+                // state.
+                if graph.getRecord(connectionKey) != nil { continue }
+
+                if recording {
+                    captureBaseline(layer, recordId: connectionKey)
+                    captureBaseline(layer, recordId: "\(connectionKey).pageInfo")
+                    captureBaseline(layer, recordId: cursorIndexKey(connectionKey))
+                }
+
+                // Pull inline pageInfo / edges from the node data when
+                // present. Empty defaults otherwise.
+                var inlinePageInfo: [String: JSONValue] = [:]
+                var inlineEdges: [JSONValue] = []
+                if case .object(let connData) = data[field.responseKey] ?? .undefined {
+                    if case .object(let pi) = connData[CachebayConstants.connectionPageInfoField] ?? .undefined {
+                        inlinePageInfo = pi
+                    }
+                    if case .array(let edges) = connData[CachebayConstants.connectionEdgesField] ?? .undefined {
+                        inlineEdges = edges
+                    }
+                }
+
+                // Write pageInfo record.
+                let pageInfoKey: CacheKey = "\(connectionKey).pageInfo"
+                var pageInfoRecord: [String: JSONValue] = [
+                    CachebayConstants.typenameField: .string(CachebayConstants.connectionPageInfoTypename),
+                    "startCursor": inlinePageInfo["startCursor"] ?? .null,
+                    "endCursor": inlinePageInfo["endCursor"] ?? .null,
+                    "hasNextPage": inlinePageInfo["hasNextPage"] ?? .bool(false),
+                    "hasPreviousPage": inlinePageInfo["hasPreviousPage"] ?? .bool(false),
+                ]
+                // Carry through any extra pageInfo fields the caller passed.
+                for (k, v) in inlinePageInfo where pageInfoRecord[k] == nil {
+                    pageInfoRecord[k] = v
+                }
+                graph.replaceRecord(pageInfoKey, pageInfoRecord)
+
+                // Process inline edges (write node, build edge record, push ref).
+                var edgeRefs: [CacheKey] = []
+                for (i, edgeAny) in inlineEdges.enumerated() {
+                    guard case .object(let edge) = edgeAny else { continue }
+                    guard case .object(let nodeObj) = edge["node"] ?? .undefined else { continue }
+                    guard let nodeKey = graph.identify(nodeObj) else { continue }
+
+                    if recording { captureBaseline(layer, recordId: nodeKey) }
+                    graph.putRecord(nodeKey, nodeObj)
+
+                    let edgeKey: CacheKey = "\(connectionKey).edges.\(i)"
+                    var edgeRecord: [String: JSONValue] = [:]
+                    let nodeTypename = nodeObj[CachebayConstants.typenameField]?.string ?? ""
+                    let edgeTypename = nodeTypename.isEmpty ? "Edge" : "\(nodeTypename)Edge"
+                    edgeRecord[CachebayConstants.typenameField] = edge[CachebayConstants.typenameField] ?? .string(edgeTypename)
+                    edgeRecord["node"] = .ref(nodeKey)
+                    for (k, v) in edge where k != CachebayConstants.typenameField && k != "node" {
+                        edgeRecord[k] = v
+                    }
+                    if recording { captureBaseline(layer, recordId: edgeKey) }
+                    graph.replaceRecord(edgeKey, edgeRecord)
+                    edgeRefs.append(edgeKey)
+                }
+
+                // Write the connection canonical record.
+                let connectionRecord: [String: JSONValue] = [
+                    CachebayConstants.typenameField: .string(CachebayConstants.connectionTypename),
+                    CachebayConstants.connectionEdgesField: .refList(edgeRefs),
+                    CachebayConstants.connectionPageInfoField: .ref(pageInfoKey),
+                ]
+                graph.replaceRecord(connectionKey, connectionRecord)
+
+                // Initialize an empty cursor index for this connection.
+                writeCursorIndex(connectionKey, [:])
+                continue
+            }
+
+            // Recurse into nested entity selections (non-connection
+            // fields with selection sets). When the data carries a
+            // sub-entity object, walk its plan against the resolved
+            // child id so nested connections inside sub-entities get
+            // initialised too.
+            if let children = field.selectionSet, !children.isEmpty {
+                if case .object(let childObj) = data[field.responseKey] ?? .undefined {
+                    if let childId = graph.identify(childObj) {
+                        initializeNestedConnections(
+                            layer: layer,
+                            recording: recording,
+                            parentKey: childId,
+                            fields: children,
+                            variables: variables,
+                            data: childObj
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: - BuilderImpl
 
     fileprivate final class BuilderImpl: OptimisticBuilder, @unchecked Sendable {
@@ -445,6 +754,23 @@ public final class Optimistic: @unchecked Sendable {
             }
             if mode == .replace { optimistic.graph.replaceRecord(recordId, patch) }
             else { optimistic.graph.putRecord(recordId, patch) }
+        }
+
+        func patch(_ target: EntityRef, mode: EntityPatchMode, _ build: @Sendable (_ prev: [String: JSONValue]) -> [String: JSONValue]) {
+            guard let recordId = optimistic.resolveEntityRef(target) else { return }
+            // Read the current snapshot from the graph and pass it to
+            // the closure so callers can compute a delta (e.g.
+            // `prev → ({ count: prev.count + 1 })`). Mirrors cachebay-
+            // web's `b.patch(target, prev => ({...}))` form.
+            let prev = optimistic.graph.getRecord(recordId) ?? [:]
+            let computed = build(prev)
+            if computed.isEmpty { return }
+            if recording {
+                optimistic.captureBaseline(layer, recordId: recordId)
+                layer.entityOps.append(EntityOp(recordId: recordId, kind: .write(patch: computed, mode: mode)))
+            }
+            if mode == .replace { optimistic.graph.replaceRecord(recordId, computed) }
+            else { optimistic.graph.putRecord(recordId, computed) }
         }
 
         func delete(_ target: EntityRef) {
@@ -485,10 +811,70 @@ public final class Optimistic: @unchecked Sendable {
         }
 
         func addNode(_ node: [String: JSONValue], options: AddNodeOptions) {
+            // Plan-aware path: when a fragment is provided, walk the plan
+            // root to (a) initialize nested @connection canonicals and
+            // (b) compute an entity-record patch that excludes
+            // selection-set fields so existing ref/refList links stay
+            // intact. This matches cachebay-web's
+            // `addNode(node, { fragment, fragmentName, variables })`
+            // (`optimistic.ts:742` `initializeNestedConnections`).
+            let entityPatch: [String: JSONValue]
+            if let doc = options.fragmentDocument, let planner = optimistic.planner,
+               let plan = try? planner.getPlan(doc, fragmentName: options.fragmentName) {
+                let stamped = optimistic.stampTypenameFromPlan(node, plan: plan)
+                guard let entityKey = optimistic.graph.identify(stamped) else { return }
+                if recording { optimistic.captureBaseline(layer, recordId: entityKey) }
+                optimistic.initializeNestedConnections(
+                    layer: layer,
+                    recording: recording,
+                    parentKey: entityKey,
+                    fields: plan.root,
+                    variables: options.fragmentVariables,
+                    data: stamped
+                )
+                entityPatch = optimistic.stripSelectionSetFields(stamped, fromPlanFields: plan.root)
+                optimistic.graph.putRecord(entityKey, entityPatch)
+
+                if recording {
+                    layer.entityOps.append(EntityOp(
+                        recordId: entityKey,
+                        kind: .write(patch: entityPatch, mode: .merge)
+                    ))
+                }
+
+                let op = ConnectionOp(connectionKey: canonicalKey, kind: .addNode(
+                    entityKey: entityKey,
+                    meta: options.edge,
+                    position: options.position,
+                    anchor: options.anchor.flatMap { optimistic.resolveEntityRef($0) }
+                ))
+                if recording {
+                    optimistic.captureConnectionBaselines(layer, canonicalKey: canonicalKey)
+                    layer.connectionOps.append(op)
+                }
+                optimistic.applyConnectionOp(op)
+                return
+            }
+
+            // Raw path (no fragment): identical to before — caller
+            // is responsible for shape correctness.
             guard let entityKey = optimistic.graph.identify(node) else { return }
-            // Ensure the entity is written so readers can materialize it.
             if recording { optimistic.captureBaseline(layer, recordId: entityKey) }
             optimistic.graph.putRecord(entityKey, node)
+
+            // Match cachebay-web: also record the entity write as an
+            // `EntityOp` so `replay(connectionKeys:)` reasserts the
+            // optimistic node fields. Without this op, a canonical
+            // merger (e.g. a paginated network response that targets
+            // the same connection) would normalize over the entity
+            // record and the optimistic-only fields would be lost; only
+            // the edge would be replayed.
+            if recording {
+                layer.entityOps.append(EntityOp(
+                    recordId: entityKey,
+                    kind: .write(patch: node, mode: .merge)
+                ))
+            }
 
             let op = ConnectionOp(connectionKey: canonicalKey, kind: .addNode(
                 entityKey: entityKey,
@@ -524,6 +910,15 @@ public final class Optimistic: @unchecked Sendable {
                 layer.connectionOps.append(op)
             }
             optimistic.applyConnectionOp(op)
+        }
+
+        func patch(_ build: @Sendable (_ prev: [String: JSONValue]) -> [String: JSONValue]) {
+            // Read-modify-write: pull the current canonical snapshot
+            // (`[:]` if absent) and let the closure compute the patch.
+            // Mirrors cachebay-web's `c.patch(prev => ({...}))`.
+            let prev = optimistic.graph.getRecord(canonicalKey) ?? [:]
+            let computed = build(prev)
+            patch(computed)
         }
 
         func canonicalTypename(_ typename: String) -> String {
