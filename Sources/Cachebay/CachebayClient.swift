@@ -57,6 +57,25 @@ private final class RemoteApplyFlag: @unchecked Sendable {
     func set(_ v: Bool) { lock.lock(); value = v; lock.unlock() }
 }
 
+/// Configuration for a `CachebayClient`. Construct once at app
+/// startup; the client owns it for its lifetime.
+///
+/// - `transport`: HTTP + (optional) WS transports. Use the built-in
+///   `URLSessionHTTPTransport` / `URLSessionWebSocketTransport`
+///   unless you need custom auth or retry behavior.
+/// - `cachePolicy`: default policy applied to every operation;
+///   per-call `cachePolicy:` overrides this.
+/// - `keys`: custom `KeyFunction`s for entities that don't use `id`
+///   (or use a composite key). E.g. `["Tag": { obj in obj["slug"]?.string }]`.
+/// - `interfaces`: registers concrete impls for a GraphQL interface
+///   so variant fragments route to the canonical type.
+/// - `suspensionTimeout`: window during which an in-flight or
+///   recently-completed operation suppresses redundant network
+///   fetches for the same signature.
+/// - `storage`: optional persistent backend. When set, every graph
+///   write replicates to disk; initial records load at client init.
+/// - `logger`: optional `os.Logger` for runtime diagnostics
+///   (materialize misses, watcher silencing, plan compile failures).
 public struct CachebayOptions: Sendable {
     public var transport: Transport
     public var cachePolicy: CachePolicy
@@ -94,19 +113,33 @@ public struct CachebayOptions: Sendable {
     }
 }
 
-/// Primary cache instance. Framework-agnostic, Sendable, safe to share across
-/// actors and threads (internal locks serialize state).
+/// Primary cache instance. Framework-agnostic, `Sendable`, safe to share
+/// across actors and threads (internal locks serialize state).
+///
+/// Construct with `CachebayClient(options:)`; reach the operation API
+/// through methods like `executeQuery`, `watchQuery`, `executeMutation`,
+/// `modifyOptimistic`, etc. Subsystems (`Documents`, `Queries`,
+/// `Optimistic`, …) are internal — exposed to tests via `@testable`,
+/// not to library consumers, so the public surface stays narrow and
+/// SemVer-able.
 public final class CachebayClient: @unchecked Sendable {
-    public let graph: Graph
-    public let planner: Planner
-    public let canonical: Canonical
-    public let documents: Documents
-    public let queries: Queries
-    public let fragments: Fragments
-    public let optimistic: Optimistic
-    public let operations: Operations
+    /// Inspection helpers: `getRecord`, `getConnectionKeys`, etc.
+    /// Public so callers can fan optimistic updates out across every
+    /// matching connection canonical without hand-building keys.
     public let inspect: Inspect
+    /// Persistent storage adapter (e.g. SQLite). `nil` when the client
+    /// runs in-memory only. Public so callers can call lifecycle hooks
+    /// like `dispose()` on shutdown.
     public let storage: StorageAdapter?
+
+    let graph: Graph
+    let planner: Planner
+    let canonical: Canonical
+    let documents: Documents
+    let queries: Queries
+    let fragments: Fragments
+    let optimistic: Optimistic
+    let operations: Operations
 
     private let remoteApplyFlag = RemoteApplyFlag()
 

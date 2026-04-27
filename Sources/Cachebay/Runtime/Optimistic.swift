@@ -1,10 +1,16 @@
 import Foundation
 
+/// How `b.patch(_:_:mode:)` reconciles its patch with the existing
+/// entity record. `.merge` (default) shallow-merges fields;
+/// `.replace` writes exactly the patch and drops everything else.
 public enum EntityPatchMode: Sendable {
     case merge
     case replace
 }
 
+/// Where `b.connection(...).addNode` inserts the new edge. `.before`
+/// and `.after` require an `anchor`; missing-anchor falls back to
+/// `.start` / `.end` respectively.
 public enum EdgePosition: Sendable {
     case start
     case end
@@ -12,6 +18,9 @@ public enum EdgePosition: Sendable {
     case after
 }
 
+/// How callers identify an entity record. `.key` is direct
+/// (`"Post:p1"`); `.object` runs through your `KeyFunction` /
+/// `id`-fallback to produce the same key.
 public enum EntityRef: Sendable {
     case key(CacheKey)
     case object([String: JSONValue])

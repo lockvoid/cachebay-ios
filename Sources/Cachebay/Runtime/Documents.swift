@@ -1,12 +1,22 @@
 import Foundation
 import os
 
+/// Where a materialize result came from.
+///
+/// - `canonical`: read from the connection-canonical merger (cross-page view).
+/// - `strict`: read from a per-page strict record.
+/// - `none`: hard miss — required entity ref / connection record absent.
 public enum MaterializeSource: Hashable, Sendable {
     case canonical
     case strict
     case none
 }
 
+/// Result of materializing a plan against the graph: the rebuilt
+/// `data`, per-field `fingerprints` (used by watchers to detect
+/// changes), the set of `dependencies` (graph keys touched during
+/// the read), and OK flags reflecting whether the canonical / strict
+/// reads completed without missing fields.
 public struct MaterializeResult: Sendable {
     public var data: JSONValue
     public var fingerprints: JSONValue
@@ -19,6 +29,17 @@ public struct MaterializeResult: Sendable {
     public var hot: Bool
 }
 
+/// Options for `Documents.materialize`. Most callers use the default.
+///
+/// - `canonical`: read against the connection canonical (cross-page).
+/// - `rootId`: alternate root (e.g. mutation/subscription rootId);
+///   `nil` reads from `@` root.
+/// - `fingerprint`: emit per-field fingerprints. Required for watcher
+///   change-detection; safe to skip for ad-hoc one-shot reads.
+/// - `preferCache`: when `true`, return the cached materialized
+///   result if its fingerprint matches the current graph state.
+/// - `updateCache`: when `true`, write the result into the
+///   materialize cache so future reads can short-circuit.
 public struct MaterializeOptions: Sendable {
     public var canonical: Bool = true
     public var rootId: CacheKey? = nil

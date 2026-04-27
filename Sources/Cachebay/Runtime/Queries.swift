@@ -1,6 +1,16 @@
 import Foundation
 import os
 
+/// Options for `client.watchQuery(query:options:)`.
+///
+/// - `variables`: query variables; combined with the query plan to
+///   produce the watcher signature (used for dep-tracked fanout).
+/// - `immediate`: when `true` (default), `onData` fires synchronously
+///   with the current cached value (if any) before the first network
+///   delivery. `false` skips the initial emission.
+/// - `onData`: called every time the materialized result changes.
+/// - `onError`: optional, called for materialization or normalize
+///   errors that prevented `onData` from firing.
 public struct WatchQueryOptions: Sendable {
     public var variables: [String: JSONValue]
     public var immediate: Bool
@@ -20,6 +30,11 @@ public struct WatchQueryOptions: Sendable {
     }
 }
 
+/// Handle returned by `watchQuery`. Hold onto it for the lifetime of
+/// the subscription; call `unsubscribe()` to release the watcher.
+/// `update(variables:immediate:)` swaps the watcher's variables in
+/// place — useful for paginated lists where args change but the
+/// query stays the same.
 public struct WatchQueryHandle: Sendable {
     public let unsubscribe: @Sendable () -> Void
     public let update: @Sendable (_ variables: [String: JSONValue], _ immediate: Bool) -> Void

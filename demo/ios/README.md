@@ -2,6 +2,13 @@
 
 iOS demo for [Cachebay](../..). Mirrors the [web demo](https://harrypotter.exp.lockvoid.com/) but uses the Swift runtime + SQLite persistence + WebSocket subscriptions.
 
+## Prereqs
+
+- Xcode 15+
+- Node 18+ and [pnpm](https://pnpm.io)
+- [Rust toolchain](https://rustup.rs) (the codegen CLI is Rust)
+- `xcodegen` — `brew install xcodegen`
+
 ## Run
 
 ```sh

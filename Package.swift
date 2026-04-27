@@ -16,10 +16,12 @@ let package = Package(
         .visionOS(.v1),
     ],
     products: [
+        // Runtime client. The library every consumer imports.
         .library(name: "Cachebay", targets: ["Cachebay"]),
+        // Standalone GraphQL parser/printer. Only needed if you
+        // compile GraphQL strings at runtime; codegen handles every
+        // operation by default.
         .library(name: "CachebayGraphQL", targets: ["CachebayGraphQL"]),
-        .library(name: "CachebayCodegen", targets: ["CachebayCodegen"]),
-        .executable(name: "cachebay-cli", targets: ["cachebay-cli"]),
     ],
     targets: [
         .target(
@@ -33,18 +35,6 @@ let package = Package(
             path: "Sources/Cachebay",
             swiftSettings: strictSettings
         ),
-        .target(
-            name: "CachebayCodegen",
-            dependencies: ["Cachebay", "CachebayGraphQL"],
-            path: "Sources/CachebayCodegen",
-            swiftSettings: strictSettings
-        ),
-        .executableTarget(
-            name: "cachebay-cli",
-            dependencies: ["CachebayCodegen"],
-            path: "Sources/cachebay-cli",
-            swiftSettings: strictSettings
-        ),
         .testTarget(
             name: "CachebayGraphQLTests",
             dependencies: ["CachebayGraphQL"],
@@ -55,12 +45,6 @@ let package = Package(
             name: "CachebayTests",
             dependencies: ["Cachebay", "CachebayGraphQL"],
             path: "Tests/CachebayTests",
-            swiftSettings: strictSettings
-        ),
-        .testTarget(
-            name: "CachebayCodegenTests",
-            dependencies: ["CachebayCodegen"],
-            path: "Tests/CachebayCodegenTests",
             swiftSettings: strictSettings
         ),
     ]

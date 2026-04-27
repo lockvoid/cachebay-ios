@@ -1,5 +1,17 @@
 import Foundation
 
+/// Options for `client.executeQuery(query:options:)`.
+///
+/// - `cachePolicy`: per-call override; falls back to the client's
+///   default when `nil`. See `CachePolicy`.
+/// - `canonical`: read against the connection canonical (default) vs
+///   the per-page strict key. Almost always `true`.
+/// - `onCacheData`: fires synchronously with the cached value (if
+///   any). `willFetchFromNetwork` indicates whether a network
+///   request will follow (e.g. cache-and-network → `true`).
+/// - `onNetworkData`: fires when the server response arrives.
+/// - `onError`: fires for cache misses (cache-only), network errors,
+///   or post-write materialization failures.
 public struct ExecuteQueryOptions: Sendable {
     public var variables: [String: JSONValue]
     public var cachePolicy: CachePolicy?
@@ -25,6 +37,7 @@ public struct ExecuteQueryOptions: Sendable {
     }
 }
 
+/// Options for `client.executeMutation(mutation:options:)`.
 public struct ExecuteMutationOptions: Sendable {
     public var variables: [String: JSONValue]
     public var onData: (@Sendable (_ data: JSONValue) -> Void)?
@@ -40,6 +53,7 @@ public struct ExecuteMutationOptions: Sendable {
     }
 }
 
+/// Options for `client.executeSubscription(query:options:)`.
 public struct ExecuteSubscriptionOptions: Sendable {
     public var variables: [String: JSONValue]
     public init(variables: [String: JSONValue] = [:]) {

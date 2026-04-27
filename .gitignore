@@ -60,3 +60,13 @@ fastlane/test_output
 tmp/
 .coverage/
 *.profdata
+
+# perf/ — internal Apollo-iOS perf harness, not part of the published
+# package. Source tree intentionally untracked because it pulls in
+# Apollo-iOS as a benchmark baseline. Generated codegen output and
+# Swift build artifacts also stay out of git.
+perf/.build/
+perf/Sources/PerfHarness/Generated/
+
+# Claude / agent tooling
+.claude/

@@ -1,5 +1,9 @@
 import Foundation
 
+/// Library-level errors. Most operation entry points wrap these
+/// (plus optional GraphQL response errors) in a `CombinedError`;
+/// raw `CachebayError` values surface from the runtime API
+/// (`Compiler`, `Planner`, `readQuery` strict reads).
 public enum CachebayError: Error, CustomStringConvertible, Sendable {
     case cacheMiss(String)
     case invalidJSON(String)
@@ -26,6 +30,9 @@ public enum CachebayError: Error, CustomStringConvertible, Sendable {
     }
 }
 
+/// One entry from the GraphQL response's `errors` array — preserved
+/// as-is so callers can inspect `path`, `locations`, and custom
+/// `extensions` (auth code, rate-limit metadata, etc.).
 public struct GraphQLResponseError: Error, Hashable, Sendable {
     public let message: String
     public let path: [String]?

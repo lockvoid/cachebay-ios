@@ -64,8 +64,13 @@ print(result.data?.post?.title ?? "—")
 
 A working SwiftUI demo lives at [`demo/`](./demo/). It mirrors the [web Harry Potter demo](https://harrypotter.exp.lockvoid.com/) and exercises every feature: pagination, search, optimistic create, live subscriptions, persistence.
 
+**Prereqs:** Node 18+, [pnpm](https://pnpm.io), Rust toolchain ([rustup.rs](https://rustup.rs)), `xcodegen` (`brew install xcodegen`), Xcode 15+.
+
 ```sh
-cd demo/server && pnpm install && pnpm start    # GraphQL server on :4000
+# Terminal 1 — GraphQL server on :4000
+cd demo/server && pnpm install && pnpm start
+
+# Terminal 2 — generate Swift sources, generate Xcode project, then build/run
 cd demo/ios && make all && open HarryPotterDemo.xcodeproj
 ```
 

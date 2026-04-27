@@ -59,7 +59,7 @@ cargo build --release
 # binary at: cli/target/release/cachebay-cli
 ```
 
-Pre-built binaries: GitHub Releases (planned).
+Pre-built binaries are not currently distributed — build from source. The Rust toolchain is the only prerequisite (`brew install rust` or [rustup.rs](https://rustup.rs)).
 
 ## Project integration
 
