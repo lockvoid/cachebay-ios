@@ -375,6 +375,18 @@ public final class Optimistic: @unchecked Sendable {
         }
     }
 
+    /// Capture the canonical record + every aux record the connection
+    /// runtime maintains alongside it (`::nodeIndex`, `::cursorIndex`)
+    /// so that on revert/commit they're restored as a unit. Without
+    /// this, a stale `nodeIndex` entry can survive baseline restoration
+    /// and silently break the next `insertEdge`'s dedup check or
+    /// `removeEdge`'s targetEdge lookup.
+    fileprivate func captureConnectionBaselines(_ layer: Layer, canonicalKey: CacheKey) {
+        captureBaseline(layer, recordId: canonicalKey)
+        captureBaseline(layer, recordId: ConnectionIndex.nodeIndexKey(canonicalKey))
+        captureBaseline(layer, recordId: "\(canonicalKey)::cursorIndex")
+    }
+
     fileprivate func resolveEntityRef(_ ref: EntityRef) -> CacheKey? {
         switch ref {
         case .key(let k): return k
@@ -485,7 +497,7 @@ public final class Optimistic: @unchecked Sendable {
                 anchor: options.anchor.flatMap { optimistic.resolveEntityRef($0) }
             ))
             if recording {
-                optimistic.captureBaseline(layer, recordId: canonicalKey)
+                optimistic.captureConnectionBaselines(layer, canonicalKey: canonicalKey)
                 layer.connectionOps.append(op)
             }
             optimistic.applyConnectionOp(op)
@@ -495,7 +507,7 @@ public final class Optimistic: @unchecked Sendable {
             guard let entityKey = optimistic.resolveEntityRef(ref) else { return }
             let op = ConnectionOp(connectionKey: canonicalKey, kind: .removeNode(entityKey: entityKey))
             if recording {
-                optimistic.captureBaseline(layer, recordId: canonicalKey)
+                optimistic.captureConnectionBaselines(layer, canonicalKey: canonicalKey)
                 layer.connectionOps.append(op)
             }
             optimistic.applyConnectionOp(op)
@@ -505,7 +517,7 @@ public final class Optimistic: @unchecked Sendable {
             if update.isEmpty { return }
             let op = ConnectionOp(connectionKey: canonicalKey, kind: .patch(update))
             if recording {
-                optimistic.captureBaseline(layer, recordId: canonicalKey)
+                optimistic.captureConnectionBaselines(layer, canonicalKey: canonicalKey)
                 if let pageInfoRef = optimistic.graph.getRecord(canonicalKey)?[CachebayConstants.connectionPageInfoField]?.ref {
                     optimistic.captureBaseline(layer, recordId: pageInfoRef)
                 }
