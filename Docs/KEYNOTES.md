@@ -67,8 +67,11 @@ let tx = client.modifyOptimistic { b, _ in
 }
 ```
 
-- `tx.commit(serverData)` re-runs the builder in `.commit` phase with server data and drops the layer.
+- `tx.dispose()` drops the layer without restoring baselines or re-running the builder. Use when the server response is authoritative for the touched records (most update mutations).
+- `tx.commit(data)` re-runs the builder in `.commit` phase with server data, drops the layer. Use for temp-id swaps where the closure must execute against the real id.
 - `tx.revert()` removes only that layer; cachebay restores the **committed baseline** then **replays** all surviving layers on the touched records.
+
+There's also a single-phase variant — `client.modifyOptimistic(autoCommit: true) { … }` — which skips `.optimistic` entirely and runs the closure once at `.commit` against base graph (no layer recorded). Use for create-style mutations where you've already awaited the server response.
 
 Stacked layers compose deterministically: revert any one and the rest stay applied.
 

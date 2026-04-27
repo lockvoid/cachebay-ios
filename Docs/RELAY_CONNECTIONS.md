@@ -116,14 +116,17 @@ Each new page replaces the visible window. The canonical key is identical across
 
 ## Mutating connections
 
-All connection mutations (add / remove / patch the canonical) go through `modifyOptimistic` — that's the only API that supports the two-cycle commit/revert flow. The typed overloads keep the call sites free of dict-shaped payloads:
+All connection mutations (add / remove / patch the canonical) go through `modifyOptimistic`. The typed overloads keep the call sites free of dict-shaped payloads:
 
 ```swift
 let tx = client.modifyOptimistic { b, ctx in
     let c = b.connection(ConnectionSelector(key: "posts"))
 
-    // Typed node payload (e.g. server response).
-    c.addNode(node: created, options: AddNodeOptions(position: .start))
+    // Plan-aware typed node — auto-initializes nested @connection
+    // canonicals and strips selection-set fields from the entity
+    // patch so existing ref/refList links survive a merge.
+    c.addNode(node: created, fragment: PostFields.self,
+              options: AddNodeOptions(position: .start))
 
     // Typed closure-builder for optimistic-only inserts (no server id yet).
     c.addNode(fragment: PostFields.self, options: AddNodeOptions(position: .start)) { draft in
@@ -134,10 +137,12 @@ let tx = client.modifyOptimistic { b, ctx in
     // Typed remove keyed by bare entity id.
     c.removeNode(fragment: PostFields.self, id: deletedId)
 }
-tx.commit(serverPayload)   // or tx.revert() on failure
+tx.dispose()              // server normalize already wrote canonical state
+// or tx.commit(serverPayload) for temp-id swaps
+// or tx.revert() on failure
 ```
 
-The `__typename` for the synthesised entity record + edge comes from the fragment's `onTypename` — callers never write type-name strings. See [OPTIMISTIC_UPDATES.md](./OPTIMISTIC_UPDATES.md) for the full builder API and layering semantics.
+The `__typename` for the synthesised entity record + edge comes from the fragment's `onTypename` — callers never write type-name strings. See [OPTIMISTIC_UPDATES.md](./OPTIMISTIC_UPDATES.md) for the full builder API, lifecycle (dispose/commit/revert), and layering semantics.
 
 ---
 

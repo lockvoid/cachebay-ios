@@ -35,7 +35,9 @@ For instant UI feedback before the network responds, wrap the mutation in `modif
 
 ```swift
 let tx = client.modifyOptimistic { b, _ in
-    b.patch(.key("Post:p1"), ["title": "Draft…"], mode: .merge)
+    b.patch(fragment: PostFields.self, id: "p1") { d in
+        d.title = "Draft…"
+    }
 }
 
 do {
@@ -43,51 +45,47 @@ do {
         mutation: UpdatePost.self,
         variables: .init(input: .init(id: "p1", title: "Real Title"))
     )
-    tx.commit(result.data.map { .object($0.__data) })   // promote with server data
+    if result.error != nil { tx.revert(); throw … }
+    tx.dispose()                                        // server normalize wrote canonical state
 } catch {
     tx.revert()                                         // roll back
     throw error
 }
 ```
 
-`commit(data:)` re-runs the builder in `.commit` phase with the server payload and drops the layer; `revert()` removes the layer and replays surviving layers on the touched records.
+Three lifecycle methods, pick the right one:
 
-Full layering semantics: [OPTIMISTIC_UPDATES.md](./OPTIMISTIC_UPDATES.md).
+- **`tx.dispose()`** — server response is authoritative for touched records (~80% of update mutations). `executeMutation`'s normalize already wrote the canonical state; `commit(...)` would `replaceRecord` with the pre-optimistic baseline and wipe server-side updates.
+- **`tx.commit(data)`** — your closure needs to re-execute against `ctx.data`, typically for temp-id swaps.
+- **`tx.revert()`** — the mutation failed.
+
+Full layering + lifecycle reference: [OPTIMISTIC_UPDATES.md](./OPTIMISTIC_UPDATES.md).
 
 ---
 
-## Pattern: optimistic add
+## Pattern: create — single-phase
 
-Prepend a new node into every matching `Query.posts` connection, commit with the server-assigned id.
+You don't have an authoritative id until the server responds, so there's no temp/optimistic state to project. Await the mutation, then write the result through the builder API in a single pass:
 
 ```swift
-let tempId = "temp:\(UUID().uuidString)"
+let result = try await client.executeMutation(
+    mutation: CreatePost.self,
+    variables: .init(input: .init(title: title))
+)
+if let err = result.error { throw … }
+guard let created = result.data?.createPost else { throw … }
 
-let tx = client.modifyOptimistic { b, ctx in
-    let optimisticNode: [String: JSONValue] = [
-        "__typename": "Post",
-        "id": ctx.data?["id"] ?? .string(tempId),
-        "title": .string(title)
-    ]
+client.modifyOptimistic(autoCommit: true) { b, _ in
     for key in client.inspect.getConnectionKeys(parent: .root, key: "posts") {
-        b.connection(key: key).addNode(optimisticNode, options: AddNodeOptions(position: .start))
+        b.connection(key: key).addNode(node: created, fragment: PostFields.self,
+                                        options: AddNodeOptions(position: .start))
     }
-}
-
-do {
-    let result = try await client.executeMutation(
-        mutation: CreatePost.self,
-        variables: .init(input: .init(title: title))
-    )
-    if let post = result.data?.createPost?.post {
-        tx.commit(.object(post.__data))
-    } else {
-        tx.revert()
-    }
-} catch {
-    tx.revert()
 }
 ```
+
+`autoCommit: true` skips the `.optimistic` phase and runs the closure once at `.commit`, applying ops directly to base graph (no layer recorded, no double-write).
+
+`addNode(node:fragment:options:)` is **plan-aware**: it walks the fragment plan to (a) initialize nested `@connection` canonicals, (b) stamp `__typename` from `F.onTypename`, (c) strip selection-set fields from the entity-record patch so existing ref/refList links survive a merge.
 
 `getConnectionKeys` finds every canonical that matches `parent + key + filters`, so a single mutation can fan out across multiple visible lists (e.g. an "All posts" + a "My posts" feed).
 
@@ -98,7 +96,7 @@ do {
 ```swift
 let tx = client.modifyOptimistic { b, _ in
     for key in client.inspect.getConnectionKeys(parent: .root, key: "posts") {
-        b.connection(key: key).removeNode(.key("Post:\(id)"))
+        b.connection(key: key).removeNode(fragment: PostFields.self, id: id)
     }
 }
 
@@ -107,29 +105,25 @@ do {
         mutation: DeletePost.self,
         variables: .init(input: .init(id: id))
     )
-    tx.commit(nil)
+    tx.dispose()  // optimistic removeNode is the desired final state
 } catch {
     tx.revert()
 }
 ```
 
-After commit, you may also `b.delete(.key("Post:\(id)"))` to drop the entity itself so any other watcher reading it falls into a `nil` state.
+After dispose, you may also `b.delete(fragment: PostFields.self, id: id)` to drop the entity itself so any other watcher reading it falls into a `nil` state.
 
 ---
 
 ## Pattern: optimistic patch
 
-Merge known fields immediately; promote with server payload on commit.
+Merge known fields immediately; the server response normalizes into the cache via `executeMutation`. After success, `dispose()` drops the layer cleanly without reverting server-side updates.
 
 ```swift
-let tx = client.modifyOptimistic { b, ctx in
-    let id: CacheKey = "Post:\(input.id)"
-    if let payload = ctx.data {
-        b.patch(.key(id), payload.object ?? [:], mode: .merge)
-    } else {
-        b.patch(.key(id), [
-            "title": input.title.map(JSONValue.string) ?? .undefined
-        ], mode: .merge)
+let tx = client.modifyOptimistic { b, _ in
+    b.patch(fragment: PostFields.self, id: input.id) { d in
+        if let v = input.title { d.title = v }
+        d.updatedAt = Date().iso8601String
     }
 }
 
@@ -138,17 +132,15 @@ do {
         mutation: UpdatePost.self,
         variables: .init(input: input)
     )
-    if let post = result.data?.updatePost?.post {
-        tx.commit(.object(post.__data))
-    } else {
-        tx.revert()
-    }
+    if result.error != nil { tx.revert(); throw … }
+    tx.dispose()  // server normalize already wrote canonical Post:id
 } catch {
     tx.revert()
+    throw error
 }
 ```
 
-`mode: .merge` keeps existing fields; `mode: .replace` writes exactly what's in the patch and drops everything else from the record.
+`mode: .merge` (default) keeps existing fields; `mode: .replace` writes exactly what's in the patch and drops everything else from the record.
 
 ---
 
