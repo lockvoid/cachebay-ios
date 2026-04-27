@@ -83,6 +83,14 @@ swift test --filter Optimistic # focused
 
 The suite cross-checks behavior with [cachebay-web](https://github.com/lockvoid/cachebay) file-by-file: documents (normalize/materialize), operations (queries/mutations/subscriptions × cache policies), queries (watchers, refcount), optimistic (entity, connection, fragment-plan-aware, layering, two-phase commit), canonical (pagination, leader, splice), compiler (planner, metadata, dedupe), and performance (render-count assertions per cache policy × watcher state).
 
+## Benchmarks
+
+Comparative benchmarks against Apollo iOS 2.x live in a separate repo so this package's metadata stays free of an Apollo dependency:
+
+→ **[cachebay-ios-perf](https://github.com/lockvoid/cachebay-ios-perf)**
+
+Same schema, same operations, same machine — side-by-side latency / throughput / memory across query / mutation / optimistic-patch-revert scenarios.
+
 ---
 
 ## License
