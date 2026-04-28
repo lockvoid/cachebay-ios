@@ -781,8 +781,29 @@ fn render_selection_struct(
 ) -> String {
     let (shared, by_condition) = partition_children(parent_named_type, children);
 
+    // Emit `: Cachebay.ConnectionEdge` on Relay-style edge structs — any
+    // generated struct that has a `node: Node?` shared child of object
+    // shape. This enables the `Sequence.nodes(as:)` sugar so consumers
+    // can replace `edges?.compactMap { $0.node?.as(F.self) } ?? []`
+    // with `edges.nodes(as: F.self)`. The protocol is purely a marker
+    // (its sole requirement, `var node: Node?`, the codegen already
+    // emits), so the conformance is structurally always satisfiable
+    // here.
+    let conforms_connection_edge = shared.iter().any(|c| {
+        c.response_key == "node"
+            && matches!(
+                c.output_shape,
+                OutputShape::Object { nullable: true, list: false }
+            )
+    });
+    let conformances = if conforms_connection_edge {
+        "Cachebay.OperationData, Cachebay.ConnectionEdge"
+    } else {
+        "Cachebay.OperationData"
+    };
+
     let mut s = String::new();
-    s.push_str(&format!("{indent}public struct {swift_name}: Cachebay.OperationData {{\n"));
+    s.push_str(&format!("{indent}public struct {swift_name}: {conformances} {{\n"));
     s.push_str(&format!("{indent}    public var __data: [String: Cachebay.JSONValue]\n"));
     s.push_str(&format!("{indent}    public init(__data: [String: Cachebay.JSONValue]) {{ self.__data = __data }}\n"));
 

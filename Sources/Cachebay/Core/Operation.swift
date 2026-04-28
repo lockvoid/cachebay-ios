@@ -72,6 +72,53 @@ public extension OperationData {
     }
 }
 
+/// Marker for generated connection edge structs — the same `node: Node?`
+/// shape Relay-style codegen always emits. Only purpose is to enable the
+/// `Sequence.nodes(as:)` / `Optional.nodes(as:)` sugar below so consumers
+/// can replace the rote
+///
+/// ```swift
+/// data.jobs?.edges?.compactMap { $0.node?.as(JobFields.self) } ?? []
+/// ```
+///
+/// with
+///
+/// ```swift
+/// data.jobs?.edges.nodes(as: JobFields.self)
+/// ```
+///
+/// The cast (`as: JobFields.self`) stays explicit — the projection seam
+/// between operation-shape and fragment-shape is preserved on purpose.
+/// Only the `compactMap { $0.node?.as(...) }` boilerplate disappears.
+///
+/// Codegen emits `: Cachebay.ConnectionEdge` on every generated edge
+/// struct (any selection nested under a `@connection` field whose name
+/// title-cases to `Edges`). Consumers don't write the conformance.
+public protocol ConnectionEdge {
+    associatedtype Node: OperationData
+    var node: Node? { get }
+}
+
+public extension Sequence where Element: ConnectionEdge {
+    /// Map each edge's node into `F.Data`, skipping edges with no node.
+    /// Equivalent to `compactMap { $0.node?.as(fragment) }`.
+    func nodes<F: Fragment>(as fragment: F.Type) -> [F.Data] {
+        compactMap { $0.node?.as(fragment) }
+    }
+}
+
+public extension Optional where Wrapped: Sequence, Wrapped.Element: ConnectionEdge {
+    /// Sugar for the common `data.jobs?.edges` shape (`[Edge]?`). Returns
+    /// `[]` when the optional is nil — convenient for SwiftUI `ForEach`
+    /// where you want a non-optional array regardless of cache state.
+    func nodes<F: Fragment>(as fragment: F.Type) -> [F.Data] {
+        switch self {
+        case .none: return []
+        case .some(let seq): return seq.compactMap { $0.node?.as(fragment) }
+        }
+    }
+}
+
 /// Mirror of `Operation` for GraphQL fragment definitions. Fragments
 /// aren't executed against the network; they describe a sub-shape of
 /// some entity that can be read/written/watched against the cache by

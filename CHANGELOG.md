@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 _No unreleased changes yet._
 
+## [0.3.0] — Typed connection-edge sugar
+
+### Added
+- **`ConnectionEdge` protocol + `Sequence.nodes(as:)` / `Optional<Sequence>.nodes(as:)` sugar.** Replaces the rote `edges?.compactMap { $0.node?.as(F.self) } ?? []` with `edges.nodes(as: F.self)`. The fragment cast stays explicit (`as: F.self`) — only the compactMap boilerplate disappears. `cachebay-cli` automatically emits the `: Cachebay.ConnectionEdge` conformance on every generated edge struct (any nested struct with a `node: Node?` shared child of object shape), so consumers don't write any conformance themselves. Marker-only protocol; no runtime cost.
+
+### Migration
+- **Rerun `cachebay-cli` codegen** to pick up the new `: Cachebay.ConnectionEdge` conformance on emitted `Edges` structs. Existing call sites continue to compile unchanged; opt-in to the sugar one connection at a time.
+
 ## [0.2.1] — WebSocket reliability hardening
 
 ### Added
@@ -72,7 +80,8 @@ First public version. The library was developed and battle-tested as part of the
 - Test suite cross-checks behavior with cachebay-web file-by-file: documents (normalize/materialize/rootId), operations (queries/mutations/subscriptions × cache policies × invalidation × watcher state), queries (watchers, refcount), optimistic (entity, connection, fragment-plan-aware, layering, two-phase commit), canonical (pagination/leader/edge cases/replay), compiler (planner/metadata/dedupe/operations/connections/formats/fragments), performance (render-count assertions), integration (typed-API doc routing, evictAll, connection watcher).
 - 608 tests across the suite. CI runs on every PR via `.github/workflows/test.yml`.
 
-[Unreleased]: https://github.com/lockvoid/cachebay-ios/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/lockvoid/cachebay-ios/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/lockvoid/cachebay-ios/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/lockvoid/cachebay-ios/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/lockvoid/cachebay-ios/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/lockvoid/cachebay-ios/releases/tag/v0.1.0

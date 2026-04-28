@@ -181,7 +181,7 @@ final class TypedAPITests: XCTestCase {
                     init(__data: [String: JSONValue]) { self.__data = __data }
                     var hasNextPage: Bool { (__data["hasNextPage"]?.bool) ?? false }
                 }
-                struct Edges: Sendable, Cachebay.OperationData {
+                struct Edges: Sendable, Cachebay.OperationData, Cachebay.ConnectionEdge {
                     var __data: [String: JSONValue]
                     init(__data: [String: JSONValue]) { self.__data = __data }
                     var cursor: String { (__data["cursor"]?.string) ?? "" }
@@ -756,6 +756,67 @@ final class TypedAPITests: XCTestCase {
         wait(for: [exp], timeout: 1.0)
         XCTAssertEqual(received.snapshot(), ["initial", "updated"])
         handle.unsubscribe()
+    }
+
+    // MARK: - ConnectionEdge sugar
+    //
+    // Generated edge structs always have the same shape: `node: Node?`
+    // where `Node: OperationData`. The `ConnectionEdge` protocol surfaces
+    // that shape so consumers can replace the rote
+    //
+    //     edges.compactMap { $0.node?.as(F.self) }
+    //
+    // with `edges.nodes(as: F.self)`. The cast stays explicit (`as: F.self`),
+    // only the compactMap boilerplate disappears.
+
+    func test_sequenceNodesAs_returnsFragmentDataAcrossEdges() {
+        // Build two edges, both pointing at Post-shaped nodes.
+        let edges: [TestPosts.Data.Posts.Edges] = [
+            .init(__data: [
+                "cursor": .string("c1"),
+                "node": .object([
+                    "__typename": .string("Post"),
+                    "id": .string("p1"),
+                    "title": .string("First"),
+                ])
+            ]),
+            .init(__data: [
+                "cursor": .string("c2"),
+                "node": .object([
+                    "__typename": .string("Post"),
+                    "id": .string("p2"),
+                    "title": .string("Second"),
+                ])
+            ]),
+        ]
+
+        let posts = edges.nodes(as: TestPostFields.self)
+        XCTAssertEqual(posts.map { $0.id }, ["p1", "p2"])
+        XCTAssertEqual(posts.map { $0.title }, ["First", "Second"])
+    }
+
+    func test_optionalSequenceNodesAs_handlesNilAsEmpty_andSkipsMissingNodes() {
+        // The `data.jobs?.edges` shape: `[Edges]?` — should support
+        // `nodes(as:)` directly without unwrapping.
+        let nilEdges: [TestPosts.Data.Posts.Edges]? = nil
+        XCTAssertEqual(nilEdges.nodes(as: TestPostFields.self).count, 0,
+            ".nodes(as:) on nil sequence must return []")
+
+        // Edge with missing `node` field is skipped (matches the
+        // compactMap semantics of the underlying call).
+        let mixed: [TestPosts.Data.Posts.Edges]? = [
+            .init(__data: ["cursor": .string("c1")]),  // no node
+            .init(__data: [
+                "cursor": .string("c2"),
+                "node": .object([
+                    "__typename": .string("Post"),
+                    "id": .string("p2"),
+                    "title": .string("Has node"),
+                ])
+            ]),
+        ]
+        let posts = mixed.nodes(as: TestPostFields.self)
+        XCTAssertEqual(posts.map { $0.id }, ["p2"])
     }
 }
 
