@@ -52,9 +52,24 @@ import FoundationNetworking
 public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendable {
     public let url: URL
     public let session: URLSession
-    public var connectionParams: [String: JSONValue]
+    /// Snapshot of the params sent in `connection_init`. Read-only;
+    /// mutate via `updateConnectionParams(_:reconnectIfConnected:)` so
+    /// the change is synchronized with the connection lifecycle.
+    public var connectionParams: [String: JSONValue] {
+        lock.lock(); defer { lock.unlock() }
+        return _connectionParams
+    }
+    private var _connectionParams: [String: JSONValue]
     public var subprotocol: String
     public let reconnectPolicy: ReconnectPolicy
+    /// Optional client-initiated keepalive cadence. When non-nil, the
+    /// transport sends a `{"type":"ping"}` frame at this interval after
+    /// `connection_ack` lands. Useful for long-idle subscriptions
+    /// behind NAT (typical NAT timeout: 60–120s) and proxies with idle
+    /// disconnect policies. Default `nil` (off) — costs one tiny frame
+    /// per interval; only worth it for apps that hold subscriptions
+    /// across long quiet periods on cellular/WiFi.
+    public let pingInterval: Duration?
     /// Clock used for backoff sleeps. Tests inject a fake clock to
     /// drive deterministic time advancement; production uses
     /// `ContinuousClock` (real wall-clock).
@@ -65,6 +80,7 @@ public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendabl
     private var receiveTask: Task<Void, Never>?
     private var reconnectorTask: Task<Void, Never>?
     private var backoffSleepTask: Task<Void, Never>?
+    private var pingTimerTask: Task<Void, Never>?
     private var acked = false
     private var ackContinuations: [CheckedContinuation<Void, Error>] = []
     private var subscriptions: [String: ActiveSubscription] = [:]
@@ -76,18 +92,46 @@ public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendabl
 
     public init(
         url: URL,
-        session: URLSession = .shared,
+        session: URLSession? = nil,
         subprotocol: String = "graphql-transport-ws",
         connectionParams: [String: JSONValue] = [:],
         reconnectPolicy: ReconnectPolicy = .default,
+        pingInterval: Duration? = nil,
         clock: any Clock<Duration> = ContinuousClock()
     ) {
         self.url = url
-        self.session = session
+        self.session = session ?? Self.makeDefaultSession()
         self.subprotocol = subprotocol
-        self.connectionParams = connectionParams
+        self._connectionParams = connectionParams
         self.reconnectPolicy = reconnectPolicy
+        self.pingInterval = pingInterval
         self.clock = clock
+    }
+
+    /// Default WS-specific connect timeout (seconds) used when the
+    /// caller doesn't pass an explicit `URLSession`.
+    ///
+    /// Why 10s:
+    ///   - Greater than `ReconnectPolicy.default.maxDelay` (5s) so each
+    ///     backoff cycle gets a full attempt instead of being cut short.
+    ///   - Covers slow cold-start servers (k8s pod boot, fly.io machine
+    ///     resume — typically 3–7s p95).
+    ///   - Fails fast on half-connected sockets (TCP succeeded, WS
+    ///     handshake stalled — the dominant failure mode during a
+    ///     server-restart window). URLSession's 60s default for HTTPS
+    ///     request/response would eat the entire backoff schedule.
+    ///   - Industry-aligned: AWS SDK uses 5s WS connect, Cloudflare
+    ///     expects WS handshake <10s, Slack/Discord clients ~10s.
+    public static let defaultConnectTimeout: TimeInterval = 10
+
+    /// Builds the default `URLSession` used when none is supplied. Tunes
+    /// `timeoutIntervalForRequest` to `defaultConnectTimeout` so a stuck
+    /// WS handshake fails fast instead of stalling for URLSession's
+    /// 60s HTTP default.
+    private static func makeDefaultSession() -> URLSession {
+        let cfg = URLSessionConfiguration.default
+        cfg.timeoutIntervalForRequest = defaultConnectTimeout
+        return URLSession(configuration: cfg)
     }
 
     // MARK: - Public observability surface
@@ -174,6 +218,56 @@ public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendabl
         teardown(disconnectEvent: .disconnected(reason: reason),
                  then: .stopped(reason: .userClosed),
                  finishSubscriptions: true)
+    }
+
+    /// Replace the params sent in `connection_init`. Use this when
+    /// rotating an auth token mid-session (refresh-token flow, account
+    /// switch, role change) without manually wrangling
+    /// `disconnect()` → reset → `reconnect()`.
+    ///
+    /// - Parameters:
+    ///   - params: New params payload. Replaces the previous payload
+    ///     wholesale (this is **not** a merge).
+    ///   - reconnectIfConnected: When `true`, an active or in-flight
+    ///     connection is dropped immediately and a fresh
+    ///     `connection_init` (carrying `params`) is sent on a new
+    ///     socket. Active subscriptions are preserved and replayed
+    ///     after the new ack. When `false`, the params are stored and
+    ///     take effect on the next natural reconnect — useful when you
+    ///     know a reconnect is imminent (e.g. you've just received
+    ///     `.disconnected` from `events()`).
+    ///
+    /// Inspired by Apollo iOS's `updateConnectingPayload(_:reconnectIfConnected:)`.
+    public func updateConnectionParams(_ params: [String: JSONValue], reconnectIfConnected: Bool = false) {
+        lock.lock()
+        _connectionParams = params
+        let snapshot = _state
+        lock.unlock()
+
+        guard reconnectIfConnected else { return }
+
+        switch snapshot {
+        case .connected, .connecting:
+            // Tear the socket down and reconnect immediately so the
+            // new params land in the next `connection_init`.
+            // Subscriptions stay registered (as `.subscribed`) and are
+            // replayed after the new ack.
+            teardown(
+                disconnectEvent: .disconnected(reason: .userClosed),
+                then: .reconnecting(attempt: 0),
+                finishSubscriptions: false
+            )
+            startReconnector(initialDelay: 0)
+        case .reconnecting:
+            // Already reconnecting — the next `ensureConnected()` will
+            // pick up the new params. Wake any pending backoff sleep
+            // so it happens sooner.
+            wakeBackoffSleep()
+        case .disconnected, .stopped:
+            // Nothing live; new params take effect on the next
+            // subscribe() / reconnect().
+            break
+        }
     }
 
     /// Caller-driven reconnect, state-aware:
@@ -267,12 +361,22 @@ public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendabl
 
     // MARK: - Subscription registry
 
+    /// Two-phase status mirroring Apollo iOS's
+    /// `SubscriberRegistry.SubscriberInfo.status`. `.pending` entries
+    /// have been registered by `subscribe()` but their caller-side
+    /// Task hasn't sent the `subscribe` frame yet (it's parked in
+    /// `waitForAck()`). `.subscribed` entries are on the wire — they
+    /// get replayed on reconnect; `.pending` entries do **not**, because
+    /// the awaiting Task will send the frame itself once `acked` flips.
+    private enum SubscriptionStatus: Sendable { case pending, subscribed }
+
     private struct ActiveSubscription: Sendable {
         let id: String
         let query: String
         let variables: [String: JSONValue]
         let yield: @Sendable (OperationResult<JSONValue>) -> Void
         let finish: @Sendable (Error?) -> Void
+        var status: SubscriptionStatus
     }
 
     private func registerSubscription(
@@ -284,16 +388,18 @@ public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendabl
     ) {
         lock.lock()
         subscriptions[id] = ActiveSubscription(id: id, query: query, variables: variables,
-                                                yield: yield, finish: finish)
+                                                yield: yield, finish: finish,
+                                                status: .pending)
         lock.unlock()
     }
 
     private func markSubscriptionLive(id: String) {
-        // Currently we don't track per-sub status. The entry's
-        // presence in `subscriptions` is enough — the receive loop
-        // routes frames by id. Kept as a hook for future "in-flight
-        // handshake" diagnostics.
-        _ = id
+        lock.lock()
+        if var entry = subscriptions[id] {
+            entry.status = .subscribed
+            subscriptions[id] = entry
+        }
+        lock.unlock()
     }
 
     private func unregisterSubscription(id: String) {
@@ -391,25 +497,43 @@ public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendabl
             attemptCounter = 0  // reset on successful ack
             let conts = ackContinuations
             ackContinuations.removeAll()
-            let pending = subscriptions
+            // Replay only `.subscribed` entries — these are leftovers
+            // from a prior connection that need to be re-registered with
+            // the server. `.pending` entries belong to callers whose
+            // own Task is parked in `waitForAck()` and will send their
+            // `subscribe` frame themselves once `acked` flips. Replaying
+            // them here would duplicate the wire frame (and trip
+            // close-code 4409 on strict servers).
+            let toReplay = subscriptions.values.filter { $0.status == .subscribed }
             lock.unlock()
             setState(.connected)
             emit(.acked)
             for c in conts { c.resume() }
 
-            // Replay any pending subscriptions that were registered
-            // before the connection acked (the reconnect path).
-            // First-time `subscribe()` callers send their own
-            // `subscribe` frame after `ensureConnected()` resolves;
-            // those entries are already on the wire. The reconnector
-            // path needs us to replay every entry — duplicate sends
-            // are caught and ignored by graphql-transport-ws-conformant
-            // servers because the ids are unique per subscription.
-            for (_, sub) in pending {
+            for sub in toReplay {
                 Task { @Sendable [self] in
                     try? await self.send(.subscribe(id: sub.id, query: sub.query, variables: sub.variables))
                 }
             }
+
+            startPingTimer()
+            return
+        }
+
+        if type == "ping" {
+            // Server-initiated ping. Spec: respond with pong so the
+            // server knows we're alive.
+            Task { @Sendable [self] in
+                try? await self.send(.pong)
+            }
+            return
+        }
+
+        if type == "pong" {
+            // Server's response to one of our pings. Liveness is
+            // implicit (the receive loop didn't time out); nothing to
+            // do beyond emitting the messageReceived event below.
+            emit(.messageReceived(type: type, id: id))
             return
         }
 
@@ -492,8 +616,17 @@ public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendabl
         let hasPending = !pending.isEmpty
         lock.unlock()
 
+        // Always transition to `.disconnected` here, even when there
+        // are pending subs the reconnector will pick up. A single
+        // physical drop typically trips both the send path and the
+        // receive-loop catch — without a torn-down state, the second
+        // teardown's gate (line `task == nil && isAlreadyTornDown`)
+        // doesn't match (`.connecting` isn't "torn down"), and the
+        // duplicate `.disconnected` event slips through. The
+        // reconnectorLoop overwrites to `.reconnecting(N)` on its
+        // next iteration; the brief `.disconnected` flicker is fine.
         teardown(disconnectEvent: .disconnected(reason: reason),
-                 then: hasPending ? nil : .disconnected,
+                 then: .disconnected,
                  finishSubscriptions: false)
 
         // 4401/4403 detection from URLSessionWebSocketTask close codes:
@@ -532,6 +665,31 @@ public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendabl
             }
         }
         return nil
+    }
+
+    /// Spawn the periodic ping Task. No-op when `pingInterval` is nil
+    /// or when a timer is already running. Cancelled by `teardown()`.
+    private func startPingTimer() {
+        guard let interval = pingInterval else { return }
+        lock.lock()
+        if pingTimerTask != nil {
+            lock.unlock()
+            return
+        }
+        let selfRef = self
+        let clockRef = self.clock
+        pingTimerTask = Task { @Sendable in
+            while !Task.isCancelled {
+                do {
+                    try await clockRef.sleep(for: interval)
+                } catch {
+                    return
+                }
+                if Task.isCancelled { return }
+                try? await selfRef.send(.ping)
+            }
+        }
+        lock.unlock()
     }
 
     /// Start (or restart) the reconnect orchestrator. If a reconnector
@@ -722,11 +880,15 @@ public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendabl
         task = nil
         receiveTask?.cancel()
         receiveTask = nil
+        let prevPingTimer = pingTimerTask
+        pingTimerTask = nil
         acked = false
         let subs = finishSubscriptions ? subscriptions : [:]
         if finishSubscriptions { subscriptions.removeAll() }
         if let nextState { _state = nextState }
         lock.unlock()
+
+        prevPingTimer?.cancel()
 
         prevTask?.cancel(with: .normalClosure, reason: nil)
 
@@ -748,6 +910,11 @@ public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendabl
     }
 
     private func send(_ message: WSClientMessage) async throws {
+        if let sink = _testOutboundSink {
+            sink(message)
+            emit(message.eventForOutbound())
+            return
+        }
         let data = try JSONSerialization.data(withJSONObject: message.toFoundation())
         guard let str = String(data: data, encoding: .utf8) else { throw CachebayError.networkError("WS encode failed") }
         guard let task else { throw CachebayError.networkError("WS not connected") }
@@ -758,6 +925,52 @@ public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendabl
             throw error
         }
         emit(message.eventForOutbound())
+    }
+
+    // MARK: - Test seams (internal — visible only via @testable)
+    //
+    // These let tests exercise specific state transitions and verify
+    // wire-level behaviour without standing up a real WebSocket server.
+    // They are NOT public API.
+
+    /// Outbound-frame interceptor. When non-nil, frames bypass the live
+    /// `URLSessionWebSocketTask` and are passed to the sink instead.
+    /// `messageSent` is still emitted, so event-based assertions work
+    /// the same as in production.
+    internal var _testOutboundSink: (@Sendable (WSClientMessage) -> Void)? {
+        get { lock.lock(); defer { lock.unlock() }; return _outboundSinkStorage }
+        set { lock.lock(); _outboundSinkStorage = newValue; lock.unlock() }
+    }
+    private var _outboundSinkStorage: (@Sendable (WSClientMessage) -> Void)?
+
+    /// Force the internal connection state. Tests use this to land in
+    /// `.connecting` / `.reconnecting(N)` without actually opening a
+    /// socket.
+    internal func _testForceState(_ s: ConnectionState, acked: Bool) {
+        lock.lock()
+        _state = s
+        self.acked = acked
+        lock.unlock()
+    }
+
+    /// Feed an inbound JSON frame to the dispatch path. Equivalent to
+    /// the receive loop reading a `String` message off the socket.
+    internal func _testInjectInbound(_ json: String) {
+        guard let data = json.data(using: .utf8) else { return }
+        dispatch(data)
+    }
+
+    /// Register a synthetic `.subscribed` subscription. Used by tests
+    /// that need to simulate a pre-existing live subscription about to
+    /// be replayed on reconnect.
+    internal func _testRegisterSubscribed(id: String, query: String, variables: [String: JSONValue]) {
+        lock.lock()
+        subscriptions[id] = ActiveSubscription(
+            id: id, query: query, variables: variables,
+            yield: { _ in }, finish: { _ in },
+            status: .subscribed
+        )
+        lock.unlock()
     }
 
     // MARK: - State / event helpers
@@ -860,6 +1073,8 @@ enum WSClientMessage: Sendable {
     case connectionInit([String: JSONValue])
     case subscribe(id: String, query: String, variables: [String: JSONValue])
     case complete(id: String)
+    case ping
+    case pong
 
     func toFoundation() -> [String: Any] {
         switch self {
@@ -876,6 +1091,10 @@ enum WSClientMessage: Sendable {
             ]
         case .complete(let id):
             return ["id": id, "type": "complete"]
+        case .ping:
+            return ["type": "ping"]
+        case .pong:
+            return ["type": "pong"]
         }
     }
 
@@ -884,6 +1103,8 @@ enum WSClientMessage: Sendable {
         case .connectionInit:           return .messageSent(type: "connection_init", id: nil)
         case .subscribe(let id, _, _):  return .messageSent(type: "subscribe", id: id)
         case .complete(let id):         return .messageSent(type: "complete", id: id)
+        case .ping:                     return .messageSent(type: "ping", id: nil)
+        case .pong:                     return .messageSent(type: "pong", id: nil)
         }
     }
 }

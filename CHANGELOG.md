@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 _No unreleased changes yet._
 
+## [0.2.1] — WebSocket reliability hardening
+
+### Added
+- **`updateConnectionParams(_:reconnectIfConnected:)`** — replace the params payload sent in `connection_init`. Use for auth-token rotation (refresh-token flow, account switch, role change) without manually wrangling `disconnect()` → reset → `reconnect()`. With `reconnectIfConnected: true`, drops the live socket and re-handshakes immediately, replaying every `.subscribed` subscription after the new ack. With `false`, the params are stashed and take effect on the next natural reconnect. Inspired by Apollo iOS's `updateConnectingPayload(_:reconnectIfConnected:)`.
+- **Optional client-initiated ping/pong** (`URLSessionWebSocketTransport(pingInterval:)`). Disabled by default. When set, the transport sends a `{"type":"ping"}` frame at the configured cadence after `connection_ack` lands, and answers any server-initiated `{"type":"ping"}` with `{"type":"pong"}`. Required for long-idle subscriptions behind NAT (typical NAT timeout 60–120s) or proxies with idle-disconnect policies. The ping Task uses the injected `clock`, so tests can drive cadence with `FakeClock` deterministically.
+
+### Changed
+- **Default WS connect timeout shortened to 10s** (`URLSessionWebSocketTransport.defaultConnectTimeout`). Previously the transport used `URLSession.shared`, which carries `timeoutIntervalForRequest = 60`. During a server-restart window, the dominant failure mode is "TCP handshake succeeded, WS upgrade stalled" — a 60s default would eat the entire backoff schedule on the first half-connected attempt. 10s is greater than `ReconnectPolicy.default.maxDelay` (5s) so each backoff cycle gets a full attempt, covers slow cold-start servers (k8s/fly.io 3–7s p95), and aligns with AWS/Cloudflare/Slack norms.
+- Callers who pass their own `URLSession` are unaffected — cachebay no longer reads from `.shared` and won't mutate a caller-supplied session.
+- `connectionParams` is now a snapshotting computed property (read-only). Mutate via `updateConnectionParams(_:reconnectIfConnected:)`. **Pre-1.0 breaking** for anyone who was assigning `transport.connectionParams = ...` directly (no callers in this repo or the Ferment Cuts consumer at the time of the change).
+
+### Fixed
+- **Duplicate `.disconnected` events per failed attempt.** A single physical socket failure typically trips both the send path (the `connection_init` write fails) and the receive-loop catch (the `task.receive()` await throws). The first teardown left state at `.connecting` when subs were pending (`then: nil` in `handleUnexpectedDisconnect`), so the second teardown's gate (`task == nil && isAlreadyTornDown(_state)`) didn't match — `.connecting` isn't "torn down" — and a duplicate event slipped through. Smoke logs from a real failed-handshake retry cycle showed `[WS] disconnected: receiveLoopError` immediately followed by `[WS] disconnected: sendError` per attempt. Now `handleUnexpectedDisconnect` always transitions to `.disconnected` after teardown; the reconnectorLoop overwrites to `.reconnecting(N)` on its next iteration. Brief flicker, correct dedupe.
+- **Double `subscribe` frame when calling `subscribe()` mid-handshake.** If a caller invoked `subscribe()` while the transport was in `.connecting` (or `.reconnecting`) and `connection_ack` arrived after registration, two `subscribe` frames went out for the same id: one from the caller's own awaiting Task waking up, one from the connection_ack replay loop. Strict graphql-transport-ws servers reject the duplicate with close code 4409 "Subscriber for `<id>` already exists"; tolerant servers double-yielded events. Mirrors Apollo iOS's two-phase registry: subscriptions are now tagged `.pending` (registered, frame not on the wire) or `.subscribed` (frame sent, awaiting `next`/`error`/`complete`). The ack handler replays only `.subscribed` entries.
+
 ## [0.2.0] — WebSocket auto-reconnect
 
 ### Added
@@ -57,6 +72,7 @@ First public version. The library was developed and battle-tested as part of the
 - Test suite cross-checks behavior with cachebay-web file-by-file: documents (normalize/materialize/rootId), operations (queries/mutations/subscriptions × cache policies × invalidation × watcher state), queries (watchers, refcount), optimistic (entity, connection, fragment-plan-aware, layering, two-phase commit), canonical (pagination/leader/edge cases/replay), compiler (planner/metadata/dedupe/operations/connections/formats/fragments), performance (render-count assertions), integration (typed-API doc routing, evictAll, connection watcher).
 - 608 tests across the suite. CI runs on every PR via `.github/workflows/test.yml`.
 
-[Unreleased]: https://github.com/lockvoid/cachebay-ios/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/lockvoid/cachebay-ios/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/lockvoid/cachebay-ios/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/lockvoid/cachebay-ios/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/lockvoid/cachebay-ios/releases/tag/v0.1.0

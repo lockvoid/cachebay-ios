@@ -61,6 +61,28 @@ What it does:
 
 If your server uses a different subprotocol (legacy `subscriptions-transport-ws`), pass it via `subprotocol:` and adjust message names — the transport is small and easy to fork.
 
+### Connect timeout
+
+When you don't pass an explicit `URLSession`, cachebay constructs one with `timeoutIntervalForRequest = 10` seconds (`URLSessionWebSocketTransport.defaultConnectTimeout`). This is **not** `URLSession.shared`'s default of 60s.
+
+Why 10s:
+
+- **Greater than `ReconnectPolicy.default.maxDelay` (5s)** — a stuck attempt can't outlive a backoff cycle, so each retry actually gets a full attempt.
+- **Covers slow cold-starts** — k8s pod boot, fly.io machine resume, Lambda cold start: typically 3–7s p95.
+- **Fails fast on half-connected sockets** — the dominant failure mode during a server-restart window is "TCP succeeded, WS handshake never completed". A 60s default eats the entire backoff schedule before falling through to the next attempt; 10s lets backoff progress.
+- **Industry-aligned** — AWS SDK uses 5s WS connect, Cloudflare expects WS handshake <10s, Slack/Discord clients sit around 10s.
+
+If you need different behaviour, pass your own `URLSession` — cachebay won't mutate it:
+
+```swift
+let cfg = URLSessionConfiguration.default
+cfg.timeoutIntervalForRequest = 30   // tolerate slower handshakes
+let ws = URLSessionWebSocketTransport(
+    url: wsURL,
+    session: URLSession(configuration: cfg)
+)
+```
+
 ### Diagnostics
 
 Pass an `os.Logger` to `CachebayOptions(logger:)` and Cachebay will emit `.warning`-level lines for actionable cache problems (materialize misses, watcher silencing) plus `.debug` lines for soft misses and reconnect bookkeeping. Use it together with `transport.events()` to wire a debug HUD or telemetry pipe.
@@ -252,15 +274,20 @@ What cachebay does: emits `.stopped(reason: .unauthorized(code:))` and **stops r
 What consumers should do:
 1. Detect `.stopped(.unauthorized(code:))` in your `WSStateMonitor` state handler.
 2. Refresh the auth token (refresh-token flow, redirect to login, etc.).
-3. Update `transport.connectionParams` with the new token.
-4. Call `transport.reconnect()` — resurrects from `.stopped` and tries fresh.
+3. Call `transport.updateConnectionParams(["authToken": .string(newToken)], reconnectIfConnected: false)` to stash the new token.
+4. Call `transport.reconnect()` — resurrects from `.stopped` and tries fresh with the new params.
+
+Or, in one shot, call `transport.updateConnectionParams(..., reconnectIfConnected: true)` from any non-`.stopped` state. (`.stopped` paths still need an explicit `reconnect()` because the contract for `.stopped` is "off until you say otherwise".)
 
 ```swift
 // In WSStateMonitor.handle(_:)
 case .stopped(.unauthorized(let code)):
     Task { @MainActor in
-        await refreshAuthToken()
-        transport.connectionParams["authToken"] = .string(newToken)
+        let newToken = try await refreshAuthToken()
+        transport.updateConnectionParams(
+            ["authToken": .string(newToken)],
+            reconnectIfConnected: false
+        )
         transport.reconnect()
     }
 ```
@@ -273,9 +300,49 @@ What cachebay does: tears down the socket, finishes every active subscription wi
 
 If `disconnect()` is called *while* the reconnector is already running (e.g., the app suspends mid-backoff), the in-flight reconnector is cancelled and the transport jumps straight to `.stopped(.userClosed)`. No reconnect attempts will fire from this state until `reconnect()` is called.
 
+### Auth-token rotation
+
+When a refresh-token flow produces a new access token, you don't have to manually disconnect / reset `connectionParams` / reconnect. Use `updateConnectionParams`:
+
+```swift
+ws.updateConnectionParams(
+    ["authToken": .string(newAccessToken)],
+    reconnectIfConnected: true   // drop socket, re-handshake with new params
+)
+```
+
+With `reconnectIfConnected: true` the transport tears the socket down, re-runs `connection_init` with the new params, and replays every `.subscribed` subscription after the new ack. With `false`, the new params are stashed and used on the next natural reconnect — useful when you've just observed a `.disconnected` event and know a reconnect is imminent anyway.
+
+Pairs naturally with the `4401`/`4403` permanent-failure detection: receive `.stopped(.unauthorized)` → refresh token → call `updateConnectionParams(... reconnectIfConnected: false)` → call `reconnect()`. Or just pass `reconnectIfConnected: true` and skip the explicit `reconnect()` call.
+
+### Ping / pong keepalives
+
+graphql-transport-ws defines `ping`/`pong` protocol-level messages (distinct from WebSocket-frame-level PING/PONG). cachebay's transport supports both directions:
+
+```swift
+let ws = URLSessionWebSocketTransport(
+    url: wsURL,
+    pingInterval: .seconds(20)   // client sends ping every 20s after ack
+)
+```
+
+- **Client → server**: when `pingInterval` is non-nil, a `{"type":"ping"}` frame is sent at the configured cadence after `connection_ack` lands. The Task is cancelled on every teardown (disconnect, reconnect, terminal stop) and re-armed on the next ack.
+- **Server → client**: any incoming `{"type":"ping"}` is answered with `{"type":"pong"}` automatically. `pong` frames from the server are observed via `events()` (`messageReceived(type: "pong", ...)`) but otherwise ignored — liveness is implicit in the receive loop staying alive.
+
+Disabled by default (cost is one tiny frame per interval). Enable when:
+
+- Your subscriptions stay open across long quiet periods (notification feed, presence indicator) on cellular/WiFi where NAT idle-kills (~60–120s) drop the socket.
+- Your reverse-proxy has an aggressive idle-disconnect policy (some Kubernetes ingress configs do, default 60s).
+
+Skip when:
+
+- Your subscription is already chatty (a chat feed, a live-update list).
+- You're connecting through a network you control end-to-end with no NAT/proxy in the path.
+
+Use the same `clock: any Clock<Duration>` injection point used for backoff — a `FakeClock` lets tests verify ping cadence in milliseconds.
+
 ### Limitations
 
-- **No graphql-transport-ws `ping` / `pong` heartbeats** — the transport doesn't periodically check liveness. Long-idle sockets may be killed by NAT timeouts or proxy idle-disconnect policies (typical: 60-120s). The reconnect logic recovers from this, but you may see a `.disconnected` → `.reconnecting` cycle on first activity after an idle period. If your server actively heartbeats, the receive loop catches the heartbeat and idle-kill won't happen.
 - **No connection-level backpressure** — if your server bursts thousands of frames at the client, they all get queued by `URLSessionWebSocketTask`. In practice subscription feeds don't hit this, but high-fanout entities could.
 - **One shared connection per `URLSessionWebSocketTransport` instance** — multiplexed via `id`. If you need multiple distinct WS endpoints (rare), instantiate multiple transports.
 
