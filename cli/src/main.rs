@@ -101,7 +101,7 @@ fn run_codegen(args: CodegenArgs) -> anyhow::Result<()> {
     let operation_files = load::collect_operation_files_excluding(&args.operations, &[args.schema.clone()])?;
 
     // Build validated HIR via apollo-compiler.
-    let ctx = load::build_compiler(&schema_src, &operation_files)?;
+    let ctx = load::build_compiler(&schema_src, &operation_files, &args.operations)?;
     if !ctx.diagnostics.is_empty() {
         for d in &ctx.diagnostics {
             eprintln!("{d}");

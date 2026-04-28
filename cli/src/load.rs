@@ -81,6 +81,23 @@ pub fn collect_operation_files_excluding(
     Ok(out)
 }
 
+/// Strip the `--operations` root prefix from `path` and return the
+/// remaining relative path. Falls back to the file name (then to the
+/// raw path) if no root contains the file — the only way this can
+/// happen in practice is if the caller passed `--operations` paths
+/// that don't actually contain the file, which would be a CLI misuse
+/// rather than a codegen bug.
+fn relative_to_root(path: &Path, canon_roots: &[PathBuf]) -> PathBuf {
+    if let Ok(canon) = path.canonicalize() {
+        for root in canon_roots {
+            if let Ok(rel) = canon.strip_prefix(root) {
+                return rel.to_path_buf();
+            }
+        }
+    }
+    path.file_name().map(PathBuf::from).unwrap_or_else(|| path.to_path_buf())
+}
+
 fn is_excluded(p: &Path, exclude: &[PathBuf]) -> bool {
     if let Ok(canon) = p.canonicalize() {
         return exclude.iter().any(|e| *e == canon);
@@ -95,7 +112,11 @@ fn has_graphql_extension(p: &Path) -> bool {
     )
 }
 
-pub fn build_compiler(schema_src: &str, operation_files: &[PathBuf]) -> anyhow::Result<CompilerContext> {
+pub fn build_compiler(
+    schema_src: &str,
+    operation_files: &[PathBuf],
+    operation_roots: &[PathBuf],
+) -> anyhow::Result<CompilerContext> {
     let mut diagnostics = Vec::new();
 
     let combined_schema_src = format!("{schema_src}\n{CACHEBAY_DIRECTIVES_SDL}");
@@ -119,6 +140,18 @@ pub fn build_compiler(schema_src: &str, operation_files: &[PathBuf]) -> anyhow::
     let mut combined = ast::Document::new();
     let mut file_paths: HashMap<FileId, PathBuf> = HashMap::new();
 
+    // Canonicalize each --operations root so we can strip a stable prefix
+    // from each file's absolute path. Storing relative paths keeps the
+    // emitted `// Source:` / `/// Fragment X:` comments out of the system
+    // tempdir (the wrapper script stages operations into `/var/folders/...`
+    // with a randomized suffix per run, which would otherwise churn every
+    // generated file's diff on every codegen run).
+    let canon_roots: Vec<PathBuf> = operation_roots
+        .iter()
+        .map(|r| if r.is_file() { r.parent().map(PathBuf::from).unwrap_or_else(|| r.clone()) } else { r.clone() })
+        .filter_map(|r| r.canonicalize().ok())
+        .collect();
+
     for path in operation_files {
         let src = std::fs::read_to_string(path)
             .with_context(|| format!("reading operation file {}", path.display()))?;
@@ -129,7 +162,7 @@ pub fn build_compiler(schema_src: &str, operation_files: &[PathBuf]) -> anyhow::
                 // assigned to this parse. Pull that ID off the first node we
                 // see so we can map it back to the source path later.
                 if let Some(file_id) = first_file_id(&doc) {
-                    file_paths.insert(file_id, path.clone());
+                    file_paths.insert(file_id, relative_to_root(path, &canon_roots));
                 }
                 merge_ast(&mut combined, doc);
             }
