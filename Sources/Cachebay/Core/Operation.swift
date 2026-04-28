@@ -100,6 +100,14 @@ public protocol ConnectionEdge {
 }
 
 public extension Sequence where Element: ConnectionEdge {
+    /// Unwrap each edge's `node` into the operation-projection type,
+    /// skipping edges with no node. Use when the call site keeps
+    /// operation-typed helpers downstream (no fragment cast).
+    /// Equivalent to `compactMap { $0.node }`.
+    func nodes() -> [Element.Node] {
+        compactMap { $0.node }
+    }
+
     /// Map each edge's node into `F.Data`, skipping edges with no node.
     /// Equivalent to `compactMap { $0.node?.as(fragment) }`.
     func nodes<F: Fragment>(as fragment: F.Type) -> [F.Data] {
@@ -108,6 +116,17 @@ public extension Sequence where Element: ConnectionEdge {
 }
 
 public extension Optional where Wrapped: Sequence, Wrapped.Element: ConnectionEdge {
+    /// Sugar for the common `data.jobs?.edges` shape (`[Edge]?`). Returns
+    /// `[]` when the optional is nil — convenient for SwiftUI `ForEach`
+    /// where you want a non-optional array regardless of cache state.
+    /// Operation-projection variant; no fragment cast.
+    func nodes() -> [Wrapped.Element.Node] {
+        switch self {
+        case .none: return []
+        case .some(let seq): return seq.compactMap { $0.node }
+        }
+    }
+
     /// Sugar for the common `data.jobs?.edges` shape (`[Edge]?`). Returns
     /// `[]` when the optional is nil — convenient for SwiftUI `ForEach`
     /// where you want a non-optional array regardless of cache state.

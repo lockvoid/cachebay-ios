@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 _No unreleased changes yet._
 
+## [0.3.1] — Operation-projection `nodes()` overload
+
+### Added
+- **`Sequence.nodes()` / `Optional<Sequence>.nodes()`** — operation-projection variant of `nodes(as:)`. Unwraps each edge's `node` into the operation-specific `Element.Node` type without any fragment cast. Use when call sites keep operation-typed helpers downstream (e.g. a `posterFromCachebay(_: Projects.Data.Projects.Edges.Node.Poster)` helper would break under `nodes(as: ProjectFields.self)` because the cast crosses the projection seam — `nodes()` preserves the type). The two overloads coexist: `.nodes()` for operation projection, `.nodes(as: F.self)` for fragment view.
+
 ## [0.3.0] — Typed connection-edge sugar
 
 ### Added
@@ -80,7 +85,8 @@ First public version. The library was developed and battle-tested as part of the
 - Test suite cross-checks behavior with cachebay-web file-by-file: documents (normalize/materialize/rootId), operations (queries/mutations/subscriptions × cache policies × invalidation × watcher state), queries (watchers, refcount), optimistic (entity, connection, fragment-plan-aware, layering, two-phase commit), canonical (pagination/leader/edge cases/replay), compiler (planner/metadata/dedupe/operations/connections/formats/fragments), performance (render-count assertions), integration (typed-API doc routing, evictAll, connection watcher).
 - 608 tests across the suite. CI runs on every PR via `.github/workflows/test.yml`.
 
-[Unreleased]: https://github.com/lockvoid/cachebay-ios/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/lockvoid/cachebay-ios/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/lockvoid/cachebay-ios/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/lockvoid/cachebay-ios/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/lockvoid/cachebay-ios/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/lockvoid/cachebay-ios/compare/v0.1.0...v0.2.0

@@ -795,6 +795,48 @@ final class TypedAPITests: XCTestCase {
         XCTAssertEqual(posts.map { $0.title }, ["First", "Second"])
     }
 
+    /// Counterpart to `nodes(as:)` — when the consumer wants the
+    /// operation-projection node type (e.g. `Projects.Data.Projects.Edges.Node`)
+    /// rather than a fragment cast, `.nodes()` unwraps the optional `node`
+    /// without crossing the projection seam. Useful when the call site
+    /// keeps operation-typed helpers downstream.
+    func test_sequenceNodes_unwrapsOperationNodeWithoutFragmentCast() {
+        let edges: [TestPosts.Data.Posts.Edges] = [
+            .init(__data: ["cursor": .string("c1")]),  // missing node
+            .init(__data: [
+                "cursor": .string("c2"),
+                "node": .object([
+                    "__typename": .string("Post"),
+                    "id": .string("p2"),
+                    "title": .string("Has node"),
+                ])
+            ]),
+        ]
+        let nodes = edges.nodes()
+        XCTAssertEqual(nodes.count, 1, "missing-node edges must be skipped")
+        XCTAssertEqual(nodes[0].id, "p2")
+        // Type-check at compile: nodes is `[Edges.Node]`, not a fragment shape.
+        let _: TestPosts.Data.Posts.Edges.Node = nodes[0]
+    }
+
+    /// `Optional<[Edge]>.nodes()` mirrors `nodes(as:)` — nil → `[]`.
+    func test_optionalSequenceNodes_handlesNilAsEmpty() {
+        let nilEdges: [TestPosts.Data.Posts.Edges]? = nil
+        XCTAssertEqual(nilEdges.nodes().count, 0)
+
+        let some: [TestPosts.Data.Posts.Edges]? = [
+            .init(__data: [
+                "cursor": .string("c1"),
+                "node": .object([
+                    "__typename": .string("Post"),
+                    "id": .string("p1"),
+                    "title": .string("First"),
+                ])
+            ]),
+        ]
+        XCTAssertEqual(some.nodes().map { $0.id }, ["p1"])
+    }
+
     func test_optionalSequenceNodesAs_handlesNilAsEmpty_andSkipsMissingNodes() {
         // The `data.jobs?.edges` shape: `[Edges]?` — should support
         // `nodes(as:)` directly without unwrapping.
