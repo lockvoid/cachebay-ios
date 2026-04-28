@@ -1,7 +1,7 @@
 # Cachebay (iOS)
 
 [![Swift 6](https://img.shields.io/badge/Swift-6.0-orange.svg)](https://swift.org)
-[![Platforms](https://img.shields.io/badge/platforms-iOS_15%20%7C%20macOS_12%20%7C%20tvOS_15%20%7C%20watchOS_8%20%7C%20visionOS_1-blue.svg)](https://swift.org)
+[![Platforms](https://img.shields.io/badge/platforms-iOS_16%20%7C%20macOS_13%20%7C%20tvOS_16%20%7C%20watchOS_9%20%7C%20visionOS_1-blue.svg)](https://swift.org)
 [![SPM](https://img.shields.io/badge/SwiftPM-compatible-brightgreen.svg)](https://swift.org/package-manager)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 

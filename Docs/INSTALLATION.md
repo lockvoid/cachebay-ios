@@ -5,8 +5,10 @@ Cachebay is distributed as a SwiftPM package.
 ## Requirements
 
 - Swift **6.0+** (uses strict concurrency — `@Sendable` everywhere)
-- iOS **15.0+** / macOS **12.0+** / tvOS **15.0+** / watchOS **8.0+** / visionOS **1.0+**
+- iOS **16.0+** / macOS **13.0+** / tvOS **16.0+** / watchOS **9.0+** / visionOS **1.0+**
 - Xcode **15+** for the demo app target
+
+The platform floor is set at `Duration` / `Clock` / `Task.sleep(for:)` (iOS 16 / macOS 13). Cachebay uses these in its reconnect orchestrator and elsewhere; supporting earlier OS versions would mean a meaningfully different codebase. If you're targeting iOS 15, pin to a pre-1.0 tag.
 
 ## Add the package
 
