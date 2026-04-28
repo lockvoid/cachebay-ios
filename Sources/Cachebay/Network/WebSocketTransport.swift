@@ -427,6 +427,11 @@ public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendabl
             }
             try await send(.connectionInit(connectionParams))
             try await waitForAck()
+        case .testSeamConnect:
+            emit(.connecting)
+            setState(.connecting)
+            try await send(.connectionInit(connectionParams))
+            try await waitForAck()
         }
     }
 
@@ -434,12 +439,27 @@ public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendabl
         case alreadyAcked
         case alreadyConnecting
         case startConnect(URLSessionWebSocketTask)
+        /// Test-only: simulate a fresh handshake without opening a real
+        /// socket. Mirrors `.startConnect` behaviour — emit `.connecting`,
+        /// send `connection_init` to the outbound sink, park
+        /// `waitForAck()` — but skips the URLSessionWebSocketTask wiring
+        /// so the test isn't racing a real connect-attempt failure.
+        case testSeamConnect
     }
 
     private func takeConnectionState() -> ConnectionDecision {
         lock.lock(); defer { lock.unlock() }
         if acked { return .alreadyAcked }
         if task != nil { return .alreadyConnecting }
+        // Test seam: when an outbound sink is installed, callers have
+        // staged state via `_testForceState` and a real
+        // `URLSessionWebSocketTask` would just race the test. Drive the
+        // handshake through the sink instead — `_testInjectInbound`
+        // delivers the ack. Real production callers never set the sink
+        // so this branch is unreachable outside `@testable` builds.
+        if _outboundSinkStorage != nil {
+            return .testSeamConnect
+        }
         var req = URLRequest(url: url)
         req.setValue(subprotocol, forHTTPHeaderField: "Sec-WebSocket-Protocol")
         let ws = session.webSocketTask(with: req)
@@ -698,6 +718,19 @@ public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendabl
     /// backoff (used by `reconnect()` to attempt immediately).
     private func startReconnector(initialDelay: TimeInterval?) {
         lock.lock()
+        // Don't resurrect from a terminal state. Race window: a stale
+        // `handleUnexpectedDisconnect` (delayed receiveLoopError from a
+        // now-dead socket) can land here after `stopWithTerminalReason`
+        // has nulled `reconnectorTask` and flipped state to `.stopped`.
+        // Without this guard, the disconnect path would spawn a fresh
+        // reconnector that emits one bonus `.reconnectScheduled` past
+        // the terminal `.stopped` event — turning a 30%-flake test into
+        // a deterministic pass. Public `reconnect()` resurrects state
+        // OUT of `.stopped` before calling here, so it isn't blocked.
+        if case .stopped = _state {
+            lock.unlock()
+            return
+        }
         if reconnectorTask != nil {
             if initialDelay == 0 {
                 lock.unlock()

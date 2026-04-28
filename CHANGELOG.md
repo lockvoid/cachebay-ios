@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 _No unreleased changes yet._
 
+## [0.3.2] — Reconnector resurrection race; test-seam handshake; CI perf threshold
+
+### Fixed
+- **`startReconnector` could resurrect after `.stopped`.** Race window: a delayed `receiveLoopError` from a now-dead socket can land in `handleUnexpectedDisconnect` after `stopWithTerminalReason` has nulled `reconnectorTask` and flipped state to `.stopped`. The disconnect path's `startReconnector` call only checked `reconnectorTask != nil`, not state — so it would spawn a fresh reconnector and emit one bonus `.reconnectScheduled(attempt: 1, ...)` past the terminal `.stopped` event. `test_reconnect_emitsReconnectScheduledEvents_withGrowingDelays` flaked at ~30–60% on macOS runners. Fixed by guarding `startReconnector` against `.stopped` state — public `reconnect()` paths resurrect state out of `.stopped` before calling, so they're not blocked. Pre-existing bug; deterministic across 30/30 stress runs after fix.
+- **`takeConnectionState` opened a real WebSocket task even when test seams were active.** `test_subscribeDuringConnecting_doesNotDoubleSubscribeOnAck` would race the real (failing) handshake against the test's injected `connection_ack` and pass locally / fail on slower CI runners. Added `.testSeamConnect` decision: when an outbound sink is installed, drive the handshake through the sink without opening a real socket.
+
+### Tests
+- `test_perf_addNode_preload_5000_tail_latency` p99/p50 ratio threshold raised from 5× to 10×. Local M-series runners land at ~1.3×; GitHub-hosted macos-15 shared hardware routinely hits 4–6× under noisy-neighbour load. 10× still catches pathological regressions (e.g. an O(n²) regression that would push the ratio past 20×).
+
 ## [0.3.1] — Operation-projection `nodes()` overload
 
 ### Added
@@ -85,7 +94,8 @@ First public version. The library was developed and battle-tested as part of the
 - Test suite cross-checks behavior with cachebay-web file-by-file: documents (normalize/materialize/rootId), operations (queries/mutations/subscriptions × cache policies × invalidation × watcher state), queries (watchers, refcount), optimistic (entity, connection, fragment-plan-aware, layering, two-phase commit), canonical (pagination/leader/edge cases/replay), compiler (planner/metadata/dedupe/operations/connections/formats/fragments), performance (render-count assertions), integration (typed-API doc routing, evictAll, connection watcher).
 - 608 tests across the suite. CI runs on every PR via `.github/workflows/test.yml`.
 
-[Unreleased]: https://github.com/lockvoid/cachebay-ios/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/lockvoid/cachebay-ios/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/lockvoid/cachebay-ios/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/lockvoid/cachebay-ios/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/lockvoid/cachebay-ios/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/lockvoid/cachebay-ios/compare/v0.2.0...v0.2.1
