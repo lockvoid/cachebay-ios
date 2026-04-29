@@ -8,6 +8,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 _No unreleased changes yet._
 
+## [0.5.0] — Compile-time fragment data factories
+
+### Added
+- **Codegen-emitted static factories on every generated `Data` / `AsX` struct.** Polymorphic fragments emit one factory per type-condition (`ProjectMessageFields.Data.projectUserMessage(...)`, `ElementFields.Data.videoElement(...)`); plain fragments emit a single `Data.make(...)`. Every selected non-null field is a required named parameter; nullable selections get `= nil` defaults. `__typename` is hardcoded into the dict body so callers never thread a typename string. Forgetting a required field is a compile error at the call site, replacing the v0.4.0 silent-watcher-silence failure mode where a missing selection-set field would only surface as a debug-level "no field" log at runtime.
+
+  ```swift
+  let element = ElementFields.Data.videoElement(
+      id: att.id, kind: "video", state: "draft", intent: "STORY",
+      name: att.name, derivatives: [], lockVersion: 1,
+      colorSpace: v.colorSpace,
+      music: 0, speech: 1, noise: 0,
+      beatsAnalyzed: false, musicHighlighted: false, speechTranscribed: false,
+      beats: [], downbeats: [], quantizedBeats: [], quantizedDownbeats: [],
+      musicHighlights: []
+      // duration, width, height, rotation, aiPrompt, content, … all optional, default nil
+  )
+  ```
+
+  Mirroring `AsX` factories also emit at the subtype-struct level (`AsVideoElement.make(...)`) for callers who already have an `AsX` and want a sibling.
+
+  At parent scope, subtype-specific nested types are qualified with `AsX.` (e.g. `[AsAudioElement.MusicHighlights]`) so they resolve outside the subtype struct. Shared nested types stay unqualified — they live as siblings on the parent.
+
+### Migration
+- **Rerun `cachebay-cli` codegen** to pick up the new factories. Existing `F.Data(__data: [...])` call sites continue to compile; opt-in to the typed factories one call site at a time.
+
 ## [0.4.0] — Optimistic `writeFragment` (normalize-with-baselines)
 
 ### Added
@@ -118,7 +143,8 @@ First public version. The library was developed and battle-tested as part of the
 - Test suite cross-checks behavior with cachebay-web file-by-file: documents (normalize/materialize/rootId), operations (queries/mutations/subscriptions × cache policies × invalidation × watcher state), queries (watchers, refcount), optimistic (entity, connection, fragment-plan-aware, layering, two-phase commit), canonical (pagination/leader/edge cases/replay), compiler (planner/metadata/dedupe/operations/connections/formats/fragments), performance (render-count assertions), integration (typed-API doc routing, evictAll, connection watcher).
 - 608 tests across the suite. CI runs on every PR via `.github/workflows/test.yml`.
 
-[Unreleased]: https://github.com/lockvoid/cachebay-ios/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/lockvoid/cachebay-ios/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/lockvoid/cachebay-ios/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/lockvoid/cachebay-ios/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/lockvoid/cachebay-ios/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/lockvoid/cachebay-ios/compare/v0.3.1...v0.3.2

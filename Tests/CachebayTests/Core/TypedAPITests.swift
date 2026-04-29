@@ -819,6 +819,144 @@ final class TypedAPITests: XCTestCase {
         let _: TestPosts.Data.Posts.Edges.Node = nodes[0]
     }
 
+    // MARK: - Compile-time fragment data factories
+    //
+    // The bug we're solving: `F.Data(__data: [...])` accepts any dict —
+    // miss a field and the materializer silently silences a watching
+    // query at runtime. The fix: codegen-emitted static factories on
+    // `F.Data` (and on each `AsX` subtype) that take every selected
+    // non-optional field as a named parameter. The compiler enforces
+    // coverage; nullable selections get `= nil` defaults.
+    //
+    // These tests pin the *API shape* with a hand-rolled fixture that
+    // mirrors what `cachebay-cli` will emit. The codegen change lands
+    // in a follow-up — tests here document the contract the emitter
+    // must satisfy.
+
+    /// Polymorphic fragment fixture: `Note` (parent) with two
+    /// `... on X` branches (`TextNote`, `ImageNote`). Mirrors the
+    /// `ProjectMessageFields` / `ElementFields` shape from FermentCuts
+    /// — shared scalars on the parent, subtype-specific fields under
+    /// `AsX` accessors. The *desired* additions are static factories
+    /// per subtype on `Data` itself.
+    struct TestNoteFields: Cachebay.Fragment {
+        static let networkQuery = """
+        fragment TestNoteFields on Note {
+          __typename
+          id
+          author
+          ... on TextNote { body wordCount summary }
+          ... on ImageNote { url width height caption }
+        }
+        """
+        static let document: QueryDocument = .source(networkQuery)
+        static let fragmentName = "TestNoteFields"
+        static let onTypename = "Note"
+        typealias Variables = Cachebay.EmptyVariables
+
+        struct Data: Sendable, Cachebay.OperationData {
+            var __data: [String: JSONValue]
+            init(__data: [String: JSONValue]) { self.__data = __data }
+            // Factories — what codegen will emit. Hand-rolled to pin
+            // the contract.
+            //
+            // Required (non-null) fields are positional-named params;
+            // nullable selections get `= nil` defaults. The factory
+            // stamps `__typename` from the type-condition the call
+            // selected — caller never threads a typename string.
+            static func textNote(
+                id: String,
+                author: String,
+                body: String,
+                wordCount: Int,
+                summary: String? = nil
+            ) -> Data {
+                Data(__data: [
+                    "__typename": .string("TextNote"),
+                    "id": .string(id),
+                    "author": .string(author),
+                    "body": .string(body),
+                    "wordCount": .int(Int64(wordCount)),
+                    "summary": summary.map { .string($0) } ?? .null,
+                ])
+            }
+            static func imageNote(
+                id: String,
+                author: String,
+                url: String,
+                width: Int,
+                height: Int,
+                caption: String? = nil
+            ) -> Data {
+                Data(__data: [
+                    "__typename": .string("ImageNote"),
+                    "id": .string(id),
+                    "author": .string(author),
+                    "url": .string(url),
+                    "width": .int(Int64(width)),
+                    "height": .int(Int64(height)),
+                    "caption": caption.map { .string($0) } ?? .null,
+                ])
+            }
+        }
+    }
+
+    /// Each subtype factory must produce a `__data` dict with every
+    /// shared + subtype-specific field, `__typename` stamped, and
+    /// nullable selections present as `.null` (not absent). The
+    /// `.null` is critical: the materializer treats `.none` as "no
+    /// field" (warning) and `.null` as "explicit absent" (allowed).
+    func test_fragmentDataFactory_textNoteSubtype_buildsFullDict() {
+        let data = TestNoteFields.Data.textNote(
+            id: "n1", author: "alice",
+            body: "hello world", wordCount: 2
+        )
+        XCTAssertEqual(data.__data["__typename"], .string("TextNote"),
+            "factory stamps __typename from the subtype it represents")
+        XCTAssertEqual(data.__data["id"], .string("n1"))
+        XCTAssertEqual(data.__data["author"], .string("alice"),
+            "shared (parent-level) fields land alongside subtype-specific")
+        XCTAssertEqual(data.__data["body"], .string("hello world"))
+        XCTAssertEqual(data.__data["wordCount"], .int(2))
+        XCTAssertEqual(data.__data["summary"], .null,
+            "nullable fields the caller omitted must be present as .null — materializer treats .none as 'no field' and warns")
+    }
+
+    func test_fragmentDataFactory_imageNoteSubtype_buildsFullDict() {
+        let data = TestNoteFields.Data.imageNote(
+            id: "n2", author: "bob",
+            url: "https://x", width: 800, height: 600,
+            caption: "hi"
+        )
+        XCTAssertEqual(data.__data["__typename"], .string("ImageNote"))
+        XCTAssertEqual(data.__data["author"], .string("bob"))
+        XCTAssertEqual(data.__data["width"], .int(800))
+        XCTAssertEqual(data.__data["caption"], .string("hi"),
+            "nullable fields the caller passed must round-trip")
+    }
+
+    /// The factory's typed output must round-trip through
+    /// `b.writeFragment` cleanly — that's the entire point of compile-
+    /// time enforcement: building the data correctly is enough.
+    func test_fragmentDataFactory_writeFragment_roundtrip() {
+        let (client, _, _) = makeClient()
+        let data = TestNoteFields.Data.textNote(
+            id: "n1", author: "alice",
+            body: "round trip", wordCount: 2,
+            summary: "S"
+        )
+        client.modifyOptimistic { b, _ in
+            b.writeFragment(fragment: TestNoteFields.self, id: "n1", data: data)
+        }
+        // Cache record matches the factory dict — proves writeFragment
+        // accepts the factory's wire shape with no transformations.
+        let record = client.graph.getRecord("Note:n1")
+        XCTAssertEqual(record?["__typename"], .string("TextNote"))
+        XCTAssertEqual(record?["body"], .string("round trip"))
+        XCTAssertEqual(record?["wordCount"], .int(2))
+        XCTAssertEqual(record?["summary"], .string("S"))
+    }
+
     /// `Optional<[Edge]>.nodes()` mirrors `nodes(as:)` — nil → `[]`.
     func test_optionalSequenceNodes_handlesNilAsEmpty() {
         let nilEdges: [TestPosts.Data.Posts.Edges]? = nil

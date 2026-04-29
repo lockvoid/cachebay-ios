@@ -853,9 +853,152 @@ fn render_selection_struct(
                 s.push_str(&render_nested_type(field, &format!("{indent}        "), &as_path, extensions));
             }
         }
+        // AsX factory mirrors the parent's per-subtype factory — same
+        // signature, returns `AsX` instead of the parent struct. Use
+        // when the caller already has an `AsX` in hand and wants to
+        // construct a sibling. Inside `AsX`, all nested types are
+        // direct siblings, so no qualifier is needed.
+        let mut as_factory_fields: Vec<(&PlanField, bool)> = shared.iter().map(|f| (*f, false)).collect();
+        as_factory_fields.extend(fields.iter().map(|f| (*f, true)));
+        s.push_str(&render_factory(
+            &as_name,
+            "make",
+            tc,
+            &as_factory_fields,
+            None,
+            &format!("{indent}        "),
+        ));
         s.push_str(&format!("{indent}    }}\n"));
     }
 
+    // Compile-time-safe constructors. Polymorphic structs get one
+    // factory per type-condition (`Data.videoElement(...)`); plain
+    // structs get a single `make` factory using the parent named
+    // type as `__typename`. Codegen ALWAYS emits these — the price
+    // is a few dozen lines per struct, the value is that forgetting
+    // a selected field becomes a compile error rather than the
+    // v0.4.0 silent-watcher-silence at runtime.
+    if !by_condition.is_empty() {
+        // At parent scope, subtype-specific nested types live ONLY
+        // inside their `AsX` — qualify them with `AsX.` so the type
+        // resolves. Shared nested types live as siblings on the
+        // parent and need no qualifier.
+        for (tc, fields) in &by_condition {
+            let factory_name = lower_camel_case(tc);
+            let qualifier = format!("As{tc}");
+            let mut all_fields: Vec<(&PlanField, bool)> = shared.iter().map(|f| (*f, false)).collect();
+            all_fields.extend(fields.iter().map(|f| (*f, true)));
+            s.push_str(&render_factory(
+                swift_name,
+                &factory_name,
+                tc,
+                &all_fields,
+                Some(&qualifier),
+                &format!("{indent}    "),
+            ));
+        }
+    } else if !parent_named_type.is_empty() {
+        // Non-polymorphic — single `make` factory. Use a stable
+        // generic name rather than `lower_camel_case(parent_named_type)`
+        // because the latter collides with subtype factory names when
+        // a fragment on a concrete type happens to share a name with
+        // a polymorphic sibling's branch.
+        let factory_fields: Vec<(&PlanField, bool)> = shared.iter().map(|f| (*f, false)).collect();
+        s.push_str(&render_factory(
+            swift_name,
+            "make",
+            parent_named_type,
+            &factory_fields,
+            None,
+            &format!("{indent}    "),
+        ));
+    }
+
+    s.push_str(&format!("{indent}}}\n"));
+    s
+}
+
+/// Lowercase the first character. `"VideoElement"` → `"videoElement"`.
+/// Used for factory method names — Swift convention is camelCase for
+/// methods, so a `... on VideoElement { … }` branch becomes
+/// `Data.videoElement(…)` factory.
+fn lower_camel_case(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) => c.to_lowercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
+/// Emit a static factory method on the surrounding struct that returns
+/// a fully-shaped instance for `typename`. Every selected non-null
+/// field becomes a required named parameter; nullable selections get
+/// `= nil` defaults; `__typename` is hardcoded into the dict body so
+/// callers never thread a typename string. The factory's return type
+/// is the parent struct (`swift_name`) — calling
+/// `MyFragment.Data.subtype(…)` yields a `Data`.
+///
+/// Compile-time safety: forgetting a required field is a compile error
+/// at the call site, replacing the v0.4.0 silent-silence failure mode
+/// where a missing selection-set field would silence a watcher at
+/// runtime.
+/// Build the Swift type expression for a factory parameter. For nested
+/// object types, optionally qualify with a parent-struct prefix — used
+/// when emitting a per-subtype factory at the parent scope, where the
+/// subtype's own `MusicHighlights` nested struct lives only inside
+/// `AsX` and needs `AsX.MusicHighlights` to resolve.
+fn factory_param_type(f: &PlanField, qualify_prefix: Option<&str>) -> String {
+    match &f.output_shape {
+        OutputShape::Object { nullable, list } => {
+            let nested = title_case(&f.response_key);
+            let qualified = match qualify_prefix {
+                Some(prefix) => format!("{prefix}.{nested}"),
+                None => nested,
+            };
+            let list_ty = if *list { format!("[{qualified}]") } else { qualified };
+            if *nullable { format!("{list_ty}?") } else { list_ty }
+        }
+        OutputShape::Leaf { .. } => swift_type_for_field(f),
+    }
+}
+
+fn render_factory(
+    swift_name: &str,
+    factory_name: &str,
+    typename: &str,
+    fields: &[(&PlanField, bool)],
+    subtype_qualifier: Option<&str>,
+    indent: &str,
+) -> String {
+    let mut s = String::new();
+    let non_typename: Vec<&(&PlanField, bool)> = fields.iter()
+        .filter(|(f, _)| f.response_key != "__typename")
+        .collect();
+    s.push_str(&format!("{indent}public static func {factory_name}(\n"));
+    for (i, (f, is_subtype)) in non_typename.iter().enumerate() {
+        let name = swift_identifier(&f.response_key);
+        let ty = if *is_subtype {
+            factory_param_type(f, subtype_qualifier)
+        } else {
+            factory_param_type(f, None)
+        };
+        let is_optional = matches!(
+            f.output_shape,
+            OutputShape::Leaf { nullable: true, .. } | OutputShape::Object { nullable: true, .. }
+        );
+        let default = if is_optional { " = nil" } else { "" };
+        let comma = if i + 1 < non_typename.len() { "," } else { "" };
+        s.push_str(&format!("{indent}    {name}: {ty}{default}{comma}\n"));
+    }
+    s.push_str(&format!("{indent}) -> {swift_name} {{\n"));
+    s.push_str(&format!("{indent}    {swift_name}(__data: [\n"));
+    s.push_str(&format!("{indent}        \"__typename\": Cachebay.JSONValue.string(\"{typename}\"),\n"));
+    for (f, _) in &non_typename {
+        let name = swift_identifier(&f.response_key);
+        let value = write_expr_for_field(f, &name);
+        s.push_str(&format!("{indent}        \"{}\": {},\n", f.response_key, value));
+    }
+    s.push_str(&format!("{indent}    ])\n"));
     s.push_str(&format!("{indent}}}\n"));
     s
 }
