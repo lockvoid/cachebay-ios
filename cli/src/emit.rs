@@ -642,7 +642,7 @@ fn read_expr_for_field(f: &PlanField, container: &str, key: &str) -> String {
             }
         }
         OutputShape::Object { nullable, list } => {
-            let nested_type = title_case(&f.response_key);
+            let nested_type = nested_type_name(f);
             if *list {
                 let base = format!("({container}[\"{key}\"]?.array)?.compactMap {{ if case .object(let o) = $0 {{ return {nested_type}(__data: o) }} else {{ return nil }} }}");
                 if *nullable { base } else { format!("({base}) ?? []") }
@@ -716,6 +716,18 @@ fn leaf_primitive_swift(named: &str) -> &'static str {
     }
 }
 
+/// Compute the nested Swift type name for an object field. When the
+/// field's selection set is a pure fragment spread (`reuse_fragment`
+/// set), we reference the fragment's already-emitted `Data` type
+/// directly — collapsing per-position duplicate structs across queries
+/// that spread the same fragment.
+fn nested_type_name(f: &PlanField) -> String {
+    match &f.reuse_fragment {
+        Some(frag) => format!("{frag}.Data"),
+        None => title_case(&f.response_key),
+    }
+}
+
 fn swift_type_for_field(f: &PlanField) -> String {
     match &f.output_shape {
         OutputShape::Leaf { nullable, list } => {
@@ -724,7 +736,7 @@ fn swift_type_for_field(f: &PlanField) -> String {
             if *nullable { format!("{list_ty}?") } else { list_ty }
         }
         OutputShape::Object { nullable, list } => {
-            let nested = title_case(&f.response_key);
+            let nested = nested_type_name(f);
             let list_ty = if *list { format!("[{nested}]") } else { nested };
             if *nullable { format!("{list_ty}?") } else { list_ty }
         }
@@ -822,9 +834,11 @@ fn render_selection_struct(
         s.push_str(&format!("{indent}    }}\n"));
     }
 
-    // Nested selection types for shared children.
+    // Nested selection types for shared children. Skip pure-fragment-
+    // spread positions — their type is the fragment's already-emitted
+    // `<FragmentName>.Data`, no duplicate nested struct here.
     for child in &shared {
-        if !child.children.is_empty() {
+        if !child.children.is_empty() && child.reuse_fragment.is_none() {
             s.push_str(&render_nested_type(child, &format!("{indent}    "), type_path, extensions));
         }
     }
@@ -844,12 +858,12 @@ fn render_selection_struct(
             s.push_str(&render_field_accessor(field, &format!("{indent}        ")));
         }
         for shared_child in &shared {
-            if !shared_child.children.is_empty() {
+            if !shared_child.children.is_empty() && shared_child.reuse_fragment.is_none() {
                 s.push_str(&render_nested_type(shared_child, &format!("{indent}        "), &as_path, extensions));
             }
         }
         for field in fields {
-            if !field.children.is_empty() {
+            if !field.children.is_empty() && field.reuse_fragment.is_none() {
                 s.push_str(&render_nested_type(field, &format!("{indent}        "), &as_path, extensions));
             }
         }
@@ -950,12 +964,20 @@ fn lower_camel_case(s: &str) -> String {
 fn factory_param_type(f: &PlanField, qualify_prefix: Option<&str>) -> String {
     match &f.output_shape {
         OutputShape::Object { nullable, list } => {
-            let nested = title_case(&f.response_key);
-            let qualified = match qualify_prefix {
-                Some(prefix) => format!("{prefix}.{nested}"),
-                None => nested,
+            // Reuse-fragment positions take the fragment's already-
+            // emitted `Data` type — same regardless of whether the
+            // field lives at parent or `AsX` scope, so no qualifier
+            // needed (the fragment lives at module scope).
+            let nested = if f.reuse_fragment.is_some() {
+                nested_type_name(f)
+            } else {
+                let raw = title_case(&f.response_key);
+                match qualify_prefix {
+                    Some(prefix) => format!("{prefix}.{raw}"),
+                    None => raw,
+                }
             };
-            let list_ty = if *list { format!("[{qualified}]") } else { qualified };
+            let list_ty = if *list { format!("[{nested}]") } else { nested };
             if *nullable { format!("{list_ty}?") } else { list_ty }
         }
         OutputShape::Leaf { .. } => swift_type_for_field(f),

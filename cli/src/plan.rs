@@ -58,6 +58,14 @@ pub struct PlanField {
     pub output_shape: OutputShape,
     pub sel_id: String,
     pub children: Vec<PlanField>,
+    /// Codegen-only: when this field's selection set is *exactly* one
+    /// fragment spread (no extra fields), the named fragment whose
+    /// `Data` should be reused as this field's typed shape. Lets the
+    /// emitter skip a duplicate nested struct and reference
+    /// `FragmentName.Data` instead — collapsing the per-position type
+    /// duplication that forced consumers to write a converter per
+    /// query that spreads the same fragment.
+    pub reuse_fragment: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -270,6 +278,11 @@ fn lower_field(f: &Field, parent_typename: &str, ctx: &CompilerContext, exec_doc
     let (is_connection, connection_key, connection_filters, connection_mode, page_args) =
         parse_connection_directive(&f.directives, &field_name, &expected_arg_names);
 
+    // Pure-fragment-spread provenance MUST be detected against the AST
+    // BEFORE lowering, since lowering inlines the fragment's selections
+    // and the "exactly one spread" property is irrecoverable afterwards.
+    let reuse_fragment = detect_pure_fragment_spread(&f.selection_set);
+
     let children = if f.selection_set.selections.is_empty() {
         Vec::new()
     } else {
@@ -304,7 +317,46 @@ fn lower_field(f: &Field, parent_typename: &str, ctx: &CompilerContext, exec_doc
         output_shape,
         sel_id,
         children,
+        reuse_fragment,
     }
+}
+
+/// Detects whether a field's selection set is a "pure" fragment spread —
+/// exactly one `...FragmentName` reference, with no other fields or
+/// inline fragments at the same scope. Pure-spread positions can reuse
+/// the fragment's already-emitted `Data` type instead of generating a
+/// fresh nested struct, deduplicating consumer-side converters across
+/// queries that spread the same fragment.
+///
+/// `__typename` field selections at the parent scope are tolerated:
+/// users sometimes write them explicitly, and cachebay auto-injects
+/// them anyway. They don't make the position non-pure.
+fn detect_pure_fragment_spread(sel_set: &SelectionSet) -> Option<String> {
+    let mut spread_name: Option<String> = None;
+    for selection in &sel_set.selections {
+        match selection {
+            Selection::Field(f) => {
+                // Tolerate user-written `__typename` — same field gets
+                // auto-injected anyway. Anything else (`id`, `title`,
+                // …) is an extra and disqualifies the position.
+                if f.name.as_str() != "__typename" {
+                    return None;
+                }
+            }
+            Selection::FragmentSpread(s) => {
+                if spread_name.is_some() {
+                    // Multiple spreads can't collapse to one type.
+                    return None;
+                }
+                spread_name = Some(s.fragment_name.to_string());
+            }
+            Selection::InlineFragment(_) => {
+                // Inline fragments add fields beyond the spread.
+                return None;
+            }
+        }
+    }
+    spread_name
 }
 
 fn synthetic_typename_field() -> PlanField {
@@ -323,6 +375,7 @@ fn synthetic_typename_field() -> PlanField {
         output_shape: OutputShape::Leaf { nullable: false, list: false },
         sel_id: "__typename:__typename".into(),
         children: vec![],
+        reuse_fragment: None,
     }
 }
 

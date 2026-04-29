@@ -8,6 +8,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 _No unreleased changes yet._
 
+## [0.6.0] — Pure-fragment-spread reuse in codegen
+
+### Added
+- **Codegen detects pure fragment spreads and reuses the fragment's emitted `Data` type at the parent position**, instead of emitting a structurally-identical fresh nested struct per query that spreads it. When a field's selection set is exactly `{ ...FragmentName }` (with no extra fields beyond the spread; user-written `__typename` is tolerated), the parent's typed accessor returns `[FragmentName.Data]` / `FragmentName.Data?` directly.
+
+  ```swift
+  // Before:
+  public struct ProjectFields {
+      public struct Data {
+          public struct Elements: OperationData { … 460 lines of duplicate Element machinery … }
+          public var elements: [Elements] { … }
+      }
+  }
+
+  // After:
+  public struct ProjectFields {
+      public struct Data {
+          public var elements: [ElementFields.Data] { … }
+      }
+  }
+  ```
+
+  The duplicate `AsVideoElement` / `AsAudioElement` / `AsImageElement` accessor trees and the duplicate factory methods at every parent position collapse to a single canonical site. Concretely in the `ferment-cuts-ios` consumer: `UserMessageFields.cachebay.swift` shrank from **1023 lines to 460** (-55%); `ProjectFields.cachebay.swift` shrank similarly. Every consumer-side converter that took `Project.Data.Project.Elements` *or* `UserMessageFields.Data.Attachments` *or* `ElementFields.Data` (three identical types) is now a single converter taking `ElementFields.Data`. **Polymorphic helpers across queries become possible** — a function that wants an Element from chat OR from a project query takes the same typed argument.
+
+### Detection rule
+- The position's selection set must contain exactly one `FragmentSpread` and zero other selections (Field / InlineFragment), with `__typename` field selections at the parent scope tolerated since cachebay auto-injects them anyway.
+- Multiple spreads on the same position, inline fragments at the parent scope, or any extra named field at the parent scope → fall back to the v0.5.0 "fresh nested struct + factories" behavior. Detection happens against the AST before lowering; once selections are merged, the property is irrecoverable.
+
+### Migration
+- **Source-breaking** for consumers who explicitly named the per-position type (e.g. `Project.Data.Project.Elements` → no longer exists, use `[ElementFields.Data]`). Callers using `for el in project.elements` without naming the element type are transparent. In `ferment-cuts-ios` this was ~10 sites; bulk-replace with `perl -pi -e` and the build catches the rest.
+- **Rerun `cachebay-cli` codegen** to pick up the dedup. v0.5.0 factories on per-position structs disappear for fields that now reuse the fragment type — call `FragmentName.Data.<subtype>(...)` from the canonical site.
+
+### Precedent
+- Relay-compiler reuses fragment data types directly at pure-spread positions; Apollo iOS solves the same problem via per-fragment protocol conformance. Cachebay matches Relay's simpler approach: the fragment's `Data` IS the reused type at every spread site.
+
 ## [0.5.0] — Compile-time fragment data factories
 
 ### Added
@@ -143,7 +178,8 @@ First public version. The library was developed and battle-tested as part of the
 - Test suite cross-checks behavior with cachebay-web file-by-file: documents (normalize/materialize/rootId), operations (queries/mutations/subscriptions × cache policies × invalidation × watcher state), queries (watchers, refcount), optimistic (entity, connection, fragment-plan-aware, layering, two-phase commit), canonical (pagination/leader/edge cases/replay), compiler (planner/metadata/dedupe/operations/connections/formats/fragments), performance (render-count assertions), integration (typed-API doc routing, evictAll, connection watcher).
 - 608 tests across the suite. CI runs on every PR via `.github/workflows/test.yml`.
 
-[Unreleased]: https://github.com/lockvoid/cachebay-ios/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/lockvoid/cachebay-ios/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/lockvoid/cachebay-ios/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/lockvoid/cachebay-ios/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/lockvoid/cachebay-ios/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/lockvoid/cachebay-ios/compare/v0.3.2...v0.3.3
