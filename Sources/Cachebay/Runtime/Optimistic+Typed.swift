@@ -54,6 +54,43 @@ public extension OptimisticBuilder {
     ) {
         delete(.key("\(canonicalTypename(F.onTypename)):\(id)"))
     }
+
+    /// Typed plan-aware optimistic write. Pass the fragment, the bare
+    /// entity id, optional variables, and a typed `F.Data` containing
+    /// the entity tree to normalize. Nested entity-shaped fields
+    /// (single + list) become their own cache records linked by
+    /// `.ref` / `.refList`. The cache key is built as
+    /// `"\(canonicalTypename(F.onTypename)):\(id)"`.
+    ///
+    /// ```swift
+    /// b.writeFragment(fragment: ProjectMessageFields.self, id: userId,
+    ///                 data: messageData)
+    /// ```
+    func writeFragment<F: Fragment, ID: LosslessStringConvertible>(
+        fragment: F.Type,
+        id: ID,
+        variables: F.Variables,
+        data: F.Data
+    ) {
+        let cacheKey: CacheKey = "\(canonicalTypename(F.onTypename)):\(id)"
+        writeFragment(
+            document: F.document,
+            fragmentName: F.fragmentName,
+            rootId: cacheKey,
+            variables: variables.__cachebay,
+            data: data.__data
+        )
+    }
+
+    /// Variable-less convenience overload — most fragments don't take
+    /// variables, so callers shouldn't have to write `.init()`.
+    func writeFragment<F: Fragment, ID: LosslessStringConvertible>(
+        fragment: F.Type,
+        id: ID,
+        data: F.Data
+    ) where F.Variables == EmptyVariables {
+        writeFragment(fragment: fragment, id: id, variables: .init(), data: data)
+    }
 }
 
 public extension ConnectionAPI {

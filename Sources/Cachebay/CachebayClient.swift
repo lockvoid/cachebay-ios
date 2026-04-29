@@ -150,7 +150,7 @@ public final class CachebayClient: @unchecked Sendable {
         let documents = Documents(graph: graph, planner: planner, canonical: canonical, logger: options.logger)
         let queries = Queries(graph: graph, planner: planner, documents: documents, logger: options.logger)
         let fragments = Fragments(planner: planner, documents: documents)
-        let optimistic = Optimistic(graph: graph, planner: planner)
+        let optimistic = Optimistic(graph: graph, planner: planner, documents: documents)
         canonical.setReplayer(optimistic)
         let operations = Operations(
             transport: options.transport, planner: planner, documents: documents, queries: queries,

@@ -158,6 +158,35 @@ public protocol OptimisticBuilder: AnyObject, Sendable {
     /// Used by the typed `patch<F>(fragment:id:_:)` overloads so a
     /// variant-rooted fragment lands on the canonical entity key.
     func canonicalTypename(_ typename: String) -> String
+    /// Plan-aware optimistic write. Walks the fragment plan + data,
+    /// captures baselines for every entity record it touches, and
+    /// normalizes nested entities (single + list) into separate cache
+    /// records linked by `.ref` / `.refList`. Mirrors
+    /// `CachebayClient.writeFragment` but goes through the optimistic
+    /// layer — `revert()` / `dispose()` work, layered commit replays
+    /// surviving siblings correctly.
+    ///
+    /// Use for OPTIMISTIC CREATE flows where a fresh entity tree is
+    /// built client-side (e.g. an outbound chat message + its
+    /// attachments). The strict materializer requires `.ref` /
+    /// `.refList` for selection-set link fields, so embedded objects
+    /// silence the watcher with "unexpected link shape" — this method
+    /// produces the right shape automatically.
+    ///
+    /// Limitation: only entity-shaped records (objects with
+    /// `__typename + id`) get baselines captured. Inline-container
+    /// synthetic keys (e.g. `Element:42.derivatives.0`) write into the
+    /// graph but aren't tracked for revert. For fresh-create flows
+    /// this is harmless (no prior state to restore); flows that
+    /// optimistically mutate pre-existing inline containers should
+    /// stay on `b.patch(...)`.
+    func writeFragment(
+        document: QueryDocument,
+        fragmentName: String,
+        rootId: CacheKey,
+        variables: [String: JSONValue],
+        data: [String: JSONValue]
+    )
 }
 
 public protocol ConnectionAPI: AnyObject, Sendable {
@@ -182,6 +211,7 @@ public protocol ConnectionAPI: AnyObject, Sendable {
 public final class Optimistic: @unchecked Sendable {
     private let graph: Graph
     private let planner: Planner?
+    private let documents: Documents?
     private let lock = NSRecursiveLock()
 
     fileprivate enum EntityOpKind: Sendable { case write(patch: [String: JSONValue], mode: EntityPatchMode); case delete }
@@ -211,9 +241,10 @@ public final class Optimistic: @unchecked Sendable {
     /// any layer. Restored on revert/commit before replaying surviving layers.
     private var committedBaselines: [CacheKey: [String: JSONValue]?] = [:]
 
-    public init(graph: Graph, planner: Planner? = nil) {
+    public init(graph: Graph, planner: Planner? = nil, documents: Documents? = nil) {
         self.graph = graph
         self.planner = planner
+        self.documents = documents
     }
 
     public func modifyOptimistic(_ builder: @escaping @Sendable (_ tx: OptimisticBuilder, _ ctx: BuilderContext) -> Void) -> OptimisticTransaction {
@@ -906,6 +937,61 @@ public final class Optimistic: @unchecked Sendable {
 
         func canonicalTypename(_ typename: String) -> String {
             optimistic.graph.canonicalTypename(typename)
+        }
+
+        func writeFragment(
+            document: QueryDocument,
+            fragmentName: String,
+            rootId: CacheKey,
+            variables: [String: JSONValue],
+            data: [String: JSONValue]
+        ) {
+            // Need both the planner (to resolve the fragment plan) and
+            // the documents engine (to perform the normalize). Both are
+            // wired by `CachebayClient.init`; missing them is a
+            // misconfigured Optimistic instance — silently no-op rather
+            // than crash, mirroring how plan-aware addNode degrades.
+            guard let planner = optimistic.planner,
+                  let documents = optimistic.documents,
+                  let plan = try? planner.getPlan(document, fragmentName: fragmentName)
+            else { return }
+
+            // Capture baselines for every entity record the data tree
+            // identifies, BEFORE handing off to `documents.normalize`.
+            // The normalize machinery walks the plan + data, writes
+            // each entity at its canonical key and links them via
+            // `.ref` / `.refList` — but it doesn't capture baselines.
+            // We pre-walk the data shape to cover the entity universe
+            // we're about to touch; revert restores those records to
+            // their pre-write snapshot.
+            if recording {
+                optimistic.captureBaseline(layer, recordId: rootId)
+                optimistic.captureBaselinesForEntityTree(layer, data: .object(data))
+            }
+
+            documents.normalize(plan: plan, variables: variables, data: .object(data), rootId: rootId)
+        }
+    }
+
+    /// Walk a data tree and capture baselines for every object that
+    /// resolves to an entity cache key (`__typename + id`). Recurses
+    /// into nested objects and arrays — sibling to
+    /// `documents.normalize`'s entity-walking, but baseline-only.
+    fileprivate func captureBaselinesForEntityTree(_ layer: Layer, data: JSONValue) {
+        switch data {
+        case .object(let obj):
+            if let key = graph.identify(obj) {
+                captureBaseline(layer, recordId: key)
+            }
+            for (_, v) in obj {
+                captureBaselinesForEntityTree(layer, data: v)
+            }
+        case .array(let arr):
+            for item in arr {
+                captureBaselinesForEntityTree(layer, data: item)
+            }
+        default:
+            break
         }
     }
 

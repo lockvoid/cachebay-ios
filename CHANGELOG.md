@@ -8,6 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 _No unreleased changes yet._
 
+## [0.4.0] — Optimistic `writeFragment` (normalize-with-baselines)
+
+### Added
+- **`OptimisticBuilder.writeFragment(...)`** — plan-aware optimistic write that walks the fragment plan + data, captures baselines for every entity record it touches, and normalizes nested entities (single + list) into separate cache records linked by `.ref` / `.refList`. Mirrors `CachebayClient.writeFragment` but goes through the optimistic layer — `revert()` / `dispose()` work, layered commit replays surviving siblings correctly. Use for OPTIMISTIC CREATE flows where a fresh entity tree is built client-side (e.g. an outbound chat message + its attachments). The strict materializer requires `.ref` / `.refList` for selection-set link fields, so embedded objects (`.array of .object`) silence the watcher with "unexpected link shape" — `writeFragment` produces the right shape automatically.
+
+  ```swift
+  client.modifyOptimistic { b, _ in
+      b.writeFragment(fragment: ProjectMessageFields.self, id: userId, data: messageData)
+  }
+  ```
+
+  Exposed in two forms: a JSON-shaped primitive on the protocol (`document:fragmentName:rootId:variables:data:`), and typed extensions in `Optimistic+Typed.swift` (`fragment:id:[variables:]data:`). The variable-less overload covers fragments with `Variables == EmptyVariables`.
+
+### Limitation
+- Only entity-shaped records (objects with `__typename + id`) get baselines captured. Inline-container synthetic keys (e.g. `Element:42.derivatives.0`) write into the graph but aren't tracked for revert. For fresh-create flows this is harmless (no prior state to restore); flows that optimistically MUTATE pre-existing inline containers should stay on `b.patch(...)`.
+
+### Internals
+- `Optimistic.init(graph:planner:documents:)` now takes the `Documents` engine so the optimistic layer can route writes through `documents.normalize` while injecting baseline captures. Pre-1.0 internal-only signature change; `CachebayClient.init` is the only caller.
+
 ## [0.3.3] — Stable codegen source paths
 
 ### Fixed
@@ -99,7 +118,8 @@ First public version. The library was developed and battle-tested as part of the
 - Test suite cross-checks behavior with cachebay-web file-by-file: documents (normalize/materialize/rootId), operations (queries/mutations/subscriptions × cache policies × invalidation × watcher state), queries (watchers, refcount), optimistic (entity, connection, fragment-plan-aware, layering, two-phase commit), canonical (pagination/leader/edge cases/replay), compiler (planner/metadata/dedupe/operations/connections/formats/fragments), performance (render-count assertions), integration (typed-API doc routing, evictAll, connection watcher).
 - 608 tests across the suite. CI runs on every PR via `.github/workflows/test.yml`.
 
-[Unreleased]: https://github.com/lockvoid/cachebay-ios/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/lockvoid/cachebay-ios/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/lockvoid/cachebay-ios/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/lockvoid/cachebay-ios/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/lockvoid/cachebay-ios/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/lockvoid/cachebay-ios/compare/v0.3.0...v0.3.1
