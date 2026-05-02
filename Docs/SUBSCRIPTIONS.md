@@ -221,7 +221,7 @@ final class WSStateMonitor {
             case .unauthorized(let code):    state = .stopped(reason: .unauthorized(code: code))
             case .maxAttemptsExceeded:       state = .stopped(reason: .maxAttemptsExceeded)
             }
-        case .disconnected, .messageSent, .messageReceived:
+        case .disconnected, .messageSent, .messageReceived, .subscriptionsChanged:
             break  // either reconnect kicks in, or .stopped follows
         }
     }

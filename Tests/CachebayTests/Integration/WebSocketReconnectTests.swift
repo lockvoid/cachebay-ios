@@ -721,6 +721,403 @@ final class WebSocketReconnectTests: XCTestCase {
             "ping timer must stop on disconnect — got \(beforeDisconnect) before, \(afterDisconnect) after")
     }
 
+    // MARK: - subscriptionsChanged(active:) event
+    //
+    // The transport emits `subscriptionsChanged(active:)` on every
+    // count transition — register (+1), unregister/complete/error
+    // (−1), and bulk drain on `disconnect()` / terminal stop (→ 0).
+    // It DOES NOT emit on `markSubscriptionLive` (status flip; count
+    // unchanged) nor on the auto-reconnect cycle (subscriptions are
+    // preserved across the gap, not removed).
+    //
+    // Payload is captured under `lock` at the moment of the mutation
+    // — the `emitLocked` path keeps mutation+emit atomic so concurrent
+    // registers can't reorder the count sequence consumers see.
+    private func collectSubscriptionCounts(_ events: [URLSessionWebSocketTransport.ConnectionEvent]) -> [Int] {
+        events.compactMap { ev in
+            if case .subscriptionsChanged(let n) = ev { return n }
+            return nil
+        }
+    }
+
+    /// `subscribe()` emits `subscriptionsChanged(active: 1)`. Stream
+    /// teardown (consumer cancel) emits `subscriptionsChanged(active: 0)`.
+    func test_subscriptionsChanged_subscribeAndCancel_emitsOneThenZero() async throws {
+        let ws = URLSessionWebSocketTransport(
+            url: URL(string: "wss://example.test/graphql")!
+        )
+        ws._testOutboundSink = { _ in }
+        ws._testForceState(.connecting, acked: false)
+
+        let eventStream = ws.events()
+        let collected = ConnectionEventCollector()
+        let drainer = Task<Void, Never> {
+            for await ev in eventStream { collected.append(ev) }
+        }
+
+        let stream = ws.subscribe(WSContext(query: "subscription { x }", variables: [:]))
+        let consumer = Task<Void, Never> {
+            do { for try await _ in stream {} } catch { /* expected */ }
+        }
+        try await Task.sleep(nanoseconds: 30_000_000)
+
+        let afterRegister = collectSubscriptionCounts(collected.snapshot())
+        XCTAssertEqual(afterRegister, [1],
+            "subscribe() must emit subscriptionsChanged(1); got \(afterRegister)")
+
+        consumer.cancel()
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        let afterCancel = collectSubscriptionCounts(collected.snapshot())
+        XCTAssertEqual(afterCancel, [1, 0],
+            "consumer cancel must emit subscriptionsChanged(0); got \(afterCancel)")
+
+        drainer.cancel()
+    }
+
+    /// Multiple subscriptions accumulate the count, and individual
+    /// terminations decrement it. Counts MUST observe in monotonic
+    /// arithmetic order — no skips, no out-of-order emits.
+    func test_subscriptionsChanged_multipleSubs_countTracksAccurately() async throws {
+        let ws = URLSessionWebSocketTransport(
+            url: URL(string: "wss://example.test/graphql")!
+        )
+        ws._testOutboundSink = { _ in }
+        ws._testForceState(.connecting, acked: false)
+
+        let eventStream = ws.events()
+        let collected = ConnectionEventCollector()
+        let drainer = Task<Void, Never> {
+            for await ev in eventStream { collected.append(ev) }
+        }
+
+        let s1 = ws.subscribe(WSContext(query: "subscription { a }", variables: [:]))
+        let c1 = Task<Void, Never> { do { for try await _ in s1 {} } catch {} }
+        try await Task.sleep(nanoseconds: 10_000_000)
+
+        let s2 = ws.subscribe(WSContext(query: "subscription { b }", variables: [:]))
+        let c2 = Task<Void, Never> { do { for try await _ in s2 {} } catch {} }
+        try await Task.sleep(nanoseconds: 10_000_000)
+
+        let s3 = ws.subscribe(WSContext(query: "subscription { c }", variables: [:]))
+        let c3 = Task<Void, Never> { do { for try await _ in s3 {} } catch {} }
+        try await Task.sleep(nanoseconds: 30_000_000)
+
+        let countsAfterAll = collectSubscriptionCounts(collected.snapshot())
+        XCTAssertEqual(countsAfterAll, [1, 2, 3],
+            "three sequential subscribes must emit 1, 2, 3 in order; got \(countsAfterAll)")
+
+        c2.cancel()
+        try await Task.sleep(nanoseconds: 30_000_000)
+        c1.cancel()
+        try await Task.sleep(nanoseconds: 30_000_000)
+        c3.cancel()
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        let final = collectSubscriptionCounts(collected.snapshot())
+        XCTAssertEqual(final, [1, 2, 3, 2, 1, 0],
+            "decrements must be monotonic; got \(final)")
+
+        drainer.cancel()
+    }
+
+    /// Server-initiated `complete` frame ends the subscription and
+    /// emits `subscriptionsChanged(active: 0)`.
+    func test_subscriptionsChanged_serverComplete_emitsDecrement() async throws {
+        let ws = URLSessionWebSocketTransport(
+            url: URL(string: "wss://example.test/graphql")!
+        )
+        ws._testOutboundSink = { _ in }
+        ws._testForceState(.connecting, acked: false)
+
+        let eventStream = ws.events()
+        let collected = ConnectionEventCollector()
+        let drainer = Task<Void, Never> {
+            for await ev in eventStream { collected.append(ev) }
+        }
+
+        let stream = ws.subscribe(WSContext(query: "subscription { x }", variables: [:]))
+        let consumer = Task<Void, Never> {
+            do { for try await _ in stream {} } catch { /* expected */ }
+        }
+        try await Task.sleep(nanoseconds: 20_000_000)
+
+        // Drive the awaiting subscriber to a fully-subscribed state so
+        // the registry has a stable id for us to target.
+        ws._testInjectInbound(#"{"type":"connection_ack"}"#)
+        try await Task.sleep(nanoseconds: 30_000_000)
+
+        // Server says "we're done with this subscription".
+        ws._testInjectInbound(#"{"id":"sub-1","type":"complete"}"#)
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        let counts = collectSubscriptionCounts(collected.snapshot())
+        XCTAssertEqual(counts, [1, 0],
+            "server `complete` must emit subscriptionsChanged(0); got \(counts)")
+
+        consumer.cancel()
+        drainer.cancel()
+    }
+
+    /// Server-initiated `error` frame ends the subscription with an
+    /// error and emits `subscriptionsChanged(active: 0)`.
+    func test_subscriptionsChanged_serverError_emitsDecrement() async throws {
+        let ws = URLSessionWebSocketTransport(
+            url: URL(string: "wss://example.test/graphql")!
+        )
+        ws._testOutboundSink = { _ in }
+        ws._testForceState(.connecting, acked: false)
+
+        let eventStream = ws.events()
+        let collected = ConnectionEventCollector()
+        let drainer = Task<Void, Never> {
+            for await ev in eventStream { collected.append(ev) }
+        }
+
+        let stream = ws.subscribe(WSContext(query: "subscription { x }", variables: [:]))
+        let consumer = Task<Void, Never> {
+            do { for try await _ in stream {} } catch { /* expected */ }
+        }
+        try await Task.sleep(nanoseconds: 20_000_000)
+        ws._testInjectInbound(#"{"type":"connection_ack"}"#)
+        try await Task.sleep(nanoseconds: 30_000_000)
+
+        ws._testInjectInbound(#"{"id":"sub-1","type":"error","payload":[{"message":"boom"}]}"#)
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        let counts = collectSubscriptionCounts(collected.snapshot())
+        XCTAssertEqual(counts, [1, 0],
+            "server `error` must emit subscriptionsChanged(0); got \(counts)")
+
+        consumer.cancel()
+        drainer.cancel()
+    }
+
+    /// `markSubscriptionLive` flips `.pending → .subscribed` without
+    /// changing count — it MUST NOT emit `subscriptionsChanged`.
+    /// Drives a full register → ack → send-subscribe → live cycle and
+    /// asserts only the initial register emit fires.
+    func test_subscriptionsChanged_markLive_doesNotEmit() async throws {
+        let ws = URLSessionWebSocketTransport(
+            url: URL(string: "wss://example.test/graphql")!
+        )
+        ws._testOutboundSink = { _ in }
+        ws._testForceState(.connecting, acked: false)
+
+        let eventStream = ws.events()
+        let collected = ConnectionEventCollector()
+        let drainer = Task<Void, Never> {
+            for await ev in eventStream { collected.append(ev) }
+        }
+
+        let stream = ws.subscribe(WSContext(query: "subscription { x }", variables: [:]))
+        let consumer = Task<Void, Never> {
+            do { for try await _ in stream {} } catch { /* cancel */ }
+        }
+        try await Task.sleep(nanoseconds: 20_000_000)
+
+        ws._testInjectInbound(#"{"type":"connection_ack"}"#)
+        // Wait long enough for the awaiting Task to wake, send its
+        // subscribe frame, and call markSubscriptionLive.
+        try await Task.sleep(nanoseconds: 80_000_000)
+
+        let counts = collectSubscriptionCounts(collected.snapshot())
+        XCTAssertEqual(counts, [1],
+            "markSubscriptionLive must NOT emit a count event (count is unchanged); got \(counts)")
+
+        consumer.cancel()
+        drainer.cancel()
+    }
+
+    /// `disconnect()` drains every active subscription — the bulk
+    /// teardown emits exactly one `subscriptionsChanged(active: 0)`,
+    /// not one per subscription.
+    func test_subscriptionsChanged_disconnectDrainsAndEmitsZero() async throws {
+        let ws = URLSessionWebSocketTransport(
+            url: URL(string: "wss://example.test/graphql")!
+        )
+        ws._testOutboundSink = { _ in }
+        ws._testForceState(.connecting, acked: false)
+
+        let eventStream = ws.events()
+        let collected = ConnectionEventCollector()
+        let drainer = Task<Void, Never> {
+            for await ev in eventStream { collected.append(ev) }
+        }
+
+        let s1 = ws.subscribe(WSContext(query: "subscription { a }", variables: [:]))
+        let c1 = Task<Void, Never> { do { for try await _ in s1 {} } catch {} }
+        let s2 = ws.subscribe(WSContext(query: "subscription { b }", variables: [:]))
+        let c2 = Task<Void, Never> { do { for try await _ in s2 {} } catch {} }
+        try await Task.sleep(nanoseconds: 30_000_000)
+
+        ws.disconnect()
+        try await Task.sleep(nanoseconds: 80_000_000)
+
+        let counts = collectSubscriptionCounts(collected.snapshot())
+        XCTAssertEqual(counts, [1, 2, 0],
+            "disconnect() must emit a single subscriptionsChanged(0) for the bulk drain; got \(counts)")
+
+        c1.cancel(); c2.cancel(); drainer.cancel()
+    }
+
+    /// `disconnect()` on an empty registry MUST NOT emit a spurious
+    /// `subscriptionsChanged(0)` — guard against 0→0 noise in
+    /// telemetry / UI.
+    func test_subscriptionsChanged_emptyDisconnect_doesNotEmitZero() async throws {
+        let ws = URLSessionWebSocketTransport(
+            url: URL(string: "wss://example.test/graphql")!
+        )
+        let eventStream = ws.events()
+        let collected = ConnectionEventCollector()
+        let drainer = Task<Void, Never> {
+            for await ev in eventStream { collected.append(ev) }
+        }
+        try await Task.sleep(nanoseconds: 10_000_000)
+
+        ws.disconnect()
+        try await Task.sleep(nanoseconds: 30_000_000)
+
+        let counts = collectSubscriptionCounts(collected.snapshot())
+        XCTAssertEqual(counts, [],
+            "disconnect() with no subscriptions must NOT emit subscriptionsChanged; got \(counts)")
+
+        drainer.cancel()
+    }
+
+    /// Server-initiated `connection_error` parks the transport in
+    /// `.stopped(.unauthorized)` and drains pending subscriptions —
+    /// the drain must emit `subscriptionsChanged(active: 0)`.
+    func test_subscriptionsChanged_terminalStopDrainsAndEmitsZero() async throws {
+        let ws = URLSessionWebSocketTransport(
+            url: URL(string: "wss://example.test/graphql")!
+        )
+        ws._testOutboundSink = { _ in }
+        ws._testForceState(.connecting, acked: false)
+
+        let eventStream = ws.events()
+        let collected = ConnectionEventCollector()
+        let drainer = Task<Void, Never> {
+            for await ev in eventStream { collected.append(ev) }
+        }
+
+        let stream = ws.subscribe(WSContext(query: "subscription { x }", variables: [:]))
+        let consumer = Task<Void, Never> {
+            do { for try await _ in stream {} } catch { /* expected */ }
+        }
+        try await Task.sleep(nanoseconds: 30_000_000)
+
+        // Server rejects the handshake — terminal stop with drain.
+        ws._testInjectInbound(#"{"type":"connection_error"}"#)
+        try await Task.sleep(nanoseconds: 80_000_000)
+
+        let counts = collectSubscriptionCounts(collected.snapshot())
+        XCTAssertEqual(counts, [1, 0],
+            "terminal stop must drain subscriptions and emit subscriptionsChanged(0); got \(counts)")
+
+        consumer.cancel()
+        drainer.cancel()
+    }
+
+    /// Auto-reconnect preserves subscriptions across the gap — the
+    /// transport must NOT emit any `subscriptionsChanged` events
+    /// during a `.disconnected` → `.reconnecting` → ack cycle.
+    func test_subscriptionsChanged_reconnectCycle_doesNotEmit() async throws {
+        let clock = FakeClock()
+        let ws = URLSessionWebSocketTransport(
+            url: URL(string: "wss://example.test/graphql")!,
+            reconnectPolicy: ReconnectPolicy(
+                initialDelay: 0.05, maxDelay: 0.1,
+                multiplier: 2.0, jitter: 0, maxAttempts: 1
+            ),
+            clock: clock
+        )
+        ws._testOutboundSink = { _ in }
+
+        // Subscribe to the events stream BEFORE seeding the registry —
+        // otherwise the `_testRegisterSubscribed` emit lands while the
+        // continuation is still nil and is dropped on the floor.
+        let eventStream = ws.events()
+        let collected = ConnectionEventCollector()
+        let drainer = Task<Void, Never> {
+            for await ev in eventStream { collected.append(ev) }
+        }
+
+        ws._testForceState(.connected, acked: true)
+        ws._testRegisterSubscribed(id: "sub-prev", query: "subscription { y }", variables: [:])
+
+        try await Task.sleep(nanoseconds: 30_000_000)
+        let beforeReconnect = collectSubscriptionCounts(collected.snapshot())
+        XCTAssertEqual(beforeReconnect, [1],
+            "_testRegisterSubscribed sets the baseline at 1; got \(beforeReconnect)")
+
+        // Provoke an unexpected disconnect via the receive-loop path
+        // simulation: a non-finishing teardown that preserves subs.
+        // We use the real teardown plumbing by injecting the
+        // `subscribe` Task's send error: drive `disconnect-with-keep`
+        // through the same internal API the receive loop calls.
+        // Easiest reproducible path: drop and trigger the reconnector.
+        // Without a real socket we approximate by forcing state to
+        // `.disconnected` and starting the reconnector via reconnect().
+        ws._testForceState(.disconnected, acked: false)
+        ws.reconnect()
+        try await Task.sleep(nanoseconds: 80_000_000)
+
+        // Now drive the reconnector forward enough to land an ack and
+        // close out the loop.
+        ws._testInjectInbound(#"{"type":"connection_ack"}"#)
+        try await Task.sleep(nanoseconds: 80_000_000)
+
+        let counts = collectSubscriptionCounts(collected.snapshot())
+        XCTAssertEqual(counts, [1],
+            "reconnect cycle must NOT emit additional subscriptionsChanged events (subs preserved); got \(counts)")
+
+        drainer.cancel()
+    }
+
+    /// Ordering invariant: `subscriptionsChanged(1)` is observed on
+    /// the events stream before any of the subscribe()-spawned Task's
+    /// downstream events (`.connecting`, `.messageSent(connection_init)`,
+    /// etc). Captures the under-lock emit guarantee.
+    func test_subscriptionsChanged_ordering_emittedBeforeConnectingEvent() async throws {
+        let ws = URLSessionWebSocketTransport(
+            url: URL(string: "wss://example.test/graphql")!
+        )
+        ws._testOutboundSink = { _ in }
+
+        let eventStream = ws.events()
+        let collected = ConnectionEventCollector()
+        let drainer = Task<Void, Never> {
+            for await ev in eventStream { collected.append(ev) }
+        }
+        try await Task.sleep(nanoseconds: 10_000_000)
+
+        let stream = ws.subscribe(WSContext(query: "subscription { x }", variables: [:]))
+        let consumer = Task<Void, Never> {
+            do { for try await _ in stream {} } catch { /* cancel */ }
+        }
+        try await Task.sleep(nanoseconds: 60_000_000)
+
+        let events = collected.snapshot()
+        let countIdx = events.firstIndex {
+            if case .subscriptionsChanged = $0 { return true }
+            return false
+        }
+        let connectingIdx = events.firstIndex {
+            if case .connecting = $0 { return true }
+            return false
+        }
+        XCTAssertNotNil(countIdx,
+            "subscriptionsChanged(1) was never emitted; events=\(events)")
+        XCTAssertNotNil(connectingIdx,
+            "connecting was never emitted; events=\(events)")
+        XCTAssertLessThan(countIdx ?? .max, connectingIdx ?? .min,
+            "subscriptionsChanged(1) must be emitted under-lock from registerSubscription, BEFORE the spawned Task emits .connecting; events=\(events)")
+
+        consumer.cancel()
+        drainer.cancel()
+    }
+
     // MARK: - Duplicate-disconnect collapse
     //
     // Each physical socket failure can trip BOTH the send path

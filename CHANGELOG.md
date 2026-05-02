@@ -6,7 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-_No unreleased changes yet._
+### Added
+- **`URLSessionWebSocketTransport.ConnectionEvent.subscriptionsChanged(active: Int)`** — emitted on every live-subscription count transition. Fires on `subscribe()` registration (+1), per-subscription teardown via consumer cancel / server `complete` / server `error` (−1), and bulk drains via `disconnect()` / terminal `stopWithTerminalReason` (→ 0). It does NOT fire on the auto-reconnect cycle (subscriptions are preserved across the gap), nor on the internal `.pending → .subscribed` status flip (count is unchanged), nor on bulk drains of an already-empty registry (no spurious 0→0 events).
+
+  Use it to drive UI ("N subscriptions live"), telemetry, or to gate background-refresh logic on whether anything is listening.
+
+  The `active` payload is captured **under `lock`** at the moment of the mutation — concurrent register/unregister callers can't reorder the count sequence consumers observe. (Internal: introduces an `emitLocked(_:)` helper that yields without releasing the lock; safe because `AsyncStream.Continuation.yield` is non-blocking and `onTermination` runs from the consumer's task, not synchronously from yield.)
+
+### Source compatibility
+- The new enum case is **source-breaking for downstream `switch` statements that don't have a `default` / `@unknown default`**. The cachebay-shipped consumer wiring example in `Docs/SUBSCRIPTIONS.md` was updated to fold the new case into the existing no-op branch.
 
 ## [0.6.0] — Pure-fragment-spread reuse in codegen
 

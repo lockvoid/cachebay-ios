@@ -169,6 +169,13 @@ public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendabl
         case disconnected(reason: DisconnectReason)
         case reconnectScheduled(attempt: Int, delay: TimeInterval)
         case stopped(reason: TerminalReason)
+        /// Emitted after the live subscription count changes. The
+        /// `active` payload is captured under `lock` at the moment of
+        /// the mutation, so consumers can drive UI / telemetry off
+        /// monotonic count transitions without racing the registry.
+        /// Not emitted on `markSubscriptionLive` (status flip only,
+        /// count unchanged).
+        case subscriptionsChanged(active: Int)
     }
 
     /// Why a disconnect happened. `userClosed` is the explicit
@@ -390,6 +397,7 @@ public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendabl
         subscriptions[id] = ActiveSubscription(id: id, query: query, variables: variables,
                                                 yield: yield, finish: finish,
                                                 status: .pending)
+        emitLocked(.subscriptionsChanged(active: subscriptions.count))
         lock.unlock()
     }
 
@@ -404,7 +412,10 @@ public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendabl
 
     private func unregisterSubscription(id: String) {
         lock.lock()
-        subscriptions.removeValue(forKey: id)
+        let removed = subscriptions.removeValue(forKey: id) != nil
+        if removed {
+            emitLocked(.subscriptionsChanged(active: subscriptions.count))
+        }
         lock.unlock()
     }
 
@@ -867,7 +878,11 @@ public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendabl
         backoffSleepTask?.cancel()
         backoffSleepTask = nil
         let subs = subscriptions
+        let hadSubs = !subscriptions.isEmpty
         subscriptions.removeAll()
+        if hadSubs {
+            emitLocked(.subscriptionsChanged(active: 0))
+        }
         _state = .stopped(reason: reason)
         lock.unlock()
 
@@ -916,8 +931,12 @@ public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendabl
         let prevPingTimer = pingTimerTask
         pingTimerTask = nil
         acked = false
+        let hadSubs = finishSubscriptions && !subscriptions.isEmpty
         let subs = finishSubscriptions ? subscriptions : [:]
         if finishSubscriptions { subscriptions.removeAll() }
+        if hadSubs {
+            emitLocked(.subscriptionsChanged(active: 0))
+        }
         if let nextState { _state = nextState }
         lock.unlock()
 
@@ -1003,6 +1022,7 @@ public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendabl
             yield: { _ in }, finish: { _ in },
             status: .subscribed
         )
+        emitLocked(.subscriptionsChanged(active: subscriptions.count))
         lock.unlock()
     }
 
@@ -1019,6 +1039,28 @@ public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendabl
         let cont = eventContinuation
         lock.unlock()
         cont?.yield(event)
+    }
+
+    /// Yield an event while the caller already holds `lock`. Use this
+    /// only when the event payload IS a snapshot of locked state (e.g.
+    /// the subscription count) — otherwise the unlock-then-yield
+    /// pattern of `emit(_:)` is preferred.
+    ///
+    /// Why under-lock is required for `subscriptionsChanged`: dropping
+    /// the lock between the mutation and the yield opens a window in
+    /// which a concurrent register/unregister can mutate the count
+    /// AND yield its own event first, reordering the count sequence
+    /// observed by consumers. Holding the lock across the yield keeps
+    /// the mutation and the emit atomic.
+    ///
+    /// Safe vs. deadlock: `AsyncStream.Continuation.yield(_:)` is
+    /// non-blocking — it enqueues into the stream's bounded buffer
+    /// (`bufferingNewest(64)`) and returns. The only callback the
+    /// continuation can run synchronously from `yield` is `onTermination`,
+    /// and we only set that to a closure that schedules a Task — it
+    /// never re-enters the lock from this stack frame.
+    private func emitLocked(_ event: ConnectionEvent) {
+        eventContinuation?.yield(event)
     }
 }
 
