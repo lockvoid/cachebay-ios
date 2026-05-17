@@ -60,10 +60,10 @@ Reads walk the plan against the graph and produce typed `Data` (typed via codege
 `client.modifyOptimistic { tx, ctx in … }` opens a **layer**:
 
 ```swift
-let tx = client.modifyOptimistic { b, _ in
+let tx = client.modifyOptimistic { b in
     b.patch(.key("Spell:42"), ["title": "Draft"], mode: .merge)
     let c = b.connection(ConnectionSelector(parent: .key("Query"), key: "spells"))
-    c.addNode(["__typename": "Spell", "id": "tmp:1", "title": "Draft"], options: AddNodeOptions(position: .start))
+    c.linkNode(["__typename": "Spell", "id": "tmp:1", "title": "Draft"], options: LinkNodeOptions(position: .start))
 }
 ```
 
@@ -109,7 +109,7 @@ Details: [STORAGE.md](./STORAGE.md).
 ## 8) Performance principles
 
 - **Pointer-chasing only** — `__ref` hops + `O(1)` Map lookups, no deep tree walks.
-- **No edge-list scans** — `ConnectionIndex` (`nodeKey → edgeKey`) makes addNode/removeNode `O(1)` regardless of connection size.
+- **No edge-list scans** — `ConnectionIndex` (`nodeKey → edgeKey`) makes linkNode/unlinkNode `O(1)` regardless of connection size.
 - **Idempotent merges** — replays, retries, out-of-order pages all converge.
 - **Locks > actors** — synchronous reads, recursive lock for legitimate re-entrancy, callbacks fired *outside* the lock. See [SETUP.md](./SETUP.md#concurrency-model).
 - **Pre-baked plans** — codegen emits `CachePlan` literals; runtime skips parse/lower entirely.

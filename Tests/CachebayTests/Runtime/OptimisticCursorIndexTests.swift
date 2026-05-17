@@ -95,16 +95,15 @@ final class OptimisticCursorIndexTests: XCTestCase {
         // Capture local copies so the @Sendable closure doesn't capture
         // `self`.
         let key = canonicalKey
-        client.modifyOptimistic { b, _ in
-            b.connection(key: key).addNode(
-                [
-                    "__typename": .string("Post"),
+        client.modifyOptimistic { b in
+            b.connection(key: key).linkNode(
+                .object([
+                    CachebayConstants.typenameField: .string("Post"),
                     "id": .string("p0"),
-                    "title": .string("Optimistic"),
-                ],
-                options: AddNodeOptions(position: .start, edge: ["cursor": .string("c0")])
+                ]),
+                options: LinkNodeOptions(position: .start, edge: ["cursor": .string("c0")])
             )
-        }.commit(nil)
+        }.dispose()
 
         // After prepend at index 0:
         // - new entry: c0 → 0
@@ -123,9 +122,9 @@ final class OptimisticCursorIndexTests: XCTestCase {
 
         // Optimistic remove of p1 (at position 0).
         let key = canonicalKey
-        client.modifyOptimistic { b, _ in
-            b.connection(key: key).removeNode(.key("Post:p1"))
-        }.commit(nil)
+        client.modifyOptimistic { b in
+            b.connection(key: key).unlinkNode(.key("Post:p1"))
+        }.dispose()
 
         // After remove at index 0:
         // - c1 dropped from index

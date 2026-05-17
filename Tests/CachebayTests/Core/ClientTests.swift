@@ -38,7 +38,7 @@ final class ClientTests: XCTestCase {
         _ = client.watchQuery as Any
 
         // Optimistic API — disambiguate against the autoCommit overload.
-        _ = client.modifyOptimistic as (@escaping @Sendable (_ tx: OptimisticBuilder, _ ctx: BuilderContext) -> Void) -> OptimisticTransaction
+        _ = client.modifyOptimistic as (@Sendable (_ b: OptimisticBuilder) -> Void) -> OptimisticTransaction
 
         // Operations API
         _ = client.executeQuery as Any
@@ -133,7 +133,7 @@ final class ClientTests: XCTestCase {
                 "title": .string("v1"),
             ])
         )
-        let tx = client.modifyOptimistic { b, _ in
+        let tx = client.modifyOptimistic { b in
             b.patch(.key("Post:p1"), ["title": "Optimistic"], mode: .merge)
         }
         _ = tx
@@ -199,6 +199,7 @@ private struct RecorderStorage: StorageAdapter {
     func put(_ records: [(CacheKey, [String: JSONValue])]) { recorder.record("put(\(records.count))") }
     func remove(_ ids: [CacheKey]) { recorder.record("remove(\(ids.count))") }
     func load() async throws -> [(CacheKey, [String: JSONValue])] { recorder.record("load"); return [] }
+    func loadSync() throws -> [(CacheKey, [String: JSONValue])] { recorder.record("loadSync"); return [] }
     func flush() async throws { recorder.record("flush") }
     func evictJournal() async throws { recorder.record("evictJournal") }
     func evictAll() async throws { recorder.record("evictAll") }

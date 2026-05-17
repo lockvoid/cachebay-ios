@@ -89,9 +89,8 @@ public struct CachebayOptions: Sendable {
     /// warnings for actionable cache problems — e.g. a watcher's materialize
     /// failing because an entity record exists but is missing a field its
     /// selection set requires (typical cause: a mutation's response shape
-    /// is a subset of the consuming query's selection set, so an
-    /// optimistic `addNode` lands a partial entity that silently breaks
-    /// the watcher).
+    /// is a subset of the consuming query's selection set, leaving the
+    /// entity partially-populated for the watcher).
     public var logger: Logger?
 
     public init(
@@ -152,6 +151,7 @@ public final class CachebayClient: @unchecked Sendable {
         let fragments = Fragments(planner: planner, documents: documents)
         let optimistic = Optimistic(graph: graph, planner: planner, documents: documents)
         canonical.setReplayer(optimistic)
+        documents.setReplayer(optimistic)
         let operations = Operations(
             transport: options.transport, planner: planner, documents: documents, queries: queries,
             defaultPolicy: options.cachePolicy, suspensionTimeout: options.suspensionTimeout
@@ -224,22 +224,58 @@ public final class CachebayClient: @unchecked Sendable {
             if !removes.isEmpty { storageRef.remove(removes) }
         }
 
-        // Hydrate the graph from storage (gap-fill only).
-        if let storageInstance {
-            Task { @Sendable in
-                do {
-                    let records = try await storageInstance.load()
-                    if records.isEmpty { return }
-                    remoteApplyFlag.set(true)
-                    for (id, snap) in records where !graph.hasRecord(id) {
-                        graph.putRecord(id, snap)
-                    }
-                    graph.flush()
-                    remoteApplyFlag.set(false)
-                } catch {
-                    // Load failure is swallowed; cache simply stays cold.
-                }
+        // Hydration from storage is **explicit** — call `client.warmup()`
+        // when ready (e.g. in your auth bootstrap, or wrapped in a Task).
+        // No auto-async-warmup at construction time. Rationale: callers
+        // need control over when the graph is hydrated so first queries
+        // don't race the load. v0.9.0 breaking change.
+    }
+
+    /// Hydrate the in-memory graph from the configured storage adapter.
+    /// **Synchronous on the calling thread** — wrap in a `Task` if you
+    /// want async semantics. No-op if no storage adapter is configured.
+    ///
+    /// Gap-fill semantics: only writes records the in-memory graph
+    /// doesn't already have. A live network response that landed
+    /// before `warmup()` is treated as more authoritative than disk.
+    ///
+    /// Idempotent: subsequent calls re-issue the SQLite read but the
+    /// gap-fill predicate makes them effectively no-ops.
+    ///
+    /// Typical use:
+    ///
+    /// ```swift
+    /// // In your AuthViewModel.bootstrap (or wherever the first
+    /// // queries are about to fire):
+    /// func bootstrap() async {
+    ///     // Ensure cache is warm before any cacheFirst query runs.
+    ///     // ~10-300 ms depending on cache size; runs on the calling
+    ///     // thread (or a Task you choose).
+    ///     await Task.detached(priority: .userInitiated) {
+    ///         CachebayService.client.warmup()
+    ///     }.value
+    ///     // … rest of bootstrap …
+    /// }
+    /// ```
+    ///
+    /// Or call directly on main during `App.init` if the cost is
+    /// acceptable (~50-300 ms for typical caches; iOS launch budget
+    /// is ~5-10 s, well within tolerance).
+    public func warmup() {
+        guard let storage = self.storage else { return }
+        do {
+            let records = try storage.loadSync()
+            if records.isEmpty { return }
+            remoteApplyFlag.set(true)
+            for (id, snap) in records where !graph.hasRecord(id) {
+                graph.putRecord(id, snap)
             }
+            graph.flush()
+            remoteApplyFlag.set(false)
+        } catch {
+            // Load failure is swallowed; cache simply stays cold.
+            // (Subsystem loggers aren't on `self` — surface this via
+            // a watcher's onError if you need the signal in production.)
         }
     }
 
@@ -302,47 +338,47 @@ public final class CachebayClient: @unchecked Sendable {
 
     // MARK: - Optimistic
 
-    public func modifyOptimistic(_ builder: @escaping @Sendable (_ tx: OptimisticBuilder, _ ctx: BuilderContext) -> Void) -> OptimisticTransaction {
+    /// Open an optimistic layer. The closure runs **once**,
+    /// immediately, and its ops are recorded for replay if a sibling
+    /// layer later commits or reverts.
+    ///
+    /// Returns an `OptimisticTransaction` whose `commit { b in … }`
+    /// takes a separate commit-phase closure that captures typed
+    /// server data from outer scope (no `ctx.data` plumbing).
+    /// `revert()` and `dispose()` are unchanged.
+    public func modifyOptimistic(_ builder: @Sendable (_ b: OptimisticBuilder) -> Void) -> OptimisticTransaction {
         return optimistic.modifyOptimistic(builder)
     }
 
-    /// Single-phase variant: `autoCommit: true` skips the optimistic
-    /// phase entirely and runs the builder once with
-    /// `phase: .commit, data: nil`, applying ops directly to the
-    /// base graph without recording a layer (no double-write).
+    /// Single-phase variant: `autoCommit: true` skips layer recording
+    /// and runs the builder once, applying ops directly to the graph.
     ///
-    /// Use when you've already awaited the server's response and
-    /// only want to write the result through the builder API:
+    /// Use when you've already awaited the server's response and only
+    /// want to write the result through the builder API:
     ///
     /// ```swift
     /// let result = try await client.executeMutation(...)
     /// guard let created = result.data?.createProject else { throw ... }
-    /// client.modifyOptimistic(autoCommit: true) { b, _ in
+    /// // The mutation's normalize already wrote the entity record
+    /// // — auto-commit only needs to link it into the connections.
+    /// client.modifyOptimistic(autoCommit: true) { b in
     ///     for key in keys {
-    ///         b.connection(key: key).addNode(node: created,
-    ///                                         fragment: ProjectFields.self,
-    ///                                         options: .init(position: .start))
+    ///         b.connection(key: key).linkNode(node: created,
+    ///                                          options: .init(position: .start))
     ///     }
     /// }
     /// ```
     ///
-    /// `autoCommit: false` (or the unlabeled overload) gives the
-    /// standard two-phase semantics: closure runs once at `.optimistic`
-    /// recording a revertible layer, returned tx lets caller commit
-    /// (closure replays in `.commit` phase) or revert.
+    /// `autoCommit: false` is equivalent to the unlabeled overload
+    /// minus the returned transaction handle (the layer stays applied
+    /// indefinitely — discouraged; prefer the unlabeled overload).
     public func modifyOptimistic(
         autoCommit: Bool,
-        _ builder: @escaping @Sendable (_ tx: OptimisticBuilder, _ ctx: BuilderContext) -> Void
+        _ builder: @Sendable (_ b: OptimisticBuilder) -> Void
     ) {
         if autoCommit {
             optimistic.applyAutoCommit(builder)
         } else {
-            // Caller asked for two-phase but discarded the tx — they
-            // intend the layer to act as auto-commit but with a
-            // recorded optimistic phase. Run the standard path; tx
-            // is dropped (layer stays applied indefinitely until
-            // explicitly committed/reverted by another reference).
-            // Discouraged path; prefer the unlabeled overload.
             _ = optimistic.modifyOptimistic(builder)
         }
     }

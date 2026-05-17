@@ -4,6 +4,13 @@ import Foundation
 public protocol OptimisticReplayer: Sendable {
     @discardableResult
     func replay(connectionKeys: [CacheKey]) -> Optimistic.ReplayResult
+
+    /// Re-apply pending optimistic layers' entity ops scoped to the
+    /// given entity keys. Called from `Documents.normalize` after the
+    /// walk completes so server-response writes don't silently clobber
+    /// pending optimistic field patches. Symmetric with
+    /// `replay(connectionKeys:)` for the entity axis.
+    func replayEntityOps(scope entityKeys: Set<CacheKey>)
 }
 
 /// Canonical connection merger — Relay-style cursor pagination.

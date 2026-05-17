@@ -144,6 +144,16 @@ public final class SQLiteStorage: StorageAdapter, @unchecked Sendable {
         }
     }
 
+    /// Synchronous bulk load. Runs on the worker queue via `queue.sync`
+    /// so the load serializes against any pending writes — the returned
+    /// snapshot reflects every committed write up to the call site.
+    /// Used by `CachebayClient.warmup()`.
+    public func loadSync() throws -> [(CacheKey, [String: JSONValue])] {
+        try queue.sync {
+            try self.performLoad()
+        }
+    }
+
     // MARK: - Flush / evict
 
     public func flush() async throws {

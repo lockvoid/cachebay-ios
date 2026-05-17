@@ -62,8 +62,8 @@ struct SpellDetailView: View {
             variables: ["input": .object(["id": .string(id)])]
         )
         // Remove the entity from cache so the list drops it on next read.
-        let tx = store.client.modifyOptimistic { b, _ in b.delete(.key("Spell:\(id)")) }
-        tx.commit(nil)
+        let tx = store.client.modifyOptimistic { b in b.delete(.key("Spell:\(id)")) }
+        tx.dispose()
     }
 
     @ViewBuilder private func badge(_ text: String, color: Color) -> some View {

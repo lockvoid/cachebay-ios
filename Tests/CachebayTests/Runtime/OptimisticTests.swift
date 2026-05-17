@@ -15,7 +15,7 @@ final class OptimisticTests: XCTestCase {
         try client.writeFragment(id: "Post:p1", fragment: "fragment P on Post { id title body }", data: .object([
             "__typename": "Post", "id": "p1", "title": "T", "body": "B"
         ]))
-        let tx = client.modifyOptimistic { b, _ in
+        let tx = client.modifyOptimistic { b in
             b.patch(.key("Post:p1"), ["__typename": "Post", "id": "p1", "title": "Fresh"], mode: .replace)
         }
         // `body` should be gone under replace.
@@ -31,10 +31,10 @@ final class OptimisticTests: XCTestCase {
         try client.writeFragment(id: "Post:p1", fragment: "fragment P on Post { id title }", data: .object([
             "__typename": "Post", "id": "p1", "title": "A"
         ]))
-        let tx1 = client.modifyOptimistic { b, _ in
+        let tx1 = client.modifyOptimistic { b in
             b.patch(.key("Post:p1"), ["title": "A-l1"], mode: .merge)
         }
-        let tx2 = client.modifyOptimistic { b, _ in
+        let tx2 = client.modifyOptimistic { b in
             b.patch(.key("Post:p1"), ["title": "A-l2"], mode: .merge)
         }
         XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "A-l2")
@@ -50,7 +50,7 @@ final class OptimisticTests: XCTestCase {
         try client.writeFragment(id: "Post:p1", fragment: "fragment P on Post { id title }", data: .object([
             "__typename": "Post", "id": "p1", "title": "Gone"
         ]))
-        let tx = client.modifyOptimistic { b, _ in
+        let tx = client.modifyOptimistic { b in
             b.delete(.key("Post:p1"))
         }
         XCTAssertNil(client.graph.getRecord("Post:p1"))
@@ -61,11 +61,11 @@ final class OptimisticTests: XCTestCase {
     func test_addNode_start_and_end() throws {
         let client = makeClient()
         let selector = ConnectionSelector(parent: .key("Query"), key: "posts")
-        let tx = client.modifyOptimistic { b, _ in
+        let tx = client.modifyOptimistic { b in
             let c = b.connection(selector)
-            c.addNode(["__typename": "Post", "id": "p1", "title": "A"], options: AddNodeOptions(position: .start))
-            c.addNode(["__typename": "Post", "id": "p2", "title": "B"], options: AddNodeOptions(position: .end))
-            c.addNode(["__typename": "Post", "id": "p3", "title": "C"], options: AddNodeOptions(position: .start))
+            c.linkNode(.object(["__typename": "Post", "id": "p1"]), options: LinkNodeOptions(position: .start))
+            c.linkNode(.object(["__typename": "Post", "id": "p2"]), options: LinkNodeOptions(position: .end))
+            c.linkNode(.object(["__typename": "Post", "id": "p3"]), options: LinkNodeOptions(position: .start))
         }
         // Expect order: [p3, p1, p2]
         let canonicalKey = "@connection.posts({})"
@@ -83,11 +83,11 @@ final class OptimisticTests: XCTestCase {
     func test_addNode_dedup_by_entity() throws {
         let client = makeClient()
         let selector = ConnectionSelector(parent: .key("Query"), key: "posts")
-        _ = client.modifyOptimistic { b, _ in
+        _ = client.modifyOptimistic { b in
             let c = b.connection(selector)
-            c.addNode(["__typename": "Post", "id": "p1", "title": "A"], options: AddNodeOptions(position: .start))
+            c.linkNode(.object(["__typename": "Post", "id": "p1"]), options: LinkNodeOptions(position: .start))
             // Same entity — should no-op on edges list.
-            c.addNode(["__typename": "Post", "id": "p1", "title": "A-updated"], options: AddNodeOptions(position: .end))
+            c.linkNode(.object(["__typename": "Post", "id": "p1"]), options: LinkNodeOptions(position: .end))
         }
         let canonicalKey = "@connection.posts({})"
         let edges = client.graph.getField(canonicalKey, CachebayConstants.connectionEdgesField)?.refList ?? []
@@ -97,7 +97,7 @@ final class OptimisticTests: XCTestCase {
     func test_connection_patch_pageInfo() throws {
         let client = makeClient()
         let selector = ConnectionSelector(parent: .key("Query"), key: "posts")
-        _ = client.modifyOptimistic { b, _ in
+        _ = client.modifyOptimistic { b in
             let c = b.connection(selector)
             c.patch([
                 "pageInfo": .object(["hasNextPage": false, "endCursor": "c1"]),

@@ -6,7 +6,7 @@ import Foundation
 ///     Maintained by `Canonical`.
 ///   - `<canonical>::nodeIndex`   — canonical node key → edge record key.
 ///     Maintained by both `Canonical` (merge path) and `Optimistic`
-///     (addNode/removeNode). Turns the dedup-by-entity and remove-by-entity
+///     (linkNode/unlinkNode). Turns the dedup-by-entity and remove-by-entity
 ///     paths from O(N) to O(1) regardless of connection size.
 enum ConnectionIndex {
     @inlinable

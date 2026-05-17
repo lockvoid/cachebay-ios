@@ -13,9 +13,9 @@ import XCTest
 /// The motivating bug, observed on `28-apr-cachebay`: after a fresh launch
 /// (empty cache) → projects watcher created with `cacheAndNetwork` →
 /// network returned empty list → watcher fired with `edgeCount=0` → user
-/// optimistically created a project via `addNode` → watcher silently
+/// optimistically created a project via `linkNode` → watcher silently
 /// failed to re-fire and the projects list stayed empty. The unit test
-/// for `addNode → watcher` in `WatcherSilencedByMissingScalarTests`
+/// for `linkNode → watcher` in `WatcherSilencedByMissingScalarTests`
 /// passed because it seeded the cache via `writeQuery` instead of the
 /// `executeQuery → notifyDataBySignature` path the real app takes.
 final class ConnectionWatcherIntegrationTests: XCTestCase {
@@ -96,7 +96,7 @@ final class ConnectionWatcherIntegrationTests: XCTestCase {
     /// Mirrors `ProjectsView` → `vm.watch()` → `executeQuery
     /// (cacheAndNetwork)` → server returns empty list → `[ProjectsVM]
     /// watcher fired: edgeCount=0` → user creates a project →
-    /// `b.connection(key:).addNode(node:)` → expectation: watcher fires
+    /// `b.connection(key:).linkNode(node:)` → expectation: watcher fires
     /// again with the new node.
     ///
     /// In the buggy state the second fire never happens — the canonical
@@ -134,24 +134,30 @@ final class ConnectionWatcherIntegrationTests: XCTestCase {
         let countAfterNetwork = received.value.count
         XCTAssertGreaterThanOrEqual(countAfterNetwork, 1, "watcher must fire at least once with the empty network response")
 
-        // Optimistic addNode by canonical key — same as
-        // `b.connection(key: key).addNode(node: created, options:)` in
+        // Optimistic linkNode by canonical key — same as
+        // `b.connection(key: key).linkNode(node: created, options:)` in
         // `ProjectMutations.createProject`.
         let canonicalKey: CacheKey = "@connection.posts({})"
-        client.modifyOptimistic { b, _ in
-            b.connection(key: canonicalKey).addNode(
-                [
-                    "__typename": .string("Post"),
-                    "id": .string("p1"),
-                    "title": .string("Optimistic"),
-                ],
-                options: AddNodeOptions(position: .start)
+        // Seed entity scalars first — linkNode is purely structural.
+        try client.writeFragment(
+            id: "Post:p1",
+            fragment: "fragment P on Post { id title }",
+            data: .object([
+                CachebayConstants.typenameField: .string("Post"),
+                "id": .string("p1"),
+                "title": .string("Optimistic"),
+            ])
+        )
+        client.modifyOptimistic { b in
+            b.connection(key: canonicalKey).linkNode(
+                .key("Post:p1"),
+                options: LinkNodeOptions(position: .start)
             )
-        }.commit(nil)
+        }.dispose()
 
         // The watcher must re-fire with the new node visible. If it
         // doesn't, the projects list stays blank in production.
-        XCTAssertGreaterThan(received.value.count, countAfterNetwork, "watcher must re-fire after optimistic addNode against the canonical")
+        XCTAssertGreaterThan(received.value.count, countAfterNetwork, "watcher must re-fire after optimistic linkNode against the canonical")
 
         guard let last = received.value.last,
               case .object(let root) = last,
@@ -199,20 +205,26 @@ final class ConnectionWatcherIntegrationTests: XCTestCase {
         let keys = client.inspect.getConnectionKeys(parent: .root, key: "posts")
         XCTAssertGreaterThanOrEqual(keys.count, 1, "the network response should have created at least one canonical record")
 
-        client.modifyOptimistic { b, _ in
+        // Seed entity scalars first — linkNode is purely structural.
+        try client.writeFragment(
+            id: "Post:p1",
+            fragment: "fragment P on Post { id title }",
+            data: .object([
+                CachebayConstants.typenameField: .string("Post"),
+                "id": .string("p1"),
+                "title": .string("Optimistic"),
+            ])
+        )
+        client.modifyOptimistic { b in
             for key in keys {
-                b.connection(key: key).addNode(
-                    [
-                        "__typename": .string("Post"),
-                        "id": .string("p1"),
-                        "title": .string("Optimistic"),
-                    ],
-                    options: AddNodeOptions(position: .start)
+                b.connection(key: key).linkNode(
+                    .key("Post:p1"),
+                    options: LinkNodeOptions(position: .start)
                 )
             }
-        }.commit(nil)
+        }.dispose()
 
-        XCTAssertGreaterThan(received.value.count, countAfterNetwork, "watcher must re-fire after optimistic addNode (inspect.getConnectionKeys path)")
+        XCTAssertGreaterThan(received.value.count, countAfterNetwork, "watcher must re-fire after optimistic linkNode (inspect.getConnectionKeys path)")
     }
 
     // MARK: - Mirror of cachebay-web "first render after remount"
@@ -265,13 +277,23 @@ final class ConnectionWatcherIntegrationTests: XCTestCase {
 
         XCTAssertGreaterThanOrEqual(received1.value.count, 1)
 
-        // Optimistically prepend A4.
-        client.modifyOptimistic { b, _ in
-            b.connection(key: "@connection.posts({})").addNode(
-                ["__typename": .string("Post"), "id": .string("a4"), "title": .string("A4")],
-                options: AddNodeOptions(position: .start)
+        // Optimistically prepend A4. Seed entity scalars first — linkNode
+        // is purely structural in v0.7.0.
+        try client.writeFragment(
+            id: "Post:a4",
+            fragment: "fragment P on Post { id title }",
+            data: .object([
+                CachebayConstants.typenameField: .string("Post"),
+                "id": .string("a4"),
+                "title": .string("A4"),
+            ])
+        )
+        client.modifyOptimistic { b in
+            b.connection(key: "@connection.posts({})").linkNode(
+                .key("Post:a4"),
+                options: LinkNodeOptions(position: .start)
             )
-        }.commit(nil)
+        }.dispose()
 
         guard let last1 = received1.value.last,
               case .object(let root1) = last1,
@@ -374,12 +396,22 @@ final class ConnectionWatcherIntegrationTests: XCTestCase {
             cachePolicy: .cacheAndNetwork
         )
 
-        client.modifyOptimistic { b, _ in
-            b.connection(key: "@connection.posts({})").addNode(
-                ["__typename": .string("Post"), "id": .string("a4"), "title": .string("A4-optimistic")],
-                options: AddNodeOptions(position: .start)
+        // Seed entity scalars first — linkNode is purely structural in v0.7.0.
+        try client.writeFragment(
+            id: "Post:a4",
+            fragment: "fragment P on Post { id title }",
+            data: .object([
+                CachebayConstants.typenameField: .string("Post"),
+                "id": .string("a4"),
+                "title": .string("A4-optimistic"),
+            ])
+        )
+        client.modifyOptimistic { b in
+            b.connection(key: "@connection.posts({})").linkNode(
+                .key("Post:a4"),
+                options: LinkNodeOptions(position: .start)
             )
-        }.commit(nil)
+        }.dispose()
 
         // Second leader refetch overwrites — the server's title for A4
         // must win (entity record merge), not be silently dropped.
@@ -427,7 +459,7 @@ final class ConnectionWatcherIntegrationTests: XCTestCase {
     /// construction in `inspect.getConnectionKeys` (used by
     /// `ProjectMutations.createProject`) doesn't agree with the watcher's
     /// canonical-key from `Documents.readConnection`, the dep fanout
-    /// silently misses and the watcher never re-fires after `addNode`.
+    /// silently misses and the watcher never re-fires after `linkNode`.
     func test_addNode_withLiteralOrderByArg_firesWatcher() async throws {
         let http = MockHTTPTransport()
         http.whenQueryContains("posts", respondWith: .object([
@@ -469,20 +501,26 @@ final class ConnectionWatcherIntegrationTests: XCTestCase {
         XCTAssertEqual(keys.count, 1, "exactly one canonical for the literal orderBy")
         XCTAssertEqual(keys.first, "@connection.posts({\"orderBy\":\"updatedAt\"})")
 
-        client.modifyOptimistic { b, _ in
+        // Seed entity scalars first — linkNode is purely structural.
+        try client.writeFragment(
+            id: "Post:p1",
+            fragment: "fragment P on Post { id title }",
+            data: .object([
+                CachebayConstants.typenameField: .string("Post"),
+                "id": .string("p1"),
+                "title": .string("Optimistic"),
+            ])
+        )
+        client.modifyOptimistic { b in
             for key in keys {
-                b.connection(key: key).addNode(
-                    [
-                        "__typename": .string("Post"),
-                        "id": .string("p1"),
-                        "title": .string("Optimistic"),
-                    ],
-                    options: AddNodeOptions(position: .start)
+                b.connection(key: key).linkNode(
+                    .key("Post:p1"),
+                    options: LinkNodeOptions(position: .start)
                 )
             }
-        }.commit(nil)
+        }.dispose()
 
-        XCTAssertGreaterThan(received.value.count, countAfterNetwork, "watcher must re-fire after addNode against canonical with literal orderBy arg")
+        XCTAssertGreaterThan(received.value.count, countAfterNetwork, "watcher must re-fire after linkNode against canonical with literal orderBy arg")
 
         guard let last = received.value.last,
               case .object(let root) = last,

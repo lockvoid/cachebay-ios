@@ -29,15 +29,24 @@ final class OptimisticLayeringTests: XCTestCase {
         let client = makeClient()
         let selector = ConnectionSelector(parent: .key("Query"), key: "posts")
 
-        let tx1 = client.modifyOptimistic { b, _ in
+        let tx1 = client.modifyOptimistic { b in
             let c = b.connection(selector)
-            c.addNode(["__typename": "Post", "id": "p1", "title": "P1"], options: AddNodeOptions(position: .end))
-            c.addNode(["__typename": "Post", "id": "p2", "title": "P2"], options: AddNodeOptions(position: .end))
+            c.linkNode(.object([
+                CachebayConstants.typenameField: .string("Post"),
+                "id": .string("p1"),
+            ]), options: LinkNodeOptions(position: .end))
+            c.linkNode(.object([
+                CachebayConstants.typenameField: .string("Post"),
+                "id": .string("p2"),
+            ]), options: LinkNodeOptions(position: .end))
         }
-        let tx2 = client.modifyOptimistic { b, _ in
-            b.connection(selector).addNode(
-                ["__typename": "Post", "id": "p3", "title": "P3"],
-                options: AddNodeOptions(position: .end)
+        let tx2 = client.modifyOptimistic { b in
+            b.connection(selector).linkNode(
+                .object([
+                    CachebayConstants.typenameField: .string("Post"),
+                    "id": .string("p3"),
+                ]),
+                options: LinkNodeOptions(position: .end)
             )
         }
 
@@ -59,22 +68,21 @@ final class OptimisticLayeringTests: XCTestCase {
         let client = makeClient()
         let selector = ConnectionSelector(parent: .key("Query"), key: "posts")
 
-        let tx = client.modifyOptimistic { b, _ in
-            b.connection(selector).addNode(
-                ["__typename": "Post", "id": "p1", "title": "Will Vanish"],
-                options: AddNodeOptions(position: .end)
+        let tx = client.modifyOptimistic { b in
+            b.connection(selector).linkNode(
+                .object([
+                    CachebayConstants.typenameField: .string("Post"),
+                    "id": .string("p1"),
+                ]),
+                options: LinkNodeOptions(position: .end)
             )
         }
         XCTAssertEqual(nodeIds(client), ["Post:p1"])
-        XCTAssertNotNil(client.graph.getRecord("Post:p1"))
+        // linkNode is structural; the entity record is owned by
+        // documents.normalize / writeFragment and not written here.
 
         tx.revert()
         XCTAssertEqual(nodeIds(client), [])
-        // Note: web also asserts `getRecord("Post:p1")` is undefined.
-        XCTAssertNil(
-            client.graph.getRecord("Post:p1"),
-            "revert-before-commit must drop the optimistic entity record too"
-        )
     }
 
     // MARK: - revert after commit no-op for connections
@@ -83,13 +91,16 @@ final class OptimisticLayeringTests: XCTestCase {
         let client = makeClient()
         let selector = ConnectionSelector(parent: .key("Query"), key: "posts")
 
-        let tx = client.modifyOptimistic { b, _ in
-            b.connection(selector).addNode(
-                ["__typename": "Post", "id": "p1", "title": "P1"],
-                options: AddNodeOptions(position: .end)
+        let tx = client.modifyOptimistic { b in
+            b.connection(selector).linkNode(
+                .object([
+                    CachebayConstants.typenameField: .string("Post"),
+                    "id": .string("p1"),
+                ]),
+                options: LinkNodeOptions(position: .end)
             )
         }
-        tx.commit(nil)
+        tx.dispose()
         tx.revert()
 
         XCTAssertEqual(nodeIds(client), ["Post:p1"],
@@ -110,23 +121,39 @@ final class OptimisticLayeringTests: XCTestCase {
         let client = makeClient()
         let selector = ConnectionSelector(parent: .key("Query"), key: "posts")
 
-        let t1 = client.modifyOptimistic { b, ctx in
-            let id = ctx.data?["id"]?.string ?? "tmp-3"
-            b.connection(selector).addNode(
-                ["__typename": "Post", "id": .string(id), "title": "T1"],
-                options: AddNodeOptions(position: .start)
+        let t1 = client.modifyOptimistic { b in
+            b.connection(selector).linkNode(
+                .object([
+                    CachebayConstants.typenameField: .string("Post"),
+                    "id": .string("tmp-3"),
+                ]),
+                options: LinkNodeOptions(position: .start)
             )
         }
-        _ = client.modifyOptimistic { b, _ in
-            b.connection(selector).addNode(
-                ["__typename": "Post", "id": "p2", "title": "Stable"],
-                options: AddNodeOptions(position: .end)
+        _ = client.modifyOptimistic { b in
+            b.connection(selector).linkNode(
+                .object([
+                    CachebayConstants.typenameField: .string("Post"),
+                    "id": .string("p2"),
+                ]),
+                options: LinkNodeOptions(position: .end)
             )
         }
         XCTAssertEqual(nodeIds(client), ["Post:tmp-3", "Post:p2"],
             "before commit: temp-3 first, p2 last")
 
-        t1.commit(.object(["id": .string("p1")]))
+        // Commit closure captures the real id (here, hard-coded for the
+        // test) from outer scope — no `ctx.data` plumbing.
+        let realId = "p1"
+        t1.commit { b in
+            b.connection(selector).linkNode(
+                .object([
+                    CachebayConstants.typenameField: .string("Post"),
+                    "id": .string(realId),
+                ]),
+                options: LinkNodeOptions(position: .start)
+            )
+        }
         XCTAssertEqual(nodeIds(client), ["Post:p1", "Post:p2"],
             "after L1.commit: p1 in start slot, p2 still last (ordering preserved)")
     }
@@ -137,10 +164,13 @@ final class OptimisticLayeringTests: XCTestCase {
         let client = makeClient()
         let selector = ConnectionSelector(parent: .key("Query"), key: "posts")
 
-        let tx = client.modifyOptimistic { b, _ in
-            b.connection(selector).addNode(
-                ["__typename": "Post", "id": "p1", "title": "P1"],
-                options: AddNodeOptions(position: .end)
+        let tx = client.modifyOptimistic { b in
+            b.connection(selector).linkNode(
+                .object([
+                    CachebayConstants.typenameField: .string("Post"),
+                    "id": .string("p1"),
+                ]),
+                options: LinkNodeOptions(position: .end)
             )
         }
 
@@ -162,28 +192,31 @@ final class OptimisticLayeringTests: XCTestCase {
         let client = makeClient()
         let selector = ConnectionSelector(parent: .key("Query"), key: "posts")
 
-        let tx1 = client.modifyOptimistic { b, _ in
-            b.connection(selector).addNode(
-                ["__typename": "Post", "id": "p1", "title": "Layer 1"],
-                options: AddNodeOptions(position: .end)
+        let tx1 = client.modifyOptimistic { b in
+            b.connection(selector).linkNode(
+                .object([
+                    CachebayConstants.typenameField: .string("Post"),
+                    "id": .string("p1"),
+                ]),
+                options: LinkNodeOptions(position: .end)
             )
         }
-        let tx2 = client.modifyOptimistic { b, _ in
-            b.connection(selector).addNode(
-                ["__typename": "Post", "id": "p2", "title": "Layer 2"],
-                options: AddNodeOptions(position: .end)
+        let tx2 = client.modifyOptimistic { b in
+            b.connection(selector).linkNode(
+                .object([
+                    CachebayConstants.typenameField: .string("Post"),
+                    "id": .string("p2"),
+                ]),
+                options: LinkNodeOptions(position: .end)
             )
         }
 
         // Reverse-order revert.
         tx2.revert()
         XCTAssertEqual(nodeIds(client), ["Post:p1"])
-        XCTAssertNotNil(client.graph.getRecord("Post:p1"))
-        XCTAssertNil(client.graph.getRecord("Post:p2"))
 
         tx1.revert()
         XCTAssertEqual(nodeIds(client), [])
-        XCTAssertNil(client.graph.getRecord("Post:p1"))
     }
 
     // MARK: - evictAll on optimistic state
@@ -192,10 +225,13 @@ final class OptimisticLayeringTests: XCTestCase {
         let client = makeClient()
         let selector = ConnectionSelector(parent: .key("Query"), key: "posts")
 
-        _ = client.modifyOptimistic { b, _ in
-            b.connection(selector).addNode(
-                ["__typename": "Post", "id": "p1", "title": "Pending"],
-                options: AddNodeOptions(position: .end)
+        _ = client.modifyOptimistic { b in
+            b.connection(selector).linkNode(
+                .object([
+                    CachebayConstants.typenameField: .string("Post"),
+                    "id": .string("p1"),
+                ]),
+                options: LinkNodeOptions(position: .end)
             )
         }
         XCTAssertEqual(nodeIds(client), ["Post:p1"])
@@ -204,6 +240,5 @@ final class OptimisticLayeringTests: XCTestCase {
         // edges array should also be gone (record cleared).
         await client.evictAll()
         XCTAssertNil(client.graph.getRecord(canonicalKey))
-        XCTAssertNil(client.graph.getRecord("Post:p1"))
     }
 }

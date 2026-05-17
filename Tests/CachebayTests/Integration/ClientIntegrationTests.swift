@@ -100,7 +100,7 @@ final class ClientIntegrationTests: XCTestCase {
             "__typename": "Post", "id": "p1", "title": "Original"
         ]))
 
-        let tx = client.modifyOptimistic { builder, _ in
+        let tx = client.modifyOptimistic { builder in
             builder.patch(.key("Post:p1"), ["title": "Optimistic"], mode: .merge)
         }
         XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "Optimistic")
@@ -113,9 +113,9 @@ final class ClientIntegrationTests: XCTestCase {
         // Build empty canonical
         let selector = ConnectionSelector(parent: .key("Query"), key: "posts", filters: [:])
         // Add a post via optimistic add.
-        let tx = client.modifyOptimistic { b, _ in
+        let tx = client.modifyOptimistic { b in
             let c = b.connection(selector)
-            c.addNode(["__typename": "Post", "id": "p1", "title": "Hello"], options: AddNodeOptions(position: .start))
+            c.linkNode(.object(["__typename": "Post", "id": "p1"]), options: LinkNodeOptions(position: .start))
         }
         let canonicalKey = "@connection.posts({})"
         let edges = client.graph.getField(canonicalKey, CachebayConstants.connectionEdgesField)?.refList ?? []

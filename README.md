@@ -14,8 +14,8 @@ Same architecture as [cachebay-web](https://github.com/lockvoid/cachebay), tuned
 - **Typed codegen** — every operation, fragment, and variable struct emitted as Swift types; no string operations at runtime, no parser overhead.
 - **Normalized entities** with typename + id identity, interface-aware addressing, and precise watcher dependency tracking.
 - **Relay-style connections** with infinite/page modes, edge dedup by node key, and zero array churn (O(1) inserts via cursor + node index).
-- **Layered optimistic updates** — patch/delete entities and add/remove/patch connections with three lifecycle methods: `dispose`, `commit`, `revert`.
-- **Plan-aware addNode** — pass a fragment to auto-initialize nested `@connection` canonicals and strip selection-set fields from entity patches so existing ref/refList links survive.
+- **Layered optimistic updates** — patch/delete entities and link/unlink/patch connections with three lifecycle methods: `dispose`, `commit`, `revert`.
+- **Connections ≠ entity store** — `linkNode`/`unlinkNode` are purely structural (edge refs, edge meta, pageInfo); entity scalars are owned by `documents.normalize` or `writeFragment`. The link primitive takes an `EntityRef`, not a node dict — the API surface itself prevents stale-payload clobber bugs.
 - **SQLite persistence** with cross-process journal sync (multi-WebView Capacitor friendly).
 - **Pre-baked CachePlans** via codegen — operations carry their plans as data, no compile step at runtime.
 - **Swift 6 strict** throughout — every type `Sendable`, lock discipline documented, no implicit cross-actor leaks.

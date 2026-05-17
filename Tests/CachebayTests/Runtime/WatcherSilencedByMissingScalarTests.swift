@@ -4,7 +4,7 @@ import XCTest
 /// Replication of a bug found in ferment-cuts-ios on 2026-04-27.
 ///
 /// **Symptom:** A watcher subscribed to a connection query stops firing
-/// after an optimistic `addNode` — the new tile silently fails to land
+/// after an optimistic `linkNode` — the new tile silently fails to land
 /// in the UI, even though the canonical record was correctly updated.
 ///
 /// **Root cause:** `Documents.readScalar` sets `canonicalOK = false`
@@ -127,27 +127,34 @@ final class WatcherSilencedByMissingScalarTests: XCTestCase {
 
         // Now optimistically prepend a third post WITHOUT supplying
         // `cursor` in `edge:` — exactly what the user's
-        // `b.connection(key:).addNode(node: created, ...)` does in
+        // `b.connection(key:).linkNode(node: created, ...)` does in
         // production. The synthetic edge gets `__typename` + `node` ref
         // and that's it; no `cursor` scalar lands on the edge record.
+        // Entity scalars come from a separate writeFragment seed since
+        // linkNode is purely structural.
+        try client.writeFragment(
+            id: "Post:p3",
+            fragment: "fragment P on Post { id title }",
+            data: .object([
+                CachebayConstants.typenameField: .string("Post"),
+                "id": .string("p3"),
+                "title": .string("Third"),
+            ])
+        )
         let canonicalKey: CacheKey = "@connection.posts({})"
-        client.modifyOptimistic { b, _ in
-            b.connection(key: canonicalKey).addNode(
-                [
-                    "__typename": .string("Post"),
-                    "id": .string("p3"),
-                    "title": .string("Third"),
-                ],
-                options: AddNodeOptions(position: .start)
+        client.modifyOptimistic { b in
+            b.connection(key: canonicalKey).linkNode(
+                .key("Post:p3"),
+                options: LinkNodeOptions(position: .start)
             )
-        }.commit(nil)
+        }.dispose()
 
         // Bug: with `canonicalOK = false on scalar miss`, the materialize
         // returns `source = .none` and the watcher never re-fires. The
         // expected behaviour matches cachebay-web: missing scalar is a
         // soft miss, materialize returns the data with `cursor =
         // undefined` on the optimistic edge, watcher fires.
-        XCTAssertEqual(received.value.count, 2, "watcher must fire after optimistic addNode even when the synthetic edge lacks a `cursor` scalar")
+        XCTAssertEqual(received.value.count, 2, "watcher must fire after optimistic linkNode even when the synthetic edge lacks a `cursor` scalar")
 
         // Sanity-check the shape of the second emission: 3 edges, the
         // new node at the start, undefined cursor on the optimistic edge
@@ -160,7 +167,7 @@ final class WatcherSilencedByMissingScalarTests: XCTestCase {
             XCTFail("watcher data shape unexpected: \(received.value.last ?? .undefined)")
             return
         }
-        XCTAssertEqual(edges.count, 3, "post-addNode watcher payload should contain all 3 edges")
+        XCTAssertEqual(edges.count, 3, "post-linkNode watcher payload should contain all 3 edges")
         // Guard the per-index reads against an early-bail materialize —
         // a `Fatal error: Index out of range` here would crash the
         // background queue and force the deadline-exceeded fail message
@@ -186,17 +193,22 @@ final class WatcherSilencedByMissingScalarTests: XCTestCase {
 
         // Plant the optimistic-added edge before any watcher exists, so
         // the watcher's first read sees the mixed-shape canonical.
+        try client.writeFragment(
+            id: "Post:p3",
+            fragment: "fragment P on Post { id title }",
+            data: .object([
+                CachebayConstants.typenameField: .string("Post"),
+                "id": .string("p3"),
+                "title": .string("Third"),
+            ])
+        )
         let canonicalKey: CacheKey = "@connection.posts({})"
-        client.modifyOptimistic { b, _ in
-            b.connection(key: canonicalKey).addNode(
-                [
-                    "__typename": .string("Post"),
-                    "id": .string("p3"),
-                    "title": .string("Third"),
-                ],
-                options: AddNodeOptions(position: .start)
+        client.modifyOptimistic { b in
+            b.connection(key: canonicalKey).linkNode(
+                .key("Post:p3"),
+                options: LinkNodeOptions(position: .start)
             )
-        }.commit(nil)
+        }.dispose()
 
         let received = CaptureBox<[JSONValue]>(value: [])
         _ = try client.watchQuery(
@@ -233,13 +245,32 @@ final class WatcherSilencedByMissingScalarTests: XCTestCase {
         let client = self.makeClient()
 
         // Plant stale optimistic edges (no `cursor`) for the same nodes
-        // the network will later return.
+        // the network will later return. linkNode is purely structural,
+        // so seed the entities via writeFragment first.
+        try client.writeFragment(
+            id: "Post:p1",
+            fragment: "fragment P on Post { id title }",
+            data: .object([
+                CachebayConstants.typenameField: .string("Post"),
+                "id": .string("p1"),
+                "title": .string("Stale-1"),
+            ])
+        )
+        try client.writeFragment(
+            id: "Post:p2",
+            fragment: "fragment P on Post { id title }",
+            data: .object([
+                CachebayConstants.typenameField: .string("Post"),
+                "id": .string("p2"),
+                "title": .string("Stale-2"),
+            ])
+        )
         let canonicalKey: CacheKey = "@connection.posts({})"
-        client.modifyOptimistic { b, _ in
+        client.modifyOptimistic { b in
             let c = b.connection(key: canonicalKey)
-            c.addNode(["__typename": .string("Post"), "id": .string("p1"), "title": .string("Stale-1")], options: AddNodeOptions(position: .end))
-            c.addNode(["__typename": .string("Post"), "id": .string("p2"), "title": .string("Stale-2")], options: AddNodeOptions(position: .end))
-        }.commit(nil)
+            c.linkNode(.key("Post:p1"), options: LinkNodeOptions(position: .end))
+            c.linkNode(.key("Post:p2"), options: LinkNodeOptions(position: .end))
+        }.dispose()
 
         // Now write a leader page (after=null) that returns the same two
         // nodes — same ids, so the buggy dedup would treat them as

@@ -451,6 +451,6 @@ Always hop to `@MainActor` before mutating SwiftUI state. The subscription task 
 
 ## Next steps
 
-- [Relay Connections](./RELAY_CONNECTIONS.md) — subscriptions are a natural fit for prepending live items into an infinite list (use `addNode` from inside the `for await`).
+- [Relay Connections](./RELAY_CONNECTIONS.md) — subscriptions are a natural fit for prepending live items into an infinite list (use `linkNode` from inside the `for await`).
 - [Mutations](./MUTATIONS.md) — write merging.
 - [Storage](./STORAGE.md) — subscription-driven graph mutations are also persisted.

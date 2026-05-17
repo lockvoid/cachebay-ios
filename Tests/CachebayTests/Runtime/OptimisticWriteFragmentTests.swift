@@ -92,7 +92,7 @@ final class OptimisticWriteFragmentTests: XCTestCase {
     func test_writeFragment_normalizesNestedEntityList() {
         let client = makeClient()
 
-        client.modifyOptimistic { b, _ in
+        client.modifyOptimistic { b in
             b.writeFragment(fragment: StoryFields.self, id: "s1", data: Self.makeStoryData())
         }
 
@@ -119,7 +119,7 @@ final class OptimisticWriteFragmentTests: XCTestCase {
     func test_writeFragment_revert_dropsParentAndAllNestedEntities() {
         let client = makeClient()
 
-        let tx = client.modifyOptimistic { b, _ in
+        let tx = client.modifyOptimistic { b in
             b.writeFragment(fragment: StoryFields.self, id: "s1", data: Self.makeStoryData())
         }
         XCTAssertNotNil(client.graph.getRecord("Story:s1"))
@@ -153,7 +153,7 @@ final class OptimisticWriteFragmentTests: XCTestCase {
             ])
         )
 
-        let tx = client.modifyOptimistic { b, _ in
+        let tx = client.modifyOptimistic { b in
             b.writeFragment(fragment: StoryFields.self, id: "s1", data: Self.makeStoryData())
         }
         XCTAssertEqual(client.graph.getField("Comment:c1", "body")?.string, "first",

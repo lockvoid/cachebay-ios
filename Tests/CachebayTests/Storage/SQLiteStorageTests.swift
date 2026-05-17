@@ -96,15 +96,17 @@ final class SQLiteStorageTests: XCTestCase {
         try await client1.storage?.flush()
         await client1.shutdown()
 
-        // Second client reads from the same file.
+        // Second client reads from the same file. v0.9.0: hydration
+        // is explicit — call `warmup()` to load disk records into the
+        // in-memory graph. Construction no longer fires a background
+        // hydration task.
         let client2 = CachebayClient(options: CachebayOptions(
             transport: Transport(http: MockHTTPTransport()),
             cachePolicy: .cacheFirst,
             suspensionTimeout: 0,
             storage: SQLiteStorage.factory(options: .init(path: path))
         ))
-        // Hydrate load runs in a Task — give it a moment.
-        try await Task.sleep(nanoseconds: 100_000_000)
+        client2.warmup()
 
         let read = client2.readFragment(id: "Post:p1", fragment: "fragment P on Post { id title }")
         XCTAssertEqual(read?["title"]?.string, "Persist-me")

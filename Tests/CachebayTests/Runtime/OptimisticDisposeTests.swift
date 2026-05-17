@@ -39,7 +39,7 @@ final class OptimisticDisposeTests: XCTestCase {
         client.graph.flush()
 
         // Optimistic phase: only patch `name`.
-        let tx = client.modifyOptimistic { b, _ in
+        let tx = client.modifyOptimistic { b in
             b.patch(.key("Project:42"), ["name": .string("Optimistic")], mode: .merge)
         }
         XCTAssertEqual(client.graph.getField("Project:42", "name")?.string, "Optimistic")
@@ -63,41 +63,6 @@ final class OptimisticDisposeTests: XCTestCase {
         XCTAssertEqual(client.graph.getField("Project:42", "clips")?.refList,
                        ["TimelineClip:c1", "TimelineClip:c2-cloned"],
                        "dispose must NOT restore pre-optimistic 'clips' refList; server-added clip must survive")
-    }
-
-    /// Companion negative test: prove the equivalent `commit(_:)`
-    /// flow has the bug we're avoiding — restores baseline, wipes
-    /// the server-side update. Pins the asymmetry between commit and
-    /// dispose so future refactors can't accidentally swap the
-    /// semantics.
-    func test_commit_restoresPreOptimisticBaseline_wipingServerUpdates() {
-        let client = makeClient()
-        client.graph.replaceRecord("Project:42", [
-            CachebayConstants.typenameField: .string("Project"),
-            "id": .string("42"),
-            "name": .string("Original"),
-            "clips": .refList(["TimelineClip:c1"]),
-        ])
-        client.graph.flush()
-
-        let tx = client.modifyOptimistic { b, _ in
-            b.patch(.key("Project:42"), ["name": .string("Optimistic")], mode: .merge)
-        }
-
-        // Server normalize between optimistic and commit.
-        client.graph.putRecord("Project:42", [
-            "name": .string("ServerName"),
-            "clips": .refList(["TimelineClip:c1", "TimelineClip:c2-cloned"]),
-        ])
-        client.graph.flush()
-
-        tx.commit(nil)
-
-        // The closure ran again at commit phase, repatching `name` to "Optimistic".
-        // BUT the baseline restore wiped the server's `clips` update.
-        XCTAssertEqual(client.graph.getField("Project:42", "clips")?.refList,
-                       ["TimelineClip:c1"],
-                       "commit's baseline restore wipes server-side clips update — this is the bug we use dispose() to avoid")
     }
 
     /// Disposing a layer that touches a different record than other
@@ -127,10 +92,10 @@ final class OptimisticDisposeTests: XCTestCase {
         ])
         client.graph.flush()
 
-        let l1 = client.modifyOptimistic { b, _ in
+        let l1 = client.modifyOptimistic { b in
             b.patch(.key("Project:42"), ["name": .string("L1")], mode: .merge)
         }
-        let l2 = client.modifyOptimistic { b, _ in
+        let l2 = client.modifyOptimistic { b in
             b.patch(.key("Project:99"), ["name": .string("L2-other")], mode: .merge)
         }
 
@@ -160,7 +125,7 @@ final class OptimisticDisposeTests: XCTestCase {
         ])
         client.graph.flush()
 
-        let l1 = client.modifyOptimistic { b, _ in
+        let l1 = client.modifyOptimistic { b in
             b.patch(.key("Project:42"), ["name": .string("L1")], mode: .merge)
         }
         l1.dispose()
@@ -168,7 +133,7 @@ final class OptimisticDisposeTests: XCTestCase {
         // Reading internal state via behavior: a fresh modifyOptimistic
         // on the same record should capture its CURRENT state as the
         // new baseline (L1's old baseline was dropped).
-        let l2 = client.modifyOptimistic { b, _ in
+        let l2 = client.modifyOptimistic { b in
             b.patch(.key("Project:42"), ["name": .string("L2")], mode: .merge)
         }
         l2.revert()

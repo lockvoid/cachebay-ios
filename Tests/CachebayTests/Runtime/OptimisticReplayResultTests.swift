@@ -2,8 +2,8 @@ import XCTest
 @testable import Cachebay
 
 /// `Optimistic.replay(connectionKeys:)` return value — `ReplayResult`
-/// captures which entity keys were added (`addNode`) and which were
-/// removed (`removeNode`) within the scope of the replay. Mirrors
+/// captures which entity keys were added (`linkNode`) and which were
+/// removed (`unlinkNode`) within the scope of the replay. Mirrors
 /// cachebay-web's `replayOptimistic({connections}) → {added, removed}`
 /// (`optimistic.test.ts:663` "returns added and removed nodes for
 /// scoped connections" and `:725` "remains idempotent for the same
@@ -30,7 +30,7 @@ final class OptimisticReplayResultTests: XCTestCase {
         let keyA: CacheKey = "@connection.posts.A({})"
         let keyB: CacheKey = "@connection.posts.B({})"
 
-        // Pre-seed empty canonicals for both A and B so addNode lands.
+        // Pre-seed empty canonicals for both A and B so linkNode lands.
         let pageInfoA: CacheKey = "\(keyA).pageInfo"
         let pageInfoB: CacheKey = "\(keyB).pageInfo"
         for (canonical, pi) in [(keyA, pageInfoA), (keyB, pageInfoB)] {
@@ -48,29 +48,28 @@ final class OptimisticReplayResultTests: XCTestCase {
         client.graph.flush()
 
         // One transaction adds Post:p1 to A and removes Post:p99 from B.
-        // (p99 doesn't actually exist; removeNode is a no-op as a graph
+        // (p99 doesn't actually exist; unlinkNode is a no-op as a graph
         // mutation but should still register as an op for the layer.)
-        _ = client.modifyOptimistic { b, _ in
-            b.connection(key: keyA).addNode(
-                [
+        _ = client.modifyOptimistic { b in
+            b.connection(key: keyA).linkNode(
+                .object([
                     CachebayConstants.typenameField: .string("Post"),
                     "id": .string("p1"),
-                    "title": .string("Post 1"),
-                ],
-                options: AddNodeOptions(position: .end)
+                ]),
+                options: LinkNodeOptions(position: .end)
             )
-            b.connection(key: keyB).removeNode(.key("Post:p99"))
+            b.connection(key: keyB).unlinkNode(.key("Post:p99"))
         }
 
         // Direct access to the underlying `Optimistic` for replay assertion.
         let resultA = client.optimistic.replay(connectionKeys: [keyA])
-        XCTAssertTrue(resultA.added.contains("Post:p1"), "added must contain Post:p1, got \(resultA.added)")
-        XCTAssertTrue(resultA.removed.isEmpty, "scoped to A, removed must be empty, got \(resultA.removed)")
+        XCTAssertTrue(resultA.linked.contains("Post:p1"), "linked must contain Post:p1, got \(resultA.linked)")
+        XCTAssertTrue(resultA.unlinked.isEmpty, "scoped to A, unlinked must be empty, got \(resultA.unlinked)")
 
         let resultBoth = client.optimistic.replay(connectionKeys: [keyA, keyB])
-        XCTAssertTrue(resultBoth.added.contains("Post:p1"))
-        XCTAssertTrue(resultBoth.removed.contains("Post:p99"),
-                      "scoped to both, removed must include Post:p99, got \(resultBoth.removed)")
+        XCTAssertTrue(resultBoth.linked.contains("Post:p1"))
+        XCTAssertTrue(resultBoth.unlinked.contains("Post:p99"),
+                      "scoped to both, unlinked must include Post:p99, got \(resultBoth.unlinked)")
     }
 
     /// Web `optimistic.test.ts:725` "remains idempotent for the same
@@ -92,26 +91,24 @@ final class OptimisticReplayResultTests: XCTestCase {
         ])
         client.graph.flush()
 
-        _ = client.modifyOptimistic { b, _ in
+        _ = client.modifyOptimistic { b in
             let c = b.connection(key: key)
-            c.addNode([
+            c.linkNode(.object([
                 CachebayConstants.typenameField: .string("Post"),
                 "id": .string("p1"),
-                "title": .string("Post 1"),
-            ], options: AddNodeOptions(position: .end))
-            c.addNode([
+            ]), options: LinkNodeOptions(position: .end))
+            c.linkNode(.object([
                 CachebayConstants.typenameField: .string("Post"),
                 "id": .string("p2"),
-                "title": .string("Post 2"),
-            ], options: AddNodeOptions(position: .end))
+            ]), options: LinkNodeOptions(position: .end))
         }
 
         let r1 = client.optimistic.replay(connectionKeys: [key])
         let r2 = client.optimistic.replay(connectionKeys: [key])
-        XCTAssertEqual(r1.added, r2.added)
-        XCTAssertEqual(r1.removed, r2.removed)
-        XCTAssertEqual(r1.added, ["Post:p1", "Post:p2"])
-        XCTAssertTrue(r1.removed.isEmpty)
+        XCTAssertEqual(r1.linked, r2.linked)
+        XCTAssertEqual(r1.unlinked, r2.unlinked)
+        XCTAssertEqual(r1.linked, ["Post:p1", "Post:p2"])
+        XCTAssertTrue(r1.unlinked.isEmpty)
     }
 
     /// Replay with an empty `connectionKeys` array applies all ops
@@ -134,19 +131,19 @@ final class OptimisticReplayResultTests: XCTestCase {
         }
         client.graph.flush()
 
-        _ = client.modifyOptimistic { b, _ in
-            b.connection(key: keyA).addNode([
+        _ = client.modifyOptimistic { b in
+            b.connection(key: keyA).linkNode(.object([
                 CachebayConstants.typenameField: .string("Post"),
                 "id": .string("p1"),
-            ], options: AddNodeOptions(position: .end))
-            b.connection(key: keyB).addNode([
+            ]), options: LinkNodeOptions(position: .end))
+            b.connection(key: keyB).linkNode(.object([
                 CachebayConstants.typenameField: .string("Post"),
                 "id": .string("p2"),
-            ], options: AddNodeOptions(position: .end))
+            ]), options: LinkNodeOptions(position: .end))
         }
 
         let result = client.optimistic.replay(connectionKeys: [])
-        XCTAssertEqual(result.added, ["Post:p1", "Post:p2"],
-                       "unscoped replay must report both, got \(result.added)")
+        XCTAssertEqual(result.linked, ["Post:p1", "Post:p2"],
+                       "unscoped replay must report both, got \(result.linked)")
     }
 }

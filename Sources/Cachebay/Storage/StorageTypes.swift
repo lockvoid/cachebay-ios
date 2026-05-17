@@ -53,8 +53,18 @@ public protocol StorageAdapter: Sendable {
     /// Remove records by id.
     func remove(_ ids: [CacheKey])
 
-    /// Load all persisted records at init.
+    /// Load all persisted records at init (async).
     func load() async throws -> [(CacheKey, [String: JSONValue])]
+
+    /// Synchronous bulk load on the calling thread. Used by
+    /// `CachebayClient.warmup()` to hydrate the in-memory graph
+    /// without crossing a Task boundary, so the caller knows the
+    /// graph is fully populated by the time `warmup()` returns.
+    /// Implementations should serialize against any pending writes
+    /// (i.e. dispatch on the storage's own worker queue *synchronously*
+    /// rather than concurrently) so the load reflects every committed
+    /// write up to the call site.
+    func loadSync() throws -> [(CacheKey, [String: JSONValue])]
 
     /// Drain all pending writes.
     func flush() async throws

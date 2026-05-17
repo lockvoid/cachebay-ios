@@ -28,6 +28,6 @@ Then run on any iOS simulator. The app talks to `http://127.0.0.1:4000/graphql`.
 
 - **Relay connection**: `spells @connection(mode: "infinite", filters: ["filter"])` with live search + load-more pagination.
 - **`watchFragment`**: Spell detail view live-updates when the list mutates the entity elsewhere.
-- **Optimistic `addNode`**: creating a spell prepends instantly, commits with server data on success, reverts on failure.
+- **Optimistic `linkNode`**: creating a spell prepends instantly, commits with server data on success, reverts on failure.
 - **Subscriptions**: `hogwartsTimeUpdated` ticks every second via `graphql-transport-ws` over WebSocket.
 - **SQLite persistence**: kill and relaunch — the list renders from disk before the network refetch finishes.

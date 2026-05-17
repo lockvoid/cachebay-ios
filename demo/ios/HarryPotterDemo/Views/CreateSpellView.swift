@@ -49,11 +49,17 @@ struct CreateSpellView: View {
             "wikiUrl": .null,
         ]
 
-        // Prepend an optimistic edge to every matching `Query.spells(...)` canonical.
-        let tx = store.client.modifyOptimistic { b, _ in
+        // Optimistic create: write the entity record FIRST (so watchers can
+        // materialize it), THEN link it into every matching `Query.spells(...)`
+        // canonical. Connection mutations (`linkNode`/`unlinkNode`) are
+        // structural-only — they manage edge refs but never write entity
+        // scalars. Entity records are owned by `documents.normalize` (auto
+        // from server responses) or explicit `b.patch`/`b.writeFragment`.
+        let tx = store.client.modifyOptimistic { b in
+            b.patch(.key("Spell:\(tempId)"), optimisticNode, mode: .merge)
             for key in store.client.inspect.getConnectionKeys(parent: .root, key: "spells") {
                 let c = b.connection(key: key)
-                c.addNode(optimisticNode, options: AddNodeOptions(position: .start))
+                c.linkNode(.key("Spell:\(tempId)"), options: LinkNodeOptions(position: .start))
             }
         }
 
@@ -73,13 +79,19 @@ struct CreateSpellView: View {
             )
             if let spell = result.data?["createSpell"]?["spell"]?.object,
                let realId = spell["id"]?.string {
-                // Commit: drop the optimistic layer and rewrite it using the server id
-                // so the new edge survives with the persisted Spell identity.
-                tx.commit(.object(spell))
-                // Also delete the stale temp entity.
-                let cleanup = store.client.modifyOptimistic { b, _ in b.delete(.key("Spell:\(tempId)")) }
-                cleanup.commit(nil)
-                _ = realId
+                // Commit closure captures `spell` (the server-authored
+                // Spell record) and `realId` from outer scope. Baseline
+                // restore drops Post:tempId AND its edges; the commit
+                // closure writes the real entity + links it.
+                tx.commit { b in
+                    b.patch(.key("Spell:\(realId)"), spell, mode: .merge)
+                    for key in store.client.inspect.getConnectionKeys(parent: .root, key: "spells") {
+                        b.connection(key: key).linkNode(
+                            .key("Spell:\(realId)"),
+                            options: LinkNodeOptions(position: .start)
+                        )
+                    }
+                }
                 dismiss()
             } else {
                 tx.revert()

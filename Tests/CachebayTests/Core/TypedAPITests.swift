@@ -6,8 +6,8 @@ import XCTest
 /// setters (get + set on every field), typed read/write/watch/execute
 /// overloads for queries/mutations/subscriptions/fragments, and the
 /// typed optimistic helpers (`b.patch(fragment:target:_:)`,
-/// `b.connection(...).addNode(node:options:)` /
-/// `addNode(fragment:options:_:)`).
+/// `b.connection(...).linkNode(node:options:)` /
+/// `linkNode(fragment:options:_:)`).
 ///
 /// The fixtures below are hand-rolled to mirror what `cachebay-cli`
 /// emits — same shape, same accessor pattern — so the tests assert
@@ -138,7 +138,7 @@ final class TypedAPITests: XCTestCase {
     }
 
     /// Connection-shaped query — used to assert the layered optimistic
-    /// `addNode<N: OperationData>` / `removeNode` flow on a Relay-style
+    /// `linkNode<N: OperationData>` / `unlinkNode` flow on a Relay-style
     /// canonical record. The `@connection` directive registers the
     /// canonical so `b.connection(ConnectionSelector(key: "posts"))`
     /// resolves it. No pagination args so the read materialises the
@@ -350,7 +350,7 @@ final class TypedAPITests: XCTestCase {
             ])
         )
 
-        let tx = client.modifyOptimistic { b, _ in
+        let tx = client.modifyOptimistic { b in
             b.patch(fragment: TestPostFields.self, id: "p1") { draft in
                 draft.title = "v2"
             }
@@ -377,17 +377,22 @@ final class TypedAPITests: XCTestCase {
             ])
         )
 
-        // Two-cycle pattern: optimistic phase patches "Drafting…",
-        // commit phase replays the same builder with the server payload
-        // so the canonical title becomes whatever the server returned.
-        let tx = client.modifyOptimistic { b, ctx in
+        // Split-closure pattern: optimistic closure patches "Drafting…",
+        // commit closure captures the (simulated) server-confirmed
+        // title from outer scope and writes it.
+        let tx = client.modifyOptimistic { b in
             b.patch(fragment: TestPostFields.self, id: "p1") { draft in
-                draft.title = ctx.data?["title"]?.string ?? "Drafting…"
+                draft.title = "Drafting…"
             }
         }
         XCTAssertEqual(client.readFragment(fragment: TestPostFields.self, id: "p1", variables: .init())?.title, "Drafting…")
 
-        tx.commit(.object(["title": .string("Server confirmed")]))
+        let serverTitle = "Server confirmed"
+        tx.commit { b in
+            b.patch(fragment: TestPostFields.self, id: "p1") { draft in
+                draft.title = serverTitle
+            }
+        }
         XCTAssertEqual(client.readFragment(fragment: TestPostFields.self, id: "p1", variables: .init())?.title, "Server confirmed")
     }
 
@@ -406,7 +411,7 @@ final class TypedAPITests: XCTestCase {
             ])
         )
 
-        client.modifyOptimistic { b, _ in
+        client.modifyOptimistic { b in
             b.patch(fragment: TestPostFields.self, id: 42) { draft in
                 draft.title = "via int id"
             }
@@ -454,7 +459,7 @@ final class TypedAPITests: XCTestCase {
         ]
         client.graph.putRecord("TimelineClip:c1", seed)
 
-        let tx = client.modifyOptimistic { b, _ in
+        let tx = client.modifyOptimistic { b in
             b.patch(fragment: SpeechClipMutables.self, id: "c1") { d in
                 d.muted = true
                 d.volume = 0.5
@@ -484,14 +489,14 @@ final class TypedAPITests: XCTestCase {
         )
         XCTAssertNotNil(client.readFragment(fragment: TestPostFields.self, id: "p1", variables: .init()))
 
-        let tx = client.modifyOptimistic { b, _ in
+        let tx = client.modifyOptimistic { b in
             b.delete(fragment: TestPostFields.self, id: "p1")
         }
-        tx.commit(nil)
+        tx.dispose()
         XCTAssertNil(client.readFragment(fragment: TestPostFields.self, id: "p1", variables: .init()))
     }
 
-    // MARK: - Typed connection addNode / removeNode
+    // MARK: - Typed connection linkNode / unlinkNode
 
     func test_typedConnectionAddNode_typedNode_insertsAtHead() throws {
         let (client, _, _) = makeClient()
@@ -508,45 +513,49 @@ final class TypedAPITests: XCTestCase {
             "title": .string("first"),
         ])
 
-        let tx = client.modifyOptimistic { b, _ in
+        let tx = client.modifyOptimistic { b in
             let c = b.connection(ConnectionSelector(key: "posts"))
-            c.addNode(node: p2, options: AddNodeOptions(position: .end))
-            c.addNode(node: p1, options: AddNodeOptions(position: .start))
+            c.linkNode(node: p2, options: LinkNodeOptions(position: .end))
+            c.linkNode(node: p1, options: LinkNodeOptions(position: .start))
         }
-        tx.commit(nil)
+        tx.dispose()
 
-        // Verify the canonical's ordered edge list directly — `readQuery`
-        // would need a paginated window to surface optimistic edges.
+        // Verify the canonical's ordered edge list directly — linkNode is
+        // purely structural in v0.7.0, so we read the edge node refs (the
+        // entity cache keys) instead of reading scalars from the entity
+        // record (which linkNode doesn't write).
         let canonicalKey: CacheKey = "@connection.posts({})"
         let edges = client.graph.getField(canonicalKey, CachebayConstants.connectionEdgesField)?.refList ?? []
-        let ids: [String] = edges.compactMap { ek in
-            guard let nref = client.graph.getField(ek, "node")?.ref else { return nil }
-            return client.graph.getField(nref, "id")?.string
-        }
-        XCTAssertEqual(ids, ["p1", "p2"])
+        let nodeRefs: [String] = edges.compactMap { client.graph.getField($0, "node")?.ref }
+        XCTAssertEqual(nodeRefs, ["Post:p1", "Post:p2"])
     }
 
     func test_typedConnectionAddNode_fragmentClosure_buildsOptimisticNode() throws {
         let (client, _, _) = makeClient()
 
-        // Closure-built optimistic node — `__typename` is seeded from
-        // `F.onTypename` so the closure only sets domain fields.
-        // Asserting on the canonical record directly (`graph.getField`)
-        // mirrors how `OptimisticTests.test_addNode_start_and_end`
-        // verifies the optimistic engine — readQuery materialise of an
-        // optimistic-only canonical needs a populated page window.
-        let tx = client.modifyOptimistic { b, _ in
+        // Optimistic write of the entity scalars via `b.writeFragment`,
+        // then a structural `linkNode(fragment:id:)` keys the new edge
+        // at the just-seeded entity. With v0.7.0, linkNode is purely
+        // structural and does NOT write entity scalars on its own — the
+        // typed closure form was retired in favour of this two-step.
+        let tx = client.modifyOptimistic { b in
+            b.writeFragment(
+                fragment: TestPostFields.self,
+                id: "tmp:1",
+                data: TestPostFields.Data(__data: [
+                    CachebayConstants.typenameField: .string("Post"),
+                    "id": .string("tmp:1"),
+                    "title": .string("Drafting…"),
+                ])
+            )
             b.connection(ConnectionSelector(key: "posts"))
-             .addNode(fragment: TestPostFields.self, options: AddNodeOptions(position: .start)) { draft in
-                draft.id = "tmp:1"
-                draft.title = "Drafting…"
-            }
+             .linkNode(fragment: TestPostFields.self, id: "tmp:1", options: LinkNodeOptions(position: .start))
         }
         _ = tx
 
         let canonicalKey: CacheKey = "@connection.posts({})"
         let edgeRefs = client.graph.getField(canonicalKey, CachebayConstants.connectionEdgesField)?.refList ?? []
-        XCTAssertEqual(edgeRefs.count, 1, "optimistic addNode should have produced one edge")
+        XCTAssertEqual(edgeRefs.count, 1, "optimistic linkNode should have produced one edge")
         let nodeRef = edgeRefs.first.flatMap { client.graph.getField($0, "node")?.ref }
         XCTAssertEqual(nodeRef, "Post:tmp:1")
         XCTAssertEqual(client.graph.getField(nodeRef ?? "", "title")?.string, "Drafting…")
@@ -557,21 +566,18 @@ final class TypedAPITests: XCTestCase {
         let (client, _, _) = makeClient()
 
         // Seed two optimistic nodes, then drop one by typed bare id.
-        let tx = client.modifyOptimistic { b, _ in
+        let tx = client.modifyOptimistic { b in
             let c = b.connection(ConnectionSelector(key: "posts"))
-            c.addNode(["__typename": "Post", "id": "p1", "title": "a"], options: AddNodeOptions(position: .end))
-            c.addNode(["__typename": "Post", "id": "p2", "title": "b"], options: AddNodeOptions(position: .end))
-            c.removeNode(fragment: TestPostFields.self, id: "p1")
+            c.linkNode(.object(["__typename": "Post", "id": "p1"]), options: LinkNodeOptions(position: .end))
+            c.linkNode(.object(["__typename": "Post", "id": "p2"]), options: LinkNodeOptions(position: .end))
+            c.unlinkNode(fragment: TestPostFields.self, id: "p1")
         }
-        tx.commit(nil)
+        tx.dispose()
 
         let canonicalKey: CacheKey = "@connection.posts({})"
         let edges = client.graph.getField(canonicalKey, CachebayConstants.connectionEdgesField)?.refList ?? []
-        let ids: [String] = edges.compactMap { ek in
-            guard let nref = client.graph.getField(ek, "node")?.ref else { return nil }
-            return client.graph.getField(nref, "id")?.string
-        }
-        XCTAssertEqual(ids, ["p2"])
+        let nodeRefs: [String] = edges.compactMap { client.graph.getField($0, "node")?.ref }
+        XCTAssertEqual(nodeRefs, ["Post:p2"])
     }
 
     func test_typedAddNode_revert_restoresBaseline() throws {
@@ -580,33 +586,38 @@ final class TypedAPITests: XCTestCase {
         // Baseline: one committed node already in the canonical (added
         // via a previous, committed layer — same path the runtime would
         // build during a network response normalisation).
-        let baseline = client.modifyOptimistic { b, _ in
+        let baseline = client.modifyOptimistic { b in
             b.connection(ConnectionSelector(key: "posts"))
-             .addNode(["__typename": "Post", "id": "p2", "title": "b"], options: AddNodeOptions(position: .end))
+             .linkNode(.object(["__typename": "Post", "id": "p2"]), options: LinkNodeOptions(position: .end))
         }
-        baseline.commit(nil)
+        baseline.dispose()
 
         let canonicalKey: CacheKey = "@connection.posts({})"
         XCTAssertEqual(client.graph.getField(canonicalKey, CachebayConstants.connectionEdgesField)?.refList?.count, 1)
 
-        // Optimistic add via fragment closure — applies immediately.
-        let tx = client.modifyOptimistic { b, _ in
+        // Optimistic add via writeFragment + typed linkNode — the
+        // entity is seeded into the optimistic layer, then linked
+        // structurally into the connection.
+        let tx = client.modifyOptimistic { b in
+            b.writeFragment(
+                fragment: TestPostFields.self,
+                id: "tmp:rollback",
+                data: TestPostFields.Data(__data: [
+                    CachebayConstants.typenameField: .string("Post"),
+                    "id": .string("tmp:rollback"),
+                    "title": .string("won't survive"),
+                ])
+            )
             b.connection(ConnectionSelector(key: "posts"))
-             .addNode(fragment: TestPostFields.self, options: AddNodeOptions(position: .start)) { draft in
-                draft.id = "tmp:rollback"
-                draft.title = "won't survive"
-            }
+             .linkNode(fragment: TestPostFields.self, id: "tmp:rollback", options: LinkNodeOptions(position: .start))
         }
         XCTAssertEqual(client.graph.getField(canonicalKey, CachebayConstants.connectionEdgesField)?.refList?.count, 2)
 
         // Revert restores the canonical to the baseline (just `p2`).
         tx.revert()
         let edges = client.graph.getField(canonicalKey, CachebayConstants.connectionEdgesField)?.refList ?? []
-        let ids: [String] = edges.compactMap { ek in
-            guard let nref = client.graph.getField(ek, "node")?.ref else { return nil }
-            return client.graph.getField(nref, "id")?.string
-        }
-        XCTAssertEqual(ids, ["p2"], "revert must restore the pre-layer edge list exactly")
+        let nodeRefs: [String] = edges.compactMap { client.graph.getField($0, "node")?.ref }
+        XCTAssertEqual(nodeRefs, ["Post:p2"], "revert must restore the pre-layer edge list exactly")
     }
 
     // MARK: - executeQuery / executeMutation typed
@@ -945,7 +956,7 @@ final class TypedAPITests: XCTestCase {
             body: "round trip", wordCount: 2,
             summary: "S"
         )
-        client.modifyOptimistic { b, _ in
+        client.modifyOptimistic { b in
             b.writeFragment(fragment: TestNoteFields.self, id: "n1", data: data)
         }
         // Cache record matches the factory dict — proves writeFragment

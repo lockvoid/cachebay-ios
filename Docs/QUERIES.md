@@ -7,7 +7,7 @@
 
 Each one ships in **typed** and **JSON-shaped** flavours — typed is recommended; the JSON shape is the underlying primitive.
 
-> Cache mutations go through `modifyOptimistic` (entity patches via `b.patch(fragment:id:_:)`, connection mutations via `b.connection.addNode(...)` / `removeNode`). See [OPTIMISTIC_UPDATES.md](./OPTIMISTIC_UPDATES.md). `writeQuery` here is for non-layered seeding (test fixtures, SSR restore) — it bypasses the commit/revert machinery.
+> Cache mutations go through `modifyOptimistic` (entity patches via `b.patch(fragment:id:_:)`, connection mutations via `b.connection.linkNode(...)` / `unlinkNode`). See [OPTIMISTIC_UPDATES.md](./OPTIMISTIC_UPDATES.md). `writeQuery` here is for non-layered seeding (test fixtures, SSR restore) — it bypasses the commit/revert machinery.
 
 ---
 

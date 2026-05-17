@@ -34,7 +34,7 @@ Notes:
 For instant UI feedback before the network responds, wrap the mutation in `modifyOptimistic`:
 
 ```swift
-let tx = client.modifyOptimistic { b, _ in
+let tx = client.modifyOptimistic { b in
     b.patch(fragment: PostFields.self, id: "p1") { d in
         d.title = "Draft…"
     }
@@ -55,8 +55,8 @@ do {
 
 Three lifecycle methods, pick the right one:
 
-- **`tx.dispose()`** — server response is authoritative for touched records (~80% of update mutations). `executeMutation`'s normalize already wrote the canonical state; `commit(...)` would `replaceRecord` with the pre-optimistic baseline and wipe server-side updates.
-- **`tx.commit(data)`** — your closure needs to re-execute against `ctx.data`, typically for temp-id swaps.
+- **`tx.dispose()`** — server response is authoritative for touched records (~80% of update mutations). `executeMutation`'s normalize already wrote the canonical state; the optimistic ops can be discarded without restoring baseline.
+- **`tx.commit { b in … }`** — your commit-time ops differ from the optimistic ones, typically for temp-id swaps. The commit closure captures typed server data from outer scope (no `ctx.data` plumbing).
 - **`tx.revert()`** — the mutation failed.
 
 Full layering + lifecycle reference: [OPTIMISTIC_UPDATES.md](./OPTIMISTIC_UPDATES.md).
@@ -75,17 +75,17 @@ let result = try await client.executeMutation(
 if let err = result.error { throw … }
 guard let created = result.data?.createPost else { throw … }
 
-client.modifyOptimistic(autoCommit: true) { b, _ in
+client.modifyOptimistic(autoCommit: true) { b in
     for key in client.inspect.getConnectionKeys(parent: .root, key: "posts") {
-        b.connection(key: key).addNode(node: created, fragment: PostFields.self,
-                                        options: AddNodeOptions(position: .start))
+        b.connection(key: key).linkNode(node: created, fragment: PostFields.self,
+                                        options: LinkNodeOptions(position: .start))
     }
 }
 ```
 
 `autoCommit: true` skips the `.optimistic` phase and runs the closure once at `.commit`, applying ops directly to base graph (no layer recorded, no double-write).
 
-`addNode(node:fragment:options:)` is **plan-aware**: it walks the fragment plan to (a) initialize nested `@connection` canonicals, (b) stamp `__typename` from `F.onTypename`, (c) strip selection-set fields from the entity-record patch so existing ref/refList links survive a merge.
+`linkNode(node:fragment:options:)` is **plan-aware**: it walks the fragment plan to (a) initialize nested `@connection` canonicals, (b) stamp `__typename` from `F.onTypename`, (c) strip selection-set fields from the entity-record patch so existing ref/refList links survive a merge.
 
 `getConnectionKeys` finds every canonical that matches `parent + key + filters`, so a single mutation can fan out across multiple visible lists (e.g. an "All posts" + a "My posts" feed).
 
@@ -94,9 +94,9 @@ client.modifyOptimistic(autoCommit: true) { b, _ in
 ## Pattern: optimistic remove
 
 ```swift
-let tx = client.modifyOptimistic { b, _ in
+let tx = client.modifyOptimistic { b in
     for key in client.inspect.getConnectionKeys(parent: .root, key: "posts") {
-        b.connection(key: key).removeNode(fragment: PostFields.self, id: id)
+        b.connection(key: key).unlinkNode(fragment: PostFields.self, id: id)
     }
 }
 
@@ -105,7 +105,7 @@ do {
         mutation: DeletePost.self,
         variables: .init(input: .init(id: id))
     )
-    tx.dispose()  // optimistic removeNode is the desired final state
+    tx.dispose()  // optimistic unlinkNode is the desired final state
 } catch {
     tx.revert()
 }
@@ -120,7 +120,7 @@ After dispose, you may also `b.delete(fragment: PostFields.self, id: id)` to dro
 Merge known fields immediately; the server response normalizes into the cache via `executeMutation`. After success, `dispose()` drops the layer cleanly without reverting server-side updates.
 
 ```swift
-let tx = client.modifyOptimistic { b, _ in
+let tx = client.modifyOptimistic { b in
     b.patch(fragment: PostFields.self, id: input.id) { d in
         if let v = input.title { d.title = v }
         d.updatedAt = Date().iso8601String
@@ -148,4 +148,4 @@ do {
 
 - [Subscriptions](./SUBSCRIPTIONS.md) — streaming live updates.
 - [Optimistic Updates](./OPTIMISTIC_UPDATES.md) — full builder API + layering.
-- [Relay Connections](./RELAY_CONNECTIONS.md) — `addNode` / `removeNode` / `patch` against canonicals.
+- [Relay Connections](./RELAY_CONNECTIONS.md) — `linkNode` / `unlinkNode` / `patch` against canonicals.

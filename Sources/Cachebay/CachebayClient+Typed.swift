@@ -29,8 +29,8 @@ public extension CachebayClient {
     /// Synchronous typed write into the cache — for seeding test fixtures
     /// or restoring a snapshot. Mutations should go through
     /// `modifyOptimistic` (entities via `b.patch(fragment:target:_:)`,
-    /// connections via `b.connection(...).addNode(node:options:)` /
-    /// `removeNode`) so they participate in the layered commit/revert
+    /// connections via `b.connection(...).linkNode(node:options:)` /
+    /// `unlinkNode`) so they participate in the layered commit/revert
     /// pipeline; `writeQuery` is the non-layered base-cache primitive.
     func writeQuery<Op: Operation>(query op: Op.Type, variables: Op.Variables, data: Op.Data) throws {
         let plan = try planner.getPlan(Op.document)
@@ -59,7 +59,7 @@ public extension CachebayClient {
         // `isConnection = false` — `readConnection` would never run,
         // and the watcher's deps would land on the strict per-page
         // record (`@.posts({…})`) instead of the canonical
-        // (`@connection.posts({…})`). `addNode` writes the canonical,
+        // (`@connection.posts({…})`). `linkNode` writes the canonical,
         // so a strict-keyed watcher silently misses every optimistic
         // update. See `TypedAPIDocumentRoutingTests`.
         let plan = try planner.getPlan(Op.document)
@@ -116,7 +116,7 @@ public extension CachebayClient {
         // `isConnection` on every connection field, and produce a plan
         // whose materialize takes the non-connection path. The result
         // then propagates through `notifyDataBySignature` and overwrites
-        // the watcher's deps with strict-page-keyed entries — `addNode`
+        // the watcher's deps with strict-page-keyed entries — `linkNode`
         // against the canonical fans out to nothing.
         let plan = try planner.getPlan(Op.document)
         let opts = ExecuteQueryOptions(

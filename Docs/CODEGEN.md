@@ -42,9 +42,9 @@ public struct MyQuery: Cachebay.Operation {
 Fragments emit the same shape but conform to `Cachebay.Fragment` instead of `Cachebay.Operation`, plus two extra statics:
 
 - `fragmentName` — disambiguates when a source string ships multiple fragment definitions.
-- `onTypename` — the GraphQL type the fragment is declared on (`fragment X on Y { … }` → `"Y"`). Typed APIs (`readFragment<F>`, `b.patch(fragment:id:)`, `b.connection.removeNode(fragment:id:)`) build the canonical cache key from this + the bare entity id.
+- `onTypename` — the GraphQL type the fragment is declared on (`fragment X on Y { … }` → `"Y"`). Typed APIs (`readFragment<F>`, `b.patch(fragment:id:)`, `b.connection.unlinkNode(fragment:id:)`) build the canonical cache key from this + the bare entity id.
 
-Connection mutations go through `modifyOptimistic { b.connection(...).addNode/removeNode/patch }` — there are no codegen-emitted helpers on `Data.Posts`. See [OPTIMISTIC_UPDATES.md](./OPTIMISTIC_UPDATES.md).
+Connection mutations go through `modifyOptimistic { b.connection(...).linkNode/unlinkNode/patch }` — there are no codegen-emitted helpers on `Data.Posts`. See [OPTIMISTIC_UPDATES.md](./OPTIMISTIC_UPDATES.md).
 
 Plus, in shared files:
 
@@ -181,16 +181,17 @@ let post = client.readFragment(fragment: PostFields.self, id: 42, variables: .in
 Mutations — both entity patches and connection inserts/removes — go through `modifyOptimistic`, which gives you the layered commit/revert flow:
 
 ```swift
-let tx = client.modifyOptimistic { b, ctx in
+let tx = client.modifyOptimistic { b in
     // Typed entity patch.
     b.patch(fragment: PostFields.self, id: 42) { draft in
         draft.title = "renamed"
     }
     // Typed connection prepend (server-confirmed node):
     b.connection(ConnectionSelector(key: "posts"))
-     .addNode(node: newlyCreated, options: AddNodeOptions(position: .start))
+     .linkNode(node: newlyCreated, options: LinkNodeOptions(position: .start))
 }
-tx.commit(serverPayload)   // or tx.revert() on failure
+// Server response normalize already wrote the canonical state.
+tx.dispose()   // or tx.revert() on failure
 ```
 
 See [OPTIMISTIC_UPDATES.md](./OPTIMISTIC_UPDATES.md) for the full builder API.
@@ -211,7 +212,7 @@ for try await event in stream {
 - Typed enums (`enum X` → `enum X: String, Sendable, CaseIterable`).
 - Pre-baked `CachePlan` literals — runtime skips parse/lower entirely.
 - Typed `Data` struct tree per operation/fragment, every selection struct conforming to `OperationData` (mutable `var __data`, `init(__data:)`).
-- Every accessor emits `get`/`set` pairs so the typed `b.patch(fragment:id:_:)` closure-builder (and the `addNode(fragment:options:_:)` form) can write through to `__data` — only fields the closure touches end up in the patch.
+- Every accessor emits `get`/`set` pairs so the typed `b.patch(fragment:id:_:)` closure-builder (and the `linkNode(fragment:options:_:)` form) can write through to `__data` — only fields the closure touches end up in the patch.
 - Interface / union type-case downcasts: `... on Dog { … }` emits `asDog: AsDog?` accessors gated on `__typename`.
 - `CachebaySchema.interfaces` — interface→implementers map for runtime polymorphism (pass to `CachebayOptions.interfaces`).
 - Operation/fragment conformance: queries/mutations/subscriptions conform to `Cachebay.Operation`; fragments conform to `Cachebay.Fragment` (and expose `static let fragmentName` + `static let onTypename`).

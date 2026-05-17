@@ -334,7 +334,7 @@ For balance: things that look bold but are sound.
 - **`depIndex` reverse index** — the right answer to Apollo's `O(W)` per-publish cost.
 - **Async SQLite via serial queue** — never blocks the cache lock.
 - **Compile-time `CachePlan`** — runtime never parses GraphQL.
-- **Typed cache mutation API** — `client.readFragment<F> / writeFragment<F> / watchFragment<F>` keyed by bare entity id; `b.patch(fragment: F.self, id:) { … }` closure-builder writes only touched fields; `c.addNode(node: N, options:)` / `c.removeNode(fragment: F.self, id:)` for connections. Variant-rooted fragments route via `Graph.canonicalTypename` so they land on the canonical interface key. See [CODEGEN.md](./CODEGEN.md), [FRAGMENTS.md](./FRAGMENTS.md), [OPTIMISTIC_UPDATES.md](./OPTIMISTIC_UPDATES.md).
+- **Typed cache mutation API** — `client.readFragment<F> / writeFragment<F> / watchFragment<F>` keyed by bare entity id; `b.patch(fragment: F.self, id:) { … }` closure-builder writes only touched fields; `c.linkNode(node: N, options:)` / `c.unlinkNode(fragment: F.self, id:)` for connections. Variant-rooted fragments route via `Graph.canonicalTypename` so they land on the canonical interface key. See [CODEGEN.md](./CODEGEN.md), [FRAGMENTS.md](./FRAGMENTS.md), [OPTIMISTIC_UPDATES.md](./OPTIMISTIC_UPDATES.md).
 
 These are the load-bearing decisions. They're the reason Cachebay outperforms Apollo on the workload that exposed it.
 

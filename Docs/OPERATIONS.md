@@ -19,7 +19,7 @@ For per-shape recipes:
 - [Mutations](./MUTATIONS.md) — `executeMutation` + `modifyOptimistic` for typed optimistic patches and connection inserts/removes
 - [Subscriptions](./SUBSCRIPTIONS.md)
 - [Fragments](./FRAGMENTS.md) — `readFragment` / `writeFragment` / `watchFragment`
-- [Optimistic Updates](./OPTIMISTIC_UPDATES.md) — typed `b.patch(fragment:id:_:)` + connection `addNode`/`removeNode`
+- [Optimistic Updates](./OPTIMISTIC_UPDATES.md) — typed `b.patch(fragment:id:_:)` + connection `linkNode`/`unlinkNode`
 
 ## Result type
 

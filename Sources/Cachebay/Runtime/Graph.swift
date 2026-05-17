@@ -193,6 +193,25 @@ public final class Graph: @unchecked Sendable {
         return versions[id] ?? 0
     }
 
+    /// Atomic `(record, version)` snapshot. Returns the record dict and
+    /// its version under a single lock acquisition so a concurrent
+    /// writer can't slip a write between the two reads. Returns
+    /// `(nil, 0)` for a missing record.
+    ///
+    /// Why this exists: the materialize path needs to associate the
+    /// record contents with their version (for fingerprint/recycle
+    /// correctness). Two separate `getRecord` + `version` calls let a
+    /// concurrent writer produce a `(stale record, newer version)`
+    /// tuple — a subsequent materialize that actually reads the new
+    /// record gets the *same* version, and `recycleSnapshots`
+    /// version-short-circuits two genuinely-different snapshots into
+    /// one, dropping a watcher emit. Captured by
+    /// `ConcurrencyStressTests.test_watcher_never_drops_final_state_under_burst`.
+    public func recordAndVersion(_ id: CacheKey) -> (record: [String: JSONValue]?, version: UInt32) {
+        lock.lock(); defer { lock.unlock() }
+        return (records[id], versions[id] ?? 0)
+    }
+
     private func noteChangeLocked(_ id: CacheKey, patch: [String: JSONValue]?) {
         pending.insert(id)
         if id == CachebayConstants.rootID, let patch {
@@ -203,23 +222,43 @@ public final class Graph: @unchecked Sendable {
     }
 
     /// Deliver all pending change notifications to `onChange`.
-    /// Re-entrant flushes triggered by the handler are suppressed and will
-    /// surface on the next outer-scope flush call.
+    ///
+    /// Concurrent callers: only one thread runs the handler at a time;
+    /// the others see `isFlushing == true` and return immediately. The
+    /// running thread then **loops until pending is empty** so writes
+    /// that landed *during* its handler call (from any thread) are
+    /// fanned out before the flush exits. Without this loop, concurrent
+    /// `normalize → materialize → flush` cycles can lose a write: the
+    /// late writer's flush short-circuits while the early writer's
+    /// handler has already taken (and cleared) the pending set, so the
+    /// late writer's record sits in `pending` until the next external
+    /// flush call — meaning watchers depending on it never see the
+    /// emit. Captured by
+    /// `ConcurrencyStressTests.test_watcher_never_drops_final_state_under_burst`.
+    ///
+    /// Re-entrant flushes from inside the handler (same thread) still
+    /// short-circuit; the re-entry's writes are picked up by the
+    /// loop on the next iteration without recursion.
     public func flush() {
         lock.lock()
-        if isFlushing || pending.isEmpty {
+        if isFlushing {
+            lock.unlock()
+            return
+        }
+        if pending.isEmpty {
             lock.unlock()
             return
         }
         isFlushing = true
         let handler = onChange
-        let touched = pending
-        pending.removeAll(keepingCapacity: true)
-        lock.unlock()
 
-        handler?(touched)
-
-        lock.lock()
+        while !pending.isEmpty {
+            let touched = pending
+            pending.removeAll(keepingCapacity: true)
+            lock.unlock()
+            handler?(touched)
+            lock.lock()
+        }
         isFlushing = false
         lock.unlock()
     }

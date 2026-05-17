@@ -94,103 +94,51 @@ public extension OptimisticBuilder {
 }
 
 public extension ConnectionAPI {
-    /// Typed connection add — pass a typed `OperationData` (e.g. a server
-    /// payload from `result.data?.createPost?.post`) and Cachebay forwards
-    /// the underlying `__data` into the JSON-shaped `addNode`. Same
-    /// idempotency guarantees: re-adding the same entity refreshes edge
-    /// meta in place without reordering.
+    /// Typed link — pass a typed `OperationData` payload (e.g. a server
+    /// response from `result.data?.createPost?.post`); Cachebay extracts
+    /// `__typename` + `id` and forwards an `EntityRef` to the JSON-shaped
+    /// `linkNode`. The entity record is NOT written by this call —
+    /// entity scalars are owned by `documents.normalize` (already wrote
+    /// when the response was processed) or by an explicit
+    /// `b.writeFragment(...)`. Same idempotency guarantees as the raw
+    /// path: re-linking refreshes edge meta in place without reordering.
     ///
     /// ```swift
     /// b.connection(ConnectionSelector(key: "posts"))
-    ///  .addNode(node: created, options: .init(position: .start))
+    ///   .linkNode(node: created, options: .init(position: .start))
     /// ```
-    func addNode<N: OperationData>(node: N, options: AddNodeOptions) {
-        addNode(node.__data, options: options)
+    func linkNode<N: OperationData>(node: N, options: LinkNodeOptions = .init()) {
+        linkNode(.object(node.__data), options: options)
     }
 
-    /// Plan-aware typed add — pass the typed entity AND the fragment
-    /// that governs its shape. The fragment plan is used to (a)
-    /// initialize nested `@connection` canonicals as empty (or from
-    /// inline `edges`/`pageInfo` in the node data) and (b) strip
-    /// selection-set fields from the entity-record patch so existing
-    /// ref/refList links stay intact.
-    ///
-    /// Use this when adding an entity returned from a mutation
-    /// response (e.g. `result.data?.createProject`) to a connection
-    /// that watches the same entity through a fragment with
-    /// connection-shaped subfields:
+    /// Typed link keyed by bare id — fragment supplies the typename,
+    /// canonicalised through the interfaces map so a variant fragment
+    /// targets the right canonical entity record. Use this in
+    /// optimistic-create flows after `writeFragment` has bootstrapped
+    /// the entity:
     ///
     /// ```swift
+    /// let tempId = UUID().uuidString
+    /// b.writeFragment(fragment: PostFields.self, id: tempId, data: draft)
     /// b.connection(key: key)
-    ///  .addNode(node: created, fragment: ProjectFields.self,
-    ///           options: .init(position: .start))
+    ///   .linkNode(fragment: PostFields.self, id: tempId,
+    ///             options: .init(position: .start))
     /// ```
-    ///
-    /// Mirrors cachebay-web's `addNode(node, { fragment, fragmentName, variables })`
-    /// (`optimistic.ts:952`).
-    func addNode<N: OperationData, F: Fragment>(
-        node: N,
+    func linkNode<F: Fragment, ID: LosslessStringConvertible>(
         fragment: F.Type,
-        variables: [String: JSONValue] = [:],
-        options: AddNodeOptions = AddNodeOptions()
+        id: ID,
+        options: LinkNodeOptions = .init()
     ) {
-        var opts = options
-        opts.fragmentDocument = F.document
-        opts.fragmentName = F.fragmentName
-        opts.fragmentVariables = variables
-        addNode(node.__data, options: opts)
+        linkNode(.key("\(canonicalTypename(F.onTypename)):\(id)"), options: options)
     }
 
-    /// Plan-aware typed add for a fragment-shaped entity. Same as the
-    /// `OperationData` overload but takes `F.Data` directly.
-    func addNode<F: Fragment>(
-        node: F.Data,
-        fragment: F.Type,
-        variables: [String: JSONValue] = [:],
-        options: AddNodeOptions = AddNodeOptions()
-    ) {
-        var opts = options
-        opts.fragmentDocument = F.document
-        opts.fragmentName = F.fragmentName
-        opts.fragmentVariables = variables
-        addNode(node.__data, options: opts)
-    }
-
-    /// Typed connection add via closure-builder — for optimistic inserts
-    /// where you don't have server data yet. Builds a minimal node draft
-    /// out of the fragment shape; only fields the closure touches land in
-    /// the synthesised entity record. Cachebay seeds the draft's
-    /// `__typename` from the fragment's `onTypename` so callers don't
-    /// have to remember to set it (and so the entity normalises into
-    /// the right cache record by id).
-    ///
-    /// ```swift
-    /// b.connection(ConnectionSelector(key: "posts"))
-    ///  .addNode(fragment: PostFields.self, options: .init(position: .start)) { draft in
-    ///      draft.id = "tmp:\(UUID())"
-    ///      draft.title = "Drafting…"
-    ///  }
-    /// ```
-    func addNode<F: Fragment>(
-        fragment: F.Type,
-        options: AddNodeOptions,
-        _ build: (inout F.Data) -> Void
-    ) {
-        var draft = F.Data(__data: ["__typename": .string(F.onTypename)])
-        build(&draft)
-        // Skip if the closure didn't write anything beyond the seeded
-        // `__typename` — an empty optimistic node has no value.
-        guard draft.__data.count > 1 else { return }
-        addNode(draft.__data, options: options)
-    }
-
-    /// Typed connection remove keyed by bare id — fragment supplies the
-    /// typename, canonicalised through the interfaces map so a variant
-    /// fragment targets the right canonical entity record.
-    func removeNode<F: Fragment, ID: LosslessStringConvertible>(
+    /// Typed unlink keyed by bare id — fragment supplies the typename,
+    /// canonicalised through the interfaces map so a variant fragment
+    /// targets the right canonical entity record.
+    func unlinkNode<F: Fragment, ID: LosslessStringConvertible>(
         fragment: F.Type,
         id: ID
     ) {
-        removeNode(.key("\(canonicalTypename(F.onTypename)):\(id)"))
+        unlinkNode(.key("\(canonicalTypename(F.onTypename)):\(id)"))
     }
 }

@@ -28,7 +28,7 @@ import XCTest
 /// mis-built plan, `readConnection` never runs, the materialize main
 /// loop falls into the non-connection branch, and the watcher's deps
 /// land on the strict per-page record (`@.posts({…})`) instead of the
-/// canonical (`@connection.posts({…})`). `addNode` writes the
+/// canonical (`@connection.posts({…})`). `linkNode` writes the
 /// canonical, so a strict-keyed watcher silently misses every
 /// optimistic update — the user creates a project, the projects list
 /// stays blank.
@@ -213,10 +213,10 @@ final class TypedAPIDocumentRoutingTests: XCTestCase {
     // MARK: - INTEGRATION: the actual user-facing failure
 
     /// **Failing integration test.** End-to-end reproduction of the bug:
-    /// a typed `watchQuery<Op>` + optimistic `addNode` flow against a
+    /// a typed `watchQuery<Op>` + optimistic `linkNode` flow against a
     /// codegen-shaped fixture. With the typed API routing through
     /// `Op.networkQuery`, the watcher's deps land on the strict
-    /// per-page record and the optimistic `addNode` against the
+    /// per-page record and the optimistic `linkNode` against the
     /// canonical fans out to nothing — watcher never re-fires.
     func test_integration_typedWatchQuery_thenOptimisticAddNode_firesWatcher() async throws {
         let http = MockHTTPTransport()
@@ -260,24 +260,30 @@ final class TypedAPIDocumentRoutingTests: XCTestCase {
         let countAfterNetwork = received.value.count
         XCTAssertGreaterThanOrEqual(countAfterNetwork, 1, "watcher must fire on the empty network response")
 
-        // Optimistic addNode against the canonical — the production
+        // Optimistic linkNode against the canonical — the production
         // path used by `ProjectMutations.createProject`. The canonical
         // key for `posts` (no filters) is `@connection.posts({})`.
         let canonicalKey: CacheKey = "@connection.posts({})"
-        client.modifyOptimistic { b, _ in
-            b.connection(key: canonicalKey).addNode(
-                [
-                    "__typename": .string("Post"),
-                    "id": .string("p1"),
-                    "title": .string("Optimistic"),
-                ],
-                options: AddNodeOptions(position: .start)
+        // Seed entity scalars first — linkNode is purely structural.
+        try client.writeFragment(
+            id: "Post:p1",
+            fragment: "fragment P on Post { id title }",
+            data: .object([
+                CachebayConstants.typenameField: .string("Post"),
+                "id": .string("p1"),
+                "title": .string("Optimistic"),
+            ])
+        )
+        client.modifyOptimistic { b in
+            b.connection(key: canonicalKey).linkNode(
+                .key("Post:p1"),
+                options: LinkNodeOptions(position: .start)
             )
-        }.commit(nil)
+        }.dispose()
 
         XCTAssertGreaterThan(
             received.value.count, countAfterNetwork,
-            "watcher must re-fire after the optimistic `addNode` against the canonical. If the typed `watchQuery<Op>` routes through `Op.networkQuery` (directive-stripped), the watcher's deps land on `@.posts({})` (strict) instead of `@connection.posts({})` (canonical). `addNode` writes the canonical and the dep-fanout finds nothing — watcher silently misses every optimistic update."
+            "watcher must re-fire after the optimistic `linkNode` against the canonical. If the typed `watchQuery<Op>` routes through `Op.networkQuery` (directive-stripped), the watcher's deps land on `@.posts({})` (strict) instead of `@connection.posts({})` (canonical). `linkNode` writes the canonical and the dep-fanout finds nothing — watcher silently misses every optimistic update."
         )
 
         // The new emission must include the optimistic node.

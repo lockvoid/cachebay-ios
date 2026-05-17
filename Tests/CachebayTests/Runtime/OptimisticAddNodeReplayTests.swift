@@ -1,21 +1,18 @@
 import XCTest
 @testable import Cachebay
 
-/// **Web parity.** `cachebay-web`'s `addNode` records an `ENTITY_WRITE`
-/// op on the optimistic layer in addition to the connection op (see
-/// `core/optimistic.ts`: `ensureEntity` → entityOps push). The
-/// connection op alone wires the new edge into the canonical's edge
-/// list; the entity op is what reasserts the optimistic node fields
-/// after `replay()` runs (e.g. when a canonical merger fires after a
-/// pagination response).
+/// In v0.7.0, `linkNode` is purely structural — it does NOT write
+/// entity-record scalar fields, and `replay()` does NOT reassert
+/// optimistic entity scalars on top of a fresh server normalize. Entity
+/// records are owned exclusively by `documents.normalize` (auto from
+/// queries / mutations / subscriptions) or by explicit
+/// `b.writeFragment(...)`. The connection-link primitive only inserts
+/// an edge into the canonical's `edges` refList.
 ///
-/// The iOS port's `addNode` writes the entity directly via
-/// `optimistic.graph.putRecord(entityKey, node)` and does NOT push an
-/// `EntityOp` — so `replay(connectionKeys:)` reapplies the connection
-/// op but the entity record is whatever the latest writer (e.g. a
-/// network response that returned a different shape for the same id)
-/// left in the graph. Optimistic-only fields on the inserted node get
-/// clobbered after any pagination merge.
+/// This test pins the post-replay invariant: after a server-cycle
+/// normalize that writes new scalars for the same node, the entity
+/// holds the SERVER scalars, not optimistic ones — there's no
+/// optimistic-entity write to replay because linkNode never made one.
 final class OptimisticAddNodeReplayTests: XCTestCase {
 
     private func makeClient() -> CachebayClient {
@@ -40,13 +37,12 @@ final class OptimisticAddNodeReplayTests: XCTestCase {
     }
     """
 
-    /// Optimistic node fields must survive a subsequent normalize that
-    /// targets the same canonical (which triggers `replay()` via
-    /// `canonical.updateConnection`).
-    func test_addNode_entityFields_survive_canonicalMergerReplay() throws {
+    /// linkNode followed by a server-cycle write of the same entity:
+    /// the server scalars win because linkNode never touched the entity.
+    func test_addNode_doesNotWriteEntityScalars_serverNormalizeIsAuthoritative() throws {
         let client = makeClient()
 
-        // First: seed via writeQuery so the canonical exists.
+        // Seed canonical via writeQuery.
         try client.writeQuery(query: connectionQuery, variables: [:], data: .object([
             "posts": .object([
                 "__typename": .string("PostConnection"),
@@ -58,28 +54,24 @@ final class OptimisticAddNodeReplayTests: XCTestCase {
             ])
         ]))
 
-        // Optimistic addNode with a node that has a unique optimistic-
-        // only title. The transaction stays open (no commit/revert) so
-        // its layer remains pending.
+        // Optimistic linkNode — pure structural, leaves the entity untouched.
         let canonicalKey: CacheKey = "@connection.posts({})"
-        _ = client.modifyOptimistic { b, _ in
-            b.connection(key: canonicalKey).addNode(
-                [
-                    "__typename": .string("Post"),
+        _ = client.modifyOptimistic { b in
+            b.connection(key: canonicalKey).linkNode(
+                .object([
+                    CachebayConstants.typenameField: .string("Post"),
                     "id": .string("p1"),
-                    "title": .string("OptimisticTitle"),
-                ],
-                options: AddNodeOptions(position: .start)
+                ]),
+                options: LinkNodeOptions(position: .start)
             )
         }
-        // Optimistic write landed.
-        XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "OptimisticTitle")
+        // No scalar `title` was written by linkNode.
+        XCTAssertNil(client.graph.getField("Post:p1", "title"))
 
-        // Now: a server response writes the same node with a DIFFERENT
-        // title via the same connection. `writeQuery` triggers
-        // `Canonical.updateConnection → optimistic.replay(...)`. The
-        // optimistic layer is still pending, so its ops should reapply
-        // and restore the optimistic fields.
+        // Server response writes the same node with `title: ServerTitle`.
+        // `writeQuery` triggers `Canonical.updateConnection → optimistic.replay(...)`,
+        // but replay only reapplies the connection op (edge insert) — there
+        // was no optimistic entity write to reassert.
         try client.writeQuery(query: connectionQuery, variables: [:], data: .object([
             "posts": .object([
                 "__typename": .string("PostConnection"),
@@ -101,14 +93,13 @@ final class OptimisticAddNodeReplayTests: XCTestCase {
             ])
         ]))
 
-        // Web parity: replay reasserts the optimistic entity write, so
-        // `Post:p1.title` is `OptimisticTitle` again. iOS port (before
-        // the fix) keeps `ServerTitle` because the entity write was
-        // never recorded as a layer op.
+        // The server-normalized scalar is authoritative. linkNode never
+        // wrote an optimistic scalar over `title`, so there's nothing to
+        // clobber it with on replay.
         XCTAssertEqual(
             client.graph.getField("Post:p1", "title")?.string,
-            "OptimisticTitle",
-            "After a canonical merger triggers `replay()`, the optimistic entity write must be reasserted. iOS port previously did `graph.putRecord` directly without recording an `EntityOp` on the layer, so `replay(connectionKeys:)` only re-applied the edge insertion — the entity record was left at whatever the latest writer left in graph (here: `ServerTitle`)."
+            "ServerTitle",
+            "linkNode is structural — entity scalars are owned by documents.normalize, and replay must not reassert anything linkNode never wrote."
         )
     }
 }

@@ -11,7 +11,7 @@ import XCTest
 /// 2. Other connection-level fields (`totalCount`, etc.) merge
 ///    shallowly onto the canonical record itself.
 /// 3. Patches survive commit and revert correctly — same baseline
-///    semantics as addNode/removeNode.
+///    semantics as linkNode/unlinkNode.
 final class ConnectionPatchTests: XCTestCase {
 
     private func makeClient() -> CachebayClient {
@@ -28,9 +28,13 @@ final class ConnectionPatchTests: XCTestCase {
     /// observe field-level merge behaviour on the patch.
     private func seed(_ client: CachebayClient) {
         let selector = ConnectionSelector(parent: .key("Query"), key: "posts")
-        client.modifyOptimistic { b, _ in
+        client.modifyOptimistic { b in
             let c = b.connection(selector)
-            c.addNode(["__typename": "Post", "id": "p1", "title": "A"], options: AddNodeOptions(position: .end))
+            c.linkNode(.object([
+                "__typename": .string("Post"),
+                "id": .string("p1"),
+                "title": .string("A"),
+            ]), options: LinkNodeOptions(position: .end))
             c.patch([
                 "pageInfo": .object([
                     "endCursor": .string("c-end"),
@@ -38,7 +42,7 @@ final class ConnectionPatchTests: XCTestCase {
                 ]),
                 "totalCount": .int(42),
             ])
-        }.commit(nil)
+        }.dispose()
     }
 
     private func pageInfoField(_ client: CachebayClient, _ field: String) -> JSONValue? {
@@ -57,11 +61,11 @@ final class ConnectionPatchTests: XCTestCase {
 
         // Patch only one pageInfo field — the other must survive.
         let selector = ConnectionSelector(parent: .key("Query"), key: "posts")
-        client.modifyOptimistic { b, _ in
+        client.modifyOptimistic { b in
             b.connection(selector).patch([
                 "pageInfo": .object(["hasNextPage": .bool(false)]),
             ])
-        }.commit(nil)
+        }.dispose()
 
         XCTAssertEqual(pageInfoField(client, "endCursor")?.string, "c-end", "endCursor must survive a hasNextPage-only patch")
         XCTAssertEqual(pageInfoField(client, "hasNextPage")?.bool, false)
@@ -75,9 +79,9 @@ final class ConnectionPatchTests: XCTestCase {
         XCTAssertEqual(client.graph.getField(canonicalKey, "totalCount")?.int, 42)
 
         let selector = ConnectionSelector(parent: .key("Query"), key: "posts")
-        client.modifyOptimistic { b, _ in
+        client.modifyOptimistic { b in
             b.connection(selector).patch(["totalCount": .int(43)])
-        }.commit(nil)
+        }.dispose()
 
         XCTAssertEqual(client.graph.getField(canonicalKey, "totalCount")?.int, 43, "totalCount must update")
         // The edges list — also a top-level connection field — must be untouched.
@@ -96,7 +100,7 @@ final class ConnectionPatchTests: XCTestCase {
         XCTAssertEqual(originalHasNext, true)
 
         let selector = ConnectionSelector(parent: .key("Query"), key: "posts")
-        let tx = client.modifyOptimistic { b, _ in
+        let tx = client.modifyOptimistic { b in
             b.connection(selector).patch([
                 "pageInfo": .object([
                     "endCursor": .string("c-overwritten"),
@@ -120,7 +124,7 @@ final class ConnectionPatchTests: XCTestCase {
         let edgesBefore = client.graph.getField(canonicalKey, CachebayConstants.connectionEdgesField)?.refList ?? []
 
         let selector = ConnectionSelector(parent: .key("Query"), key: "posts")
-        let tx = client.modifyOptimistic { b, _ in
+        let tx = client.modifyOptimistic { b in
             b.connection(selector).patch([:])
         }
         // Layer was created but the no-op shouldn't have changed any state.
@@ -156,7 +160,7 @@ final class ConnectionPatchTests: XCTestCase {
         ])
         client.graph.flush()
 
-        client.modifyOptimistic { b, _ in
+        client.modifyOptimistic { b in
             let c = b.connection(key: key)
             c.patch([
                 "totalCount": .int(2),
@@ -165,7 +169,7 @@ final class ConnectionPatchTests: XCTestCase {
                     "hasNextPage": .bool(false),
                 ]),
             ])
-        }.commit(nil)
+        }.dispose()
 
         XCTAssertEqual(client.graph.getField(key, "totalCount")?.int, 2)
         XCTAssertEqual(client.graph.getField(pageInfoKey, "endCursor")?.string, "e1",
@@ -188,12 +192,12 @@ final class ConnectionPatchTests: XCTestCase {
         XCTAssertEqual(client.graph.getField(canonicalKey, "totalCount")?.int, 42)
 
         let selector = ConnectionSelector(parent: .key("Query"), key: "posts")
-        client.modifyOptimistic { b, _ in
+        client.modifyOptimistic { b in
             b.connection(selector).patch { prev in
                 let current = prev["totalCount"]?.int ?? 0
                 return ["totalCount": .int(current + 1)]
             }
-        }.commit(nil)
+        }.dispose()
 
         XCTAssertEqual(client.graph.getField(canonicalKey, "totalCount")?.int, 43,
                        "closure form must read prev.totalCount and increment by 1")
@@ -213,12 +217,12 @@ final class ConnectionPatchTests: XCTestCase {
         // Don't seed — canonical doesn't exist yet.
         let selector = ConnectionSelector(parent: .key("Query"), key: "posts")
         let box = PrevBox()
-        client.modifyOptimistic { b, _ in
+        client.modifyOptimistic { b in
             b.connection(selector).patch { prev in
                 box.capture(prev)
                 return [:] // no-op patch
             }
-        }.commit(nil)
+        }.dispose()
 
         let captured = try XCTUnwrap(box.value, "closure must run at least once")
         XCTAssertTrue(captured.isEmpty, "closure must receive empty dict for absent canonical, got \(captured)")
@@ -230,9 +234,9 @@ final class ConnectionPatchTests: XCTestCase {
         let edgesBefore = client.graph.getField(canonicalKey, CachebayConstants.connectionEdgesField)?.refList ?? []
 
         let selector = ConnectionSelector(parent: .key("Query"), key: "posts")
-        client.modifyOptimistic { b, _ in
+        client.modifyOptimistic { b in
             b.connection(selector).patch { _ in [:] }
-        }.commit(nil)
+        }.dispose()
 
         let edgesAfter = client.graph.getField(canonicalKey, CachebayConstants.connectionEdgesField)?.refList ?? []
         XCTAssertEqual(edgesAfter, edgesBefore, "empty closure return must be a no-op")

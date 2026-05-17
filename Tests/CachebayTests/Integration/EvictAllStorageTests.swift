@@ -31,6 +31,7 @@ final class EvictAllStorageTests: XCTestCase {
             removes.append(contentsOf: ids)
         }
         func load() async throws -> [(CacheKey, [String: JSONValue])] { [] }
+        func loadSync() throws -> [(CacheKey, [String: JSONValue])] { [] }
         func flush() async throws { setFlushed() }
         func evictJournal() async throws {}
         func inspect() async throws -> StorageInspection {

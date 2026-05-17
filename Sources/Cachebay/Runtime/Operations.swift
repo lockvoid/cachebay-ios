@@ -236,21 +236,31 @@ public final class Operations: @unchecked Sendable {
                     return OperationResult(data: nil, error: err)
                 }
                 if result.error == nil {
-                    // Match cachebay-web ordering: watcher fanout
-                    // first, then per-call `onData`. If `onData`
-                    // synchronously triggers UI work that depends on
-                    // watcher state (e.g. reads from a ProjectsView
-                    // backed by the mutated connection), the watcher
-                    // must already have been notified or the UI sees
-                    // stale data for one tick.
-                    let sig = plan.makeSignature(canonical: true, variables: options.variables)
-                    let propagated = queries.notifyDataBySignature(sig, data: fresh.data, fingerprints: fresh.fingerprints, dependencies: fresh.dependencies)
-                    if !propagated {
-                        // Match cachebay-web: invalidate materialize
-                        // cache when no watcher consumed the mutation
-                        // result.
-                        documents.invalidate(plan: plan, variables: options.variables, canonical: true, fingerprint: true)
-                    }
+                    // Watcher fanout already happened: `materialize(...)`
+                    // above calls `graph.flush()`, which delivers the
+                    // mutation's writes through `onChange` →
+                    // `notifyDataByDependencies`. That path
+                    // re-materializes each affected watcher from the
+                    // *current* graph snapshot before emitting — so it
+                    // always reflects the latest state, even when
+                    // multiple mutations interleave.
+                    //
+                    // The historical signature-based notify
+                    // (`notifyDataBySignature(sig, fresh.data, …)`) is
+                    // unsafe under concurrency: `fresh.data` is the
+                    // snapshot read between this mutation's normalize
+                    // and a sibling mutation's normalize, so emitting
+                    // it can install a STALE value as the watcher's
+                    // last-seen state when our notify lands after the
+                    // sibling's. The watcher's `last == graph.last`
+                    // invariant breaks under burst load. Removing the
+                    // pre-materialized notify closes that window —
+                    // dep-fanout's "materialize at notify time" is
+                    // self-correcting.
+                    //
+                    // We still invalidate the materialize cache so the
+                    // next `preferCache: true` read sees fresh data.
+                    documents.invalidate(plan: plan, variables: options.variables, canonical: true, fingerprint: true)
                     options.onData?(fresh.data)
                 }
                 if let err = result.error { options.onError?(err) }

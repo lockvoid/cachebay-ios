@@ -2,11 +2,11 @@
 
 Cachebay's optimistic engine is **layered** and **reconstructive**. Each `modifyOptimistic` call opens a layer that applies immediately. You finish a layer with one of three lifecycle methods:
 
-| Method            | Effect                                                                                          | When to use                                                                |
-| ----------------- | ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `tx.dispose()`    | Drop the layer; **don't** restore baselines, **don't** re-run the builder.                      | The server response normalized into the cache is authoritative. **Most update-style mutations.** |
-| `tx.commit(data)` | Restore baselines for touched records, replay surviving layers, **re-run the builder** at `.commit`. | You need the closure to re-execute with `ctx.data` set (e.g. temp-id swap). |
-| `tx.revert()`     | Restore baselines for touched records, replay surviving layers. Drop the layer.                 | The mutation failed.                                                        |
+| Method                  | Effect                                                                                                                  | When to use                                                                                      |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `tx.dispose()`          | Drop the layer; **don't** restore baselines, **don't** run any commit-time work.                                        | The server response normalized into the cache is authoritative. **Most update-style mutations.** |
+| `tx.commit { b in … }`  | Restore baselines for touched records, replay surviving layers, then run the **separate commit closure** once.          | Temp-id swap or any other case where you need explicit commit-time ops captured from outer scope. |
+| `tx.revert()`           | Restore baselines for touched records, replay surviving layers. Drop the layer.                                         | The mutation failed.                                                                             |
 
 Works for **entities** and **Relay connections**. No edge-list churn; updates are O(1) on connection size via the node index.
 
@@ -15,20 +15,20 @@ Works for **entities** and **Relay connections**. No edge-list churn; updates ar
 ## TL;DR
 
 ```swift
-// Open a layer.
-let tx = client.modifyOptimistic { b, ctx in
+// Open a layer — single-arg closure, no `ctx`.
+let tx = client.modifyOptimistic { b in
     // 1) Typed entity merge — only the touched field lands in the patch.
     b.patch(fragment: PostFields.self, id: "p1") { draft in
         draft.title = "Draft…"
     }
 
-    // 2) Plan-aware typed connection prepend — initializes nested
-    //    @connection canonicals from the fragment plan and strips
-    //    selection-set fields from the entity patch so existing
-    //    ref/refList links survive a merge.
-    let c = b.connection(ConnectionSelector(key: "posts"))
-    c.addNode(node: created, fragment: PostFields.self,
-              options: AddNodeOptions(position: .start))
+    // 2) Connection link — purely structural, takes an EntityRef.
+    //    Cachebay extracts identity from the typed payload and inserts
+    //    the edge ref. The entity record itself is owned by `documents.normalize`
+    //    (which ran when the server response landed) — `linkNode` does
+    //    NOT touch entity scalars.
+    b.connection(ConnectionSelector(key: "posts"))
+        .linkNode(node: created, options: LinkNodeOptions(position: .start))
 }
 
 let result = try await client.executeMutation(...)
@@ -41,6 +41,10 @@ tx.dispose()
 // tx.revert()
 ```
 
+> **Two stores, two APIs.** Entity records (`Post:p1`, `User:u1`, …) are owned by `documents.normalize` (auto from query / mutation / subscription responses) or by an explicit `b.writeFragment` / `b.patch` / `b.delete`. Connection mutations (`b.connection(...).linkNode/unlinkNode/patch`) are owned separately: they manage edge refs, edge meta, and pageInfo — **never entity scalars**. The link primitive takes an `EntityRef`, not a node dict, so the API surface itself enforces the contract.
+>
+> If you want a fresh entity in the cache (optimistic-create flow), use `b.writeFragment(fragment:id:data:)` before linking — see ["Optimistic create flow"](#optimistic-create-flow) below.
+
 ---
 
 ## Lifecycle: dispose vs commit vs revert
@@ -48,7 +52,7 @@ tx.dispose()
 The default mental model from cachebay-web is *"commit on success, revert on failure"*. iOS adds **`dispose()`** because the typical iOS flow awaits the server BEFORE finalizing the layer:
 
 ```swift
-let tx = client.modifyOptimistic { b, _ in
+let tx = client.modifyOptimistic { b in
     b.patch(fragment: PostFields.self, id: id) { d in d.title = optimisticTitle }
 }
 
@@ -64,15 +68,13 @@ tx.dispose()  // ← server normalize already wrote the canonical state.
               //   (e.g. server-bumped `updatedAt`, server-replaced `clips`).
 ```
 
-`commit(_:)` is still useful when you genuinely want the closure to re-run with `ctx.data` — the canonical "temp-id swap" pattern. But for mutations where the server returns the full entity (or any superset of the optimistic patch), prefer `dispose()`.
+`commit { b in … }` is still useful when you genuinely want commit-time ops — the canonical "temp-id swap" pattern. But for mutations where the server returns the full entity (or any superset of the optimistic patch), prefer `dispose()`.
 
 ### When to use each
 
 - **`dispose()`** — server response is authoritative for the touched records. Examples: `updateProject`, `updateClip`, `deleteProject`, `upsertElement`. ~80% of real mutations.
-- **`commit(data)`** — your closure needs to re-execute against server data, typically because the optimistic phase wrote a temp id and the commit phase needs the real id.
+- **`commit { b in … }`** — temp-id swap or any case where commit-time ops differ from optimistic-time ops. The commit closure captures typed server data from outer scope (no `ctx.data` indirection).
 - **`revert()`** — the mutation failed.
-
-The asymmetry is pinned by `OptimisticDisposeTests.test_commit_restoresPreOptimisticBaseline_wipingServerUpdates` — locks in the bug we use `dispose()` to avoid.
 
 ---
 
@@ -84,11 +86,11 @@ When you've **already awaited** the server response and only want to write the r
 let result = try await client.executeMutation(mutation: CreateProject.self, ...)
 guard let created = result.data?.createProject else { throw ... }
 
-client.modifyOptimistic(autoCommit: true) { b, _ in
+client.modifyOptimistic(autoCommit: true) { b in
     let keys = client.inspect.getConnectionKeys(parent: .root, key: "projects")
     for key in keys {
-        b.connection(key: key).addNode(node: created, fragment: ProjectFields.self,
-                                        options: AddNodeOptions(position: .start))
+        b.connection(key: key).linkNode(node: created,
+                                         options: LinkNodeOptions(position: .start))
     }
 }
 // Already applied — no transaction returned.
@@ -135,40 +137,30 @@ public extension OptimisticBuilder {
 
 ```swift
 public extension ConnectionAPI {
-    // Plan-aware: pass a typed entity AND its fragment. The fragment
-    // plan governs (a) initialization of nested @connection canonicals,
-    // (b) selection-set field stripping from the entity-record patch
-    // so existing ref/refList links survive a merge.
-    func addNode<N: OperationData, F: Fragment>(
-        node: N,
+    // Typed link by typed payload. Cachebay extracts identity
+    // (__typename + id) from the payload and forwards an EntityRef.
+    // Does NOT write entity scalars — entity records are owned
+    // by `documents.normalize` (already wrote the response when
+    // the mutation landed) or by an explicit `b.writeFragment`.
+    func linkNode<N: OperationData>(node: N, options: LinkNodeOptions = .init())
+
+    // Typed link by fragment + bare id. The fragment supplies the
+    // typename, canonicalised through the interfaces map so a variant
+    // fragment targets the right canonical entity record. Use this
+    // in optimistic-create flows after `writeFragment` has bootstrapped
+    // the entity:
+    //
+    //   b.writeFragment(fragment: PostFields.self, id: tempId, data: draft)
+    //   c.linkNode(fragment: PostFields.self, id: tempId,
+    //              options: .init(position: .start))
+    func linkNode<F: Fragment, ID: LosslessStringConvertible>(
         fragment: F.Type,
-        variables: [String: JSONValue] = [:],
-        options: AddNodeOptions = AddNodeOptions()
+        id: ID,
+        options: LinkNodeOptions = .init()
     )
 
-    // Same as above, but takes F.Data directly.
-    func addNode<F: Fragment>(
-        node: F.Data,
-        fragment: F.Type,
-        variables: [String: JSONValue] = [:],
-        options: AddNodeOptions = AddNodeOptions()
-    )
-
-    // Typed node from any OperationData (no fragment) — RAW path,
-    // doesn't run plan-aware normalization. Prefer the fragment-typed
-    // overload above unless you know the entity has no selection-set
-    // fields (rare).
-    func addNode<N: OperationData>(node: N, options: AddNodeOptions)
-
-    // Typed closure-builder for optimistic nodes (no server data yet).
-    func addNode<F: Fragment>(
-        fragment: F.Type,
-        options: AddNodeOptions,
-        _ build: (inout F.Data) -> Void
-    )
-
-    // Typed remove keyed by bare id.
-    func removeNode<F: Fragment, ID: LosslessStringConvertible>(
+    // Typed unlink keyed by bare id.
+    func unlinkNode<F: Fragment, ID: LosslessStringConvertible>(
         fragment: F.Type,
         id: ID
     )
@@ -180,7 +172,9 @@ public extension ConnectionAPI {
 ```swift
 public extension OptimisticTransaction {
     // Wraps result.data into JSONValue.object — no manual dance.
-    func commit<O: OperationData>(_ data: O?)
+    // (No typed `commit` overload — the commit closure captures typed
+    // data from outer scope via ordinary Swift closure semantics.)
+    // `tx.commit { b in … }` takes a separate commit-phase builder.
 }
 ```
 
@@ -198,8 +192,16 @@ public protocol OptimisticBuilder: AnyObject, Sendable {
 
 public protocol ConnectionAPI: AnyObject, Sendable {
     var key: CacheKey { get }
-    func addNode(_ node: [String: JSONValue], options: AddNodeOptions)
-    func removeNode(_ ref: EntityRef)
+    /// Insert an edge into the connection pointing at `ref`. Purely
+    /// structural — does not write to the entity record. The entity
+    /// must already exist in the cache (via `documents.normalize` /
+    /// `b.writeFragment`) for the link to materialize anything when
+    /// read.
+    func linkNode(_ ref: EntityRef, options: LinkNodeOptions)
+    /// Remove the edge that points at `ref` from this connection.
+    /// The entity record itself is untouched — only the edge link is
+    /// removed.
+    func unlinkNode(_ ref: EntityRef)
     func patch(_ update: [String: JSONValue])
     // Closure form — read prev snapshot, return patch to merge.
     func patch(_ build: @Sendable (_ prev: [String: JSONValue]) -> [String: JSONValue])
@@ -213,20 +215,28 @@ public protocol ConnectionAPI: AnyObject, Sendable {
 | `.key("Post:p1")`                                | direct                                              |
 | `.object(["__typename": "Post", "id": "p1"])`    | identified via your `KeyFunction` / `id` fallback   |
 
-### Builder context
+### Two closures, captured by scope
 
-Your builder closure receives `(builder, ctx)`. `ctx.phase` is `.optimistic` on the initial call and `.commit` when `commit(data:)` re-runs it. `ctx.data` is `nil` at `.optimistic` and the `JSONValue` you passed to `commit(_:)` at `.commit`.
+`modifyOptimistic { b in … }` runs once on open. `tx.commit { b in … }` runs once on commit. There is no shared closure body, no `phase` switch, no `ctx.data` plumbing — typed server data flows in via ordinary Swift closure capture from the surrounding scope:
 
 ```swift
-let tx = client.modifyOptimistic { b, ctx in
-    // Use server data when commit phase fires; temp on the optimistic pass.
-    let id = ctx.data?["id"]?.string ?? "temp:1"
-    b.patch(.key("Post:\(id)"), ["title": "X"], mode: .merge)
+let tx = client.modifyOptimistic { b in
+    // Optimistic-phase ops only.
+    b.patch(.key("Post:temp:1"), ["title": "Drafting…"], mode: .merge)
 }
-tx.commit(.object(["id": "real-id"]))
+
+let result = try await client.executeMutation(...)
+
+tx.commit { b in
+    // Commit-phase ops. `result` is captured directly — fully typed,
+    // no JSONValue dance.
+    if let post = result.data?.createPost?.post {
+        b.patch(.key("Post:\(post.id)"), ["title": post.title], mode: .merge)
+    }
+}
 ```
 
-This re-execution lets you swap a temp id for the server-assigned one and rebuild the same effects against the real record. **Note:** if your closure doesn't actually use `ctx.data`, `commit(...)` is a wasteful round-trip — prefer `dispose()`.
+The optimistic closure's recorded ops replay when a sibling layer commits/reverts; the closure itself never re-executes. The commit closure runs exactly once when this layer commits.
 
 ---
 
@@ -257,7 +267,7 @@ b.patch(.key("Post:p1"), mode: .merge) { prev in
 b.delete(.key("Post:p1"))
 ```
 
-Removes the record snapshot. Edges referencing it are not auto-removed — use `connection.removeNode` for that.
+Removes the record snapshot. Edges referencing it are not auto-removed — use `connection.unlinkNode` for that.
 
 ---
 
@@ -277,29 +287,35 @@ let c = b.connection(
 let c2 = b.connection(key: "@connection.posts({\"category\":\"tech\"})")
 ```
 
-### `c.addNode(node, fragment:, options:)` — plan-aware
+### `c.linkNode(_ ref:, options:)` — link an existing entity
 
 ```swift
-c.addNode(node: created, fragment: PostFields.self, options: AddNodeOptions(
+// Link by direct cache key:
+c.linkNode(.key("Post:p1"), options: LinkNodeOptions(
     position: .start,                  // .start | .end | .before | .after
     anchor: .key("Post:42"),           // required for .before / .after
-    edge: ["cursor": .string("cur42")] // edge-level metadata
+    edge: ["cursor": .string("cur42")] // edge-level metadata, lands on edge record
 ))
+
+// Link by typed payload — Cachebay extracts identity:
+c.linkNode(node: created, options: .init(position: .start))
+
+// Link by fragment + id (typed; canonicalises interface namespaces):
+c.linkNode(fragment: PostFields.self, id: tempId, options: .init(position: .start))
 ```
 
-What plan-aware means:
+What `linkNode` does (and doesn't do):
 
-1. **Stamps `__typename`** from `F.onTypename` if the node data omits it.
-2. **Initializes nested `@connection` canonicals** for every connection field in the fragment plan (idempotent — preserves existing canonicals; uses inline `edges`/`pageInfo` from node data when present).
-3. **Strips selection-set fields** from the entity-record patch (two-pass: plan-aware via `PlanField.selectionSet`, then shape-aware via `__typename` heuristic for fields outside the plan). Existing ref/refList links survive a merge.
+- **Inserts an edge ref** into the canonical's `edges` refList at `position`. O(1) via `ConnectionIndex`.
+- **Synthesises the edge record** with `__typename: <NodeTypename>Edge`, `node: .ref(entityKey)`, plus any `edge:` meta you passed.
+- **Updates `::nodeIndex` and `::cursorIndex`** so subsequent dedup/anchor lookups are O(1).
+- **Does NOT write to the entity record.** The entity scalars (`title`, `body`, etc.) come from `documents.normalize` (auto from the operation that produced this entity) or from an explicit `b.writeFragment` you ran beforehand. If the entity isn't in the cache yet, the edge ref will dangle until something writes it — that's the caller's responsibility.
 
-Without (3), passing a typed mutation result whose `__data` carries `clips: []` (an empty array) would overwrite the server-cycle `clips: .refList(...)` with a raw array, hard-missing the watcher. The typed `addNode(fragment:)` is the supported path; the no-fragment overload is an unsafe escape hatch.
-
-### `c.removeNode(ref)`
+### `c.unlinkNode(ref)`
 
 ```swift
-c.removeNode(.key("Post:p1"))
-c.removeNode(.object(["__typename": "Post", "id": "p1"]))
+c.unlinkNode(.key("Post:p1"))
+c.unlinkNode(.object(["__typename": "Post", "id": "p1"]))
 ```
 
 Removes the first occurrence of that node. The underlying entity record is untouched.
@@ -330,8 +346,7 @@ Shallow-merges into the canonical record. If `pageInfo` is included, it's merged
 
 ```swift
 for key in client.inspect.getConnectionKeys(parent: .root, key: "posts") {
-    b.connection(key: key).addNode(node: created, fragment: PostFields.self,
-                                    options: .init(position: .start))
+    b.connection(key: key).linkNode(node: created, options: .init(position: .start))
 }
 ```
 
@@ -351,10 +366,10 @@ let result = try await client.executeMutation(mutation: CreateProject.self,
 if let err = result.error { throw ProjectError.graphQL(err.localizedDescription) }
 guard let created = result.data?.createProject else { throw ProjectError.noData }
 
-client.modifyOptimistic(autoCommit: true) { b, _ in
+client.modifyOptimistic(autoCommit: true) { b in
     for key in client.inspect.getConnectionKeys(parent: .root, key: "projects") {
-        b.connection(key: key).addNode(node: created, fragment: ProjectFields.self,
-                                        options: AddNodeOptions(position: .start))
+        b.connection(key: key).linkNode(node: created,
+                                         options: LinkNodeOptions(position: .start))
     }
 }
 return created.id
@@ -365,7 +380,7 @@ return created.id
 We can guess optimistically; the server's full response is authoritative on commit.
 
 ```swift
-let tx = client.modifyOptimistic { b, _ in
+let tx = client.modifyOptimistic { b in
     b.patch(fragment: ProjectFields.self, id: id) { p in
         if let n = input.name { p.name = n }
         p.updatedAt = Date().iso8601String
@@ -386,46 +401,65 @@ do {
 ### Delete — instant UI + dispose
 
 ```swift
-let tx = client.modifyOptimistic { b, _ in
+let tx = client.modifyOptimistic { b in
     for key in client.inspect.getConnectionKeys(parent: .root, key: "posts") {
-        b.connection(key: key).removeNode(fragment: PostFields.self, id: id)
+        b.connection(key: key).unlinkNode(fragment: PostFields.self, id: id)
     }
 }
 
 do {
     _ = try await client.executeMutation(mutation: DeletePost.self,
                                           variables: .init(id: id))
-    tx.dispose()  // optimistic removeNode is the desired final state
+    tx.dispose()  // optimistic unlinkNode is the desired final state
 } catch {
     tx.revert()
 }
 ```
 
-### Temp-id swap — full two-phase
+<a id="optimistic-create-flow"></a>
+### Optimistic create — write entity, then link
 
-Rare in iOS (usually `autoCommit` is what you want). Use when you need the closure to re-execute with the real id.
+Write the temp entity into the cache so watchers can materialize it,
+then link the temp id into every relevant connection. Two explicit
+operations, two clean responsibilities — entity write via
+`writeFragment`, structural link via `linkNode`.
 
 ```swift
 let tempId = "temp:\(UUID().uuidString)"
+let draft = PostFields.Data.make(id: tempId, title: input.title, body: input.body)
 
-let tx = client.modifyOptimistic { b, ctx in
-    let id = ctx.data?["id"]?.string ?? tempId
-    b.connection(key: "@connection.posts({})").addNode(
-        fragment: PostFields.self,
-        options: AddNodeOptions(position: .start)
-    ) { d in
-        d.id = id  // temp id at .optimistic, server id at .commit
-        d.title = input.title
+let tx = client.modifyOptimistic { b in
+    b.writeFragment(fragment: PostFields.self, id: tempId, data: draft)
+    for key in client.inspect.getConnectionKeys(parent: .root, key: "posts") {
+        b.connection(key: key).linkNode(
+            fragment: PostFields.self, id: tempId,
+            options: LinkNodeOptions(position: .start)
+        )
     }
 }
 
 do {
     let result = try await client.executeMutation(...)
-    tx.commit(result.data)  // closure re-runs with real id; addNode dedups
+    if let err = result.error { tx.revert(); throw err }
+    // Server response normalized into Post:<realId>. Dispose the layer
+    // (which holds the temp entity + temp-keyed edges) and run a fresh
+    // autoCommit linking the real id into the same connections.
+    tx.dispose()
+    if let created = result.data?.createPost?.post {
+        client.modifyOptimistic(autoCommit: true) { b in
+            for key in client.inspect.getConnectionKeys(parent: .root, key: "posts") {
+                b.connection(key: key).linkNode(node: created,
+                                                 options: LinkNodeOptions(position: .start))
+            }
+            b.delete(.key("Post:\(tempId)"))
+        }
+    }
 } catch {
     tx.revert()
 }
 ```
+
+For the most common case — server response is the only valid identity, no temp UI needed —  use `autoCommit` directly (see "Create — single-phase" above).
 
 ---
 
@@ -435,7 +469,7 @@ Layers apply in insertion order:
 
 ```
 Base:                         [A]
-L1: addNode B (start)     →   [B*, A]
+L1: linkNode B (start)     →   [B*, A]
 L2: patch A.title         →   [B*, A'*]
 revert(L1)                →   [A'*]      // L2 still applied on top of base
 revert(L2)                →   [A]        // back to base
@@ -448,9 +482,41 @@ The implementation:
 1. On the first touch of any record, the **committed baseline** (the pre-optimistic snapshot) is captured globally — once per record across all layers.
 2. On `revert(L)` or `commit(L, data:)`, the layer is removed from the pending list, the committed baseline is restored for every record the layer touched, and surviving layers' ops are replayed in id order on those records.
 3. On `dispose(L)`, the layer is removed from the pending list and baselines are dropped for records this layer was the SOLE toucher of. Graph state is **not** modified.
-4. Connection ops follow the same pattern — the canonical's pre-layer state is captured once, and surviving layers' addNode/removeNode/patch calls re-apply on top.
+4. Connection ops follow the same pattern — the canonical's pre-layer state is captured once, and surviving layers' linkNode/unlinkNode/patch calls re-apply on top.
 
 This is why reverting a *middle* layer is safe: cachebay always rebuilds from the committed baseline, never from a layer-specific delta that could go stale.
+
+### Pending layers survive server normalize
+
+Pending optimistic layers are also re-applied **after every server-response normalize** (mutation responses, subscription frames, query refreshes, `writeFragment` calls). This closes a class of races where a server response carrying stale values for a field a pending layer just patched would silently clobber the optimistic state.
+
+```
+T=0    txA: patch Clip:c1.captionsEnabled = true.
+T=100  txB: patch Clip:c1.volume = 0.5.
+T=300  Server response to mutation A lands. The full ClipFields payload
+       includes volume=1.0 (server didn't know about txB yet).
+       documents.normalize → shallow-merges {volume: 1.0} over Clip:c1.
+       → cachebay auto-replays pending layers' entity ops scoped to
+         Clip:c1 → txB's volume=0.5 re-applies.
+       Final state: {captionsEnabled: true, volume: 0.5}.
+       No flicker. Pending patches survive.
+```
+
+Rules:
+
+- **Replay is scoped** to the entity keys the normalize actually wrote. Layers' ops on records the normalize didn't touch are not re-applied.
+- **Latest-id layer wins** on per-field conflicts between layers (same as everywhere else in the layered model).
+- **Server data wins on UNpatched fields.** A layer patching `volume` does not block the server's `captionsEnabled` update; only the fields the layer's patch contains are re-applied.
+- **Applies to all normalize paths** — mutation `executeMutation`, subscription frames in `executeSubscription`, query refresh in `executeQuery` (cache-and-network), and explicit `writeFragment` / `writeQuery`. Subscriptions are the most-race-prone path; this is where the protection matters most.
+- **Symmetric with connection-side replay.** Connection canonicals have had this protection since v0.4 (the `OptimisticReplayer` bridge in `Canonical.updateConnection`). Entity records gained it in v0.9.1.
+
+If you want the server's value to land on a patched field, the explicit options are:
+
+- `tx.commit { b in b.patch(.key("…"), [...server value...], mode: .merge) }` — replace with server data.
+- `tx.revert()` — drop the optimistic patch, baseline restore wins.
+- `tx.dispose()` followed by a fresh write — drop layer bookkeeping, write the server-confirmed value explicitly.
+
+Quietly dropping a pending optimistic patch was never something Cachebay should do silently; the three lifecycle methods are the only ways to override pending state.
 
 ---
 
@@ -461,9 +527,9 @@ Verified by `Tests/CachebayTests/Performance/PerformanceTests.swift` on a typica
 | Scenario                              | Throughput        | Per-op  |
 | ------------------------------------- | ----------------- | ------- |
 | Entity patch apply+revert             | ~530k ops/s       | 1.9 µs  |
-| Connection addNode + commit (empty)   | ~233k ops/s       | 4.3 µs  |
-| Connection addNode @ preload=5 000    | ~12k ops/s        | 86 µs   |
-| Mixed patch+addNode apply+revert      | ~86k ops/s        | 11.6 µs |
+| Connection linkNode + commit (empty)   | ~233k ops/s       | 4.3 µs  |
+| Connection linkNode @ preload=5 000    | ~12k ops/s        | 86 µs   |
+| Mixed patch+linkNode apply+revert      | ~86k ops/s        | 11.6 µs |
 | Revert bottom-of-1000 (per survivor)  | ~0.34 µs          | —       |
 
 Tail latency at preload=5 000 stays p99/p50 < 5×; no hidden spikes hide in the amortised mean.
@@ -473,5 +539,5 @@ Tail latency at preload=5 000 stays p99/p50 < 5×; no hidden spikes hide in the 
 ## Next steps
 
 - [Storage](./STORAGE.md) — optimistic state is **not** persisted; only committed records replicate to disk.
-- [Relay Connections](./RELAY_CONNECTIONS.md) — `addNode` / `removeNode` reference.
+- [Relay Connections](./RELAY_CONNECTIONS.md) — `linkNode` / `unlinkNode` reference.
 - [Mutations](./MUTATIONS.md) — full server-side patterns.

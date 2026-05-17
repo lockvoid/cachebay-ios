@@ -28,39 +28,36 @@ final class OptimisticAutoCommitTests: XCTestCase {
         ))
     }
 
-    /// AutoCommit runs the closure exactly once, in `.commit` phase.
-    /// The standard form runs it twice (`.optimistic` + `.commit`).
-    func test_autoCommit_runsClosureOnce_inCommitPhase() {
+    /// AutoCommit runs the closure exactly once, applying ops directly
+    /// to the graph. No layer recorded.
+    func test_autoCommit_runsClosureExactlyOnce() {
         let client = makeClient()
-        let phaseRecord = AutoCommitPhaseLog()
+        let runs = CaptureBox<Int>(value: 0)
 
-        client.modifyOptimistic(autoCommit: true) { _, ctx in
-            phaseRecord.append(phase: ctx.phase, hasData: ctx.data != nil)
+        client.modifyOptimistic(autoCommit: true) { _ in
+            runs.value += 1
         }
 
-        let entries = phaseRecord.snapshot()
-        XCTAssertEqual(entries.count, 1, "autoCommit must run closure exactly once, got \(entries.count) runs")
-        XCTAssertEqual(entries[0].phase, .commit, "autoCommit phase must be .commit")
-        XCTAssertFalse(entries[0].hasData, "autoCommit ctx.data must be nil (caller uses outer-scope data)")
+        XCTAssertEqual(runs.value, 1, "autoCommit must run closure exactly once, got \(runs.value) runs")
     }
 
-    /// Standard form (no autoCommit label): closure runs twice across
-    /// the two-phase commit cycle. Sanity check that adding the
-    /// autoCommit overload didn't accidentally change baseline
-    /// behavior.
-    func test_standardForm_runsClosureTwice_optimisticThenCommit() {
+    /// Standard form: optimistic closure runs once at `modifyOptimistic`
+    /// time; the SEPARATE commit closure runs once at `tx.commit` time.
+    /// Sanity check the split-closure semantic.
+    func test_standardForm_runsBothClosuresExactlyOnce() {
         let client = makeClient()
-        let phaseRecord = AutoCommitPhaseLog()
+        let optRuns = CaptureBox<Int>(value: 0)
+        let commitRuns = CaptureBox<Int>(value: 0)
 
-        let tx = client.modifyOptimistic { _, ctx in
-            phaseRecord.append(phase: ctx.phase, hasData: ctx.data != nil)
+        let tx = client.modifyOptimistic { _ in
+            optRuns.value += 1
         }
-        tx.commit(nil)
+        tx.commit { _ in
+            commitRuns.value += 1
+        }
 
-        let entries = phaseRecord.snapshot()
-        XCTAssertEqual(entries.count, 2)
-        XCTAssertEqual(entries[0].phase, .optimistic)
-        XCTAssertEqual(entries[1].phase, .commit)
+        XCTAssertEqual(optRuns.value, 1, "optimistic closure runs once")
+        XCTAssertEqual(commitRuns.value, 1, "commit closure runs once")
     }
 
     /// Writes via the builder land on the base graph immediately —
@@ -68,7 +65,7 @@ final class OptimisticAutoCommitTests: XCTestCase {
     func test_autoCommit_writesLandOnBaseGraph() {
         let client = makeClient()
 
-        client.modifyOptimistic(autoCommit: true) { b, _ in
+        client.modifyOptimistic(autoCommit: true) { b in
             b.patch(.key("Project:42"), [
                 CachebayConstants.typenameField: .string("Project"),
                 "id": .string("42"),
@@ -89,7 +86,7 @@ final class OptimisticAutoCommitTests: XCTestCase {
         let client = makeClient()
 
         // Establish an unrelated layer so we can revert it later.
-        let unrelated = client.modifyOptimistic { b, _ in
+        let unrelated = client.modifyOptimistic { b in
             b.patch(.key("Project:99"), [
                 CachebayConstants.typenameField: .string("Project"),
                 "id": .string("99"),
@@ -98,7 +95,7 @@ final class OptimisticAutoCommitTests: XCTestCase {
         }
 
         // AutoCommit a separate write.
-        client.modifyOptimistic(autoCommit: true) { b, _ in
+        client.modifyOptimistic(autoCommit: true) { b in
             b.patch(.key("Project:42"), [
                 CachebayConstants.typenameField: .string("Project"),
                 "id": .string("42"),
@@ -117,7 +114,7 @@ final class OptimisticAutoCommitTests: XCTestCase {
                        "autoCommit writes must NOT be reverted by an unrelated layer's revert — proves no layer was recorded")
     }
 
-    /// AutoCommit + `b.connection(...).addNode(...)` writes the new
+    /// AutoCommit + `b.connection(...).linkNode(...)` writes the new
     /// edge into the canonical record without going through any
     /// optimistic-phase recording. Smoke for the create-project
     /// pattern after the refactor.
@@ -125,7 +122,7 @@ final class OptimisticAutoCommitTests: XCTestCase {
         let client = makeClient()
         let canonicalKey: CacheKey = "@connection.posts({})"
 
-        // Pre-seed an empty canonical so addNode has somewhere to
+        // Pre-seed an empty canonical so linkNode has somewhere to
         // attach the edge.
         client.graph.replaceRecord("\(canonicalKey).pageInfo", [
             CachebayConstants.typenameField: .string("PageInfo"),
@@ -139,39 +136,29 @@ final class OptimisticAutoCommitTests: XCTestCase {
         ])
         client.graph.flush()
 
-        client.modifyOptimistic(autoCommit: true) { b, _ in
-            b.connection(key: canonicalKey).addNode(
-                [
-                    CachebayConstants.typenameField: .string("Post"),
-                    "id": .string("p1"),
-                    "title": .string("From server"),
-                ],
-                options: AddNodeOptions(position: .end)
+        // Seed the entity record explicitly — linkNode is purely structural
+        // and does not write entity scalars.
+        try client.writeFragment(
+            id: "Post:p1",
+            fragment: "fragment P on Post { id title }",
+            data: .object([
+                CachebayConstants.typenameField: .string("Post"),
+                "id": .string("p1"),
+                "title": .string("From server"),
+            ])
+        )
+        client.modifyOptimistic(autoCommit: true) { b in
+            b.connection(key: canonicalKey).linkNode(
+                .key("Post:p1"),
+                options: LinkNodeOptions(position: .end)
             )
         }
 
         let edgeRefs = client.graph.getField(canonicalKey, CachebayConstants.connectionEdgesField)?.refList ?? []
-        XCTAssertEqual(edgeRefs.count, 1, "autoCommit addNode must land an edge on the canonical")
+        XCTAssertEqual(edgeRefs.count, 1, "autoCommit linkNode must land an edge on the canonical")
         let edgeNode = client.graph.getField(edgeRefs[0], "node")?.ref
         XCTAssertEqual(edgeNode, "Post:p1")
         XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "From server")
     }
 }
 
-/// Sendable log of phase observations across @Sendable closure calls.
-private final class AutoCommitPhaseLog: @unchecked Sendable {
-    struct Entry: Sendable {
-        let phase: BuilderPhase
-        let hasData: Bool
-    }
-    private let lock = NSLock()
-    private var entries: [Entry] = []
-    func append(phase: BuilderPhase, hasData: Bool) {
-        lock.lock(); defer { lock.unlock() }
-        entries.append(Entry(phase: phase, hasData: hasData))
-    }
-    func snapshot() -> [Entry] {
-        lock.lock(); defer { lock.unlock() }
-        return entries
-    }
-}

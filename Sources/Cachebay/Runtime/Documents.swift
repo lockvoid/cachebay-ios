@@ -75,11 +75,22 @@ public final class Documents: @unchecked Sendable {
     private let lock = NSLock()
     private var materializeCache: [String: MaterializeResult] = [:]
 
+    /// Optimistic replayer — injected after construction (avoids
+    /// circular init between Documents and Optimistic). Used by
+    /// `normalize` to re-apply pending entity ops after a
+    /// server-response merge so they aren't clobbered. Mirrors the
+    /// `Canonical.replayer` injection pattern for connection canonicals.
+    private var replayer: OptimisticReplayer?
+
     public init(graph: Graph, planner: Planner, canonical: Canonical, logger: Logger? = nil) {
         self.graph = graph
         self.planner = planner
         self.canonical = canonical
         self.logger = logger
+    }
+
+    public func setReplayer(_ replayer: OptimisticReplayer?) {
+        self.replayer = replayer
     }
 
     // MARK: - Normalize
@@ -97,6 +108,16 @@ public final class Documents: @unchecked Sendable {
         }
 
         var pendingPages: [PendingPage] = []
+        // Tracks identified entity keys (`__typename:id` shaped) written
+        // during this normalize call. Used by the post-walk replay hook
+        // below to scope the optimistic re-application so it touches
+        // only entities the server response actually wrote.
+        var touchedEntities: Set<CacheKey> = []
+        // If the normalize was rooted at an entity-shaped id (e.g.
+        // `writeFragment(id: "Post:p1", …)`), the root itself is an
+        // entity that the layer's recorded ops may target. Seed it so
+        // the replay catches root-only patches.
+        if !isRoot { touchedEntities.insert(startId) }
 
         let initialFrame = Frame(
             parentId: startId,
@@ -106,11 +127,22 @@ public final class Documents: @unchecked Sendable {
         )
 
         if case .object(let obj) = data {
-            normalizeObject(obj, frame: initialFrame, plan: plan, variables: variables, shouldLink: shouldLink, pendingPages: &pendingPages)
+            normalizeObject(obj, frame: initialFrame, plan: plan, variables: variables, shouldLink: shouldLink, pendingPages: &pendingPages, touchedEntities: &touchedEntities)
         }
 
         for p in pendingPages {
             canonical.updateConnection(field: p.field, parentId: p.parentId, variables: variables, pageKey: p.pageKey)
+        }
+
+        // After the walk and the canonical connection merge, re-apply
+        // pending optimistic layers' entity ops scoped to the entities
+        // we just wrote. Symmetric with the connection-side replay that
+        // `canonical.updateConnection` triggers — closes the entity-axis
+        // race where a server response's shallow-merge would otherwise
+        // clobber a concurrent optimistic layer's field patch.
+        // See `OptimisticReplayAfterNormalizeTests`.
+        if !touchedEntities.isEmpty {
+            replayer?.replayEntityOps(scope: touchedEntities)
         }
     }
 
@@ -133,11 +165,12 @@ public final class Documents: @unchecked Sendable {
         plan: CachePlan,
         variables: [String: JSONValue],
         shouldLink: Bool,
-        pendingPages: inout [PendingPage]
+        pendingPages: inout [PendingPage],
+        touchedEntities: inout Set<CacheKey>
     ) {
         for (responseKey, value) in obj {
             let field = frame.fieldsMap[responseKey]
-            normalizeValue(value, responseKey: responseKey, field: field, frame: frame, plan: plan, variables: variables, shouldLink: shouldLink, pendingPages: &pendingPages)
+            normalizeValue(value, responseKey: responseKey, field: field, frame: frame, plan: plan, variables: variables, shouldLink: shouldLink, pendingPages: &pendingPages, touchedEntities: &touchedEntities)
         }
     }
 
@@ -149,11 +182,12 @@ public final class Documents: @unchecked Sendable {
         plan: CachePlan,
         variables: [String: JSONValue],
         shouldLink: Bool,
-        pendingPages: inout [PendingPage]
+        pendingPages: inout [PendingPage],
+        touchedEntities: inout Set<CacheKey>
     ) {
         // Arrays
         if case .array(let arr) = value {
-            normalizeArray(arr, responseKey: responseKey, field: field, frame: frame, plan: plan, variables: variables, shouldLink: shouldLink, pendingPages: &pendingPages)
+            normalizeArray(arr, responseKey: responseKey, field: field, frame: frame, plan: plan, variables: variables, shouldLink: shouldLink, pendingPages: &pendingPages, touchedEntities: &touchedEntities)
             return
         }
 
@@ -173,15 +207,15 @@ public final class Documents: @unchecked Sendable {
             }
 
             if field.isConnection {
-                normalizeConnection(obj, field: field, frame: frame, plan: plan, variables: variables, shouldLink: shouldLink, pendingPages: &pendingPages)
+                normalizeConnection(obj, field: field, frame: frame, plan: plan, variables: variables, shouldLink: shouldLink, pendingPages: &pendingPages, touchedEntities: &touchedEntities)
                 return
             }
 
-            if normalizeEntityObject(obj, field: field, frame: frame, plan: plan, variables: variables, shouldLink: shouldLink, pendingPages: &pendingPages) {
+            if normalizeEntityObject(obj, field: field, frame: frame, plan: plan, variables: variables, shouldLink: shouldLink, pendingPages: &pendingPages, touchedEntities: &touchedEntities) {
                 return
             }
 
-            normalizeInlineContainer(obj, field: field, frame: frame, plan: plan, variables: variables, shouldLink: shouldLink, pendingPages: &pendingPages)
+            normalizeInlineContainer(obj, field: field, frame: frame, plan: plan, variables: variables, shouldLink: shouldLink, pendingPages: &pendingPages, touchedEntities: &touchedEntities)
             return
         }
 
@@ -199,18 +233,19 @@ public final class Documents: @unchecked Sendable {
         plan: CachePlan,
         variables: [String: JSONValue],
         shouldLink: Bool,
-        pendingPages: inout [PendingPage]
+        pendingPages: inout [PendingPage],
+        touchedEntities: inout Set<CacheKey>
     ) {
         // Edges array within a connection page.
         if frame.insideConnection, responseKey == CachebayConstants.connectionEdgesField, let pageKey = frame.pageKey {
-            normalizeEdgesArray(pageKey: pageKey, edges: arr, edgesField: field, plan: plan, variables: variables, pendingPages: &pendingPages)
+            normalizeEdgesArray(pageKey: pageKey, edges: arr, edgesField: field, plan: plan, variables: variables, pendingPages: &pendingPages, touchedEntities: &touchedEntities)
             return
         }
 
         guard let field else { return }
 
         if field.selectionSet != nil {
-            normalizeArrayOfSelections(arr, field: field, frame: frame, plan: plan, variables: variables, pendingPages: &pendingPages)
+            normalizeArrayOfSelections(arr, field: field, frame: frame, plan: plan, variables: variables, pendingPages: &pendingPages, touchedEntities: &touchedEntities)
         } else {
             let fieldKey = Keys.buildFieldKey(field: field, variables: variables)
             graph.putRecord(frame.parentId, [fieldKey: .array(arr)])
@@ -223,7 +258,8 @@ public final class Documents: @unchecked Sendable {
         edgesField: PlanField?,
         plan: CachePlan,
         variables: [String: JSONValue],
-        pendingPages: inout [PendingPage]
+        pendingPages: inout [PendingPage],
+        touchedEntities: inout Set<CacheKey>
     ) {
         var refs: [CacheKey] = []
         refs.reserveCapacity(edges.count)
@@ -253,7 +289,7 @@ public final class Documents: @unchecked Sendable {
             graph.putRecord(edgeKey, edgePatch)
 
             let edgeFrame = Frame(parentId: edgeKey, fieldsMap: edgesChildMap, insideConnection: true, pageKey: pageKey)
-            normalizeObject(edgeObj, frame: edgeFrame, plan: plan, variables: variables, shouldLink: true, pendingPages: &pendingPages)
+            normalizeObject(edgeObj, frame: edgeFrame, plan: plan, variables: variables, shouldLink: true, pendingPages: &pendingPages, touchedEntities: &touchedEntities)
         }
     }
 
@@ -264,7 +300,8 @@ public final class Documents: @unchecked Sendable {
         plan: CachePlan,
         variables: [String: JSONValue],
         shouldLink: Bool,
-        pendingPages: inout [PendingPage]
+        pendingPages: inout [PendingPage],
+        touchedEntities: inout Set<CacheKey>
     ) {
         let pageKey = Keys.buildConnectionKey(field: field, parentId: frame.parentId, variables: variables)
         let fieldKey = Keys.buildFieldKey(field: field, variables: variables)
@@ -306,7 +343,7 @@ public final class Documents: @unchecked Sendable {
         // Children (edges + nested selections on connection itself).
         let connectionFieldsMap = field.selectionMap ?? [:]
         let nextFrame = Frame(parentId: pageKey, fieldsMap: connectionFieldsMap, insideConnection: true, pageKey: pageKey)
-        normalizeObject(obj, frame: nextFrame, plan: plan, variables: variables, shouldLink: shouldLink, pendingPages: &pendingPages)
+        normalizeObject(obj, frame: nextFrame, plan: plan, variables: variables, shouldLink: shouldLink, pendingPages: &pendingPages, touchedEntities: &touchedEntities)
     }
 
     private func normalizeEntityObject(
@@ -316,13 +353,18 @@ public final class Documents: @unchecked Sendable {
         plan: CachePlan,
         variables: [String: JSONValue],
         shouldLink: Bool,
-        pendingPages: inout [PendingPage]
+        pendingPages: inout [PendingPage],
+        touchedEntities: inout Set<CacheKey>
     ) -> Bool {
         guard let rootId = graph.identify(obj) else { return false }
 
         var patch: [String: JSONValue] = [:]
         if let tn = obj[CachebayConstants.typenameField] { patch[CachebayConstants.typenameField] = tn }
         graph.putRecord(rootId, patch)
+        // Record this entity as touched — the post-walk replay hook
+        // will re-apply pending optimistic layers' entity ops scoped
+        // to this key after the entire normalize completes.
+        touchedEntities.insert(rootId)
 
         let isNode = field.responseKey == CachebayConstants.connectionNodeField
         if !(frame.insideConnection && isNode) {
@@ -336,7 +378,7 @@ public final class Documents: @unchecked Sendable {
             insideConnection: isNode ? false : frame.insideConnection,
             pageKey: isNode ? nil : frame.pageKey
         )
-        normalizeObject(obj, frame: childrenFrame, plan: plan, variables: variables, shouldLink: true, pendingPages: &pendingPages)
+        normalizeObject(obj, frame: childrenFrame, plan: plan, variables: variables, shouldLink: true, pendingPages: &pendingPages, touchedEntities: &touchedEntities)
         return true
     }
 
@@ -347,7 +389,8 @@ public final class Documents: @unchecked Sendable {
         plan: CachePlan,
         variables: [String: JSONValue],
         shouldLink: Bool,
-        pendingPages: inout [PendingPage]
+        pendingPages: inout [PendingPage],
+        touchedEntities: inout Set<CacheKey>
     ) {
         let containerFieldKey = Keys.buildFieldKey(field: field, variables: variables)
         let containerKey = "\(frame.parentId).\(containerFieldKey)"
@@ -362,7 +405,7 @@ public final class Documents: @unchecked Sendable {
         }
         let childMap = field.selectionMap ?? [:]
         let nextFrame = Frame(parentId: containerKey, fieldsMap: childMap, insideConnection: frame.insideConnection, pageKey: frame.pageKey)
-        normalizeObject(obj, frame: nextFrame, plan: plan, variables: variables, shouldLink: shouldLink, pendingPages: &pendingPages)
+        normalizeObject(obj, frame: nextFrame, plan: plan, variables: variables, shouldLink: shouldLink, pendingPages: &pendingPages, touchedEntities: &touchedEntities)
     }
 
     private func normalizeArrayOfSelections(
@@ -371,7 +414,8 @@ public final class Documents: @unchecked Sendable {
         frame: Frame,
         plan: CachePlan,
         variables: [String: JSONValue],
-        pendingPages: inout [PendingPage]
+        pendingPages: inout [PendingPage],
+        touchedEntities: inout Set<CacheKey>
     ) {
         let fieldKey = Keys.buildFieldKey(field: field, variables: variables)
         let baseKey = "\(frame.parentId).\(fieldKey)"
@@ -390,6 +434,9 @@ public final class Documents: @unchecked Sendable {
                 var patch: [String: JSONValue] = [:]
                 if let tn = o[CachebayConstants.typenameField] { patch[CachebayConstants.typenameField] = tn }
                 graph.putRecord(itemKey, patch)
+                // Track entity-shaped array items so the post-walk
+                // replay re-applies pending optimistic ops on them.
+                if rootId != nil { touchedEntities.insert(itemKey) }
             }
             refs.append(itemKey)
         }
@@ -401,7 +448,7 @@ public final class Documents: @unchecked Sendable {
             let rootId = graph.identify(o)
             let itemKey = rootId ?? "\(baseKey).\(i)"
             let itemFrame = Frame(parentId: itemKey, fieldsMap: childMap, insideConnection: false, pageKey: baseKey)
-            normalizeObject(o, frame: itemFrame, plan: plan, variables: variables, shouldLink: true, pendingPages: &pendingPages)
+            normalizeObject(o, frame: itemFrame, plan: plan, variables: variables, shouldLink: true, pendingPages: &pendingPages, touchedEntities: &touchedEntities)
         }
     }
 
@@ -602,7 +649,15 @@ struct MaterializeContext {
 
     mutating func readEntity(_ id: CacheKey, field: PlanField, into out: inout [String: JSONValue], fingerprint fpOut: inout [String: JSONValue], path: String) {
         dependencies.insert(id)
-        guard let record = graph.getRecord(id) else {
+        // Atomic (record, version) snapshot — separate `getRecord` +
+        // `version` calls let a concurrent writer slip a write between
+        // them, producing a `(stale record, newer version)` tuple.
+        // That breaks `recycleSnapshots`'s version-shortcircuit: a
+        // later materialize that reads the actual newer record gets
+        // the same version, the two genuinely-different snapshots
+        // collapse into one, and a watcher emit is dropped.
+        let snapshot = graph.recordAndVersion(id)
+        guard let record = snapshot.record else {
             strictOK = false
             canonicalOK = false
             return
@@ -689,7 +744,9 @@ struct MaterializeContext {
             readScalar(record, field: child, parentId: id, into: &out, outKey: outKey, path: "\(path).\(outKey)")
         }
 
-        let version = graph.version(id)
+        // Use the version from the SAME atomic snapshot as the record
+        // contents so fingerprint and data agree.
+        let version = snapshot.version
         let finalFp = childFingerprints.isEmpty ? version : fingerprintNodes(version, childFingerprints)
         if fingerprint { fpOut[CachebayConstants.fingerprintKey] = .int(Int64(finalFp)) }
     }

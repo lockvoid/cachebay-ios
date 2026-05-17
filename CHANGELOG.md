@@ -6,15 +6,321 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.9.1] — Entity replay-after-normalize (closes the entity-axis race)
+
+Fixes a race where a server-response `normalize` could silently clobber a concurrent optimistic layer's field patch. Symmetric counterpart to the connection-side replay that's been in place since v0.4 — connection canonicals were already protected (`OptimisticReplayer.replay(connectionKeys:)` runs from `Canonical.updateConnection`), but entities had no equivalent hook.
+
+### The bug
+
+Two concurrent mutations patching different fields of the same entity:
+
+```
+T=0    tx1 patches Clip:c1.captionsEnabled = true.  Graph: {captionsEnabled: true, volume: 1.0}
+T=100  tx2 patches Clip:c1.volume = 0.5.            Graph: {captionsEnabled: true, volume: 0.5}
+T=300  Server response 1 lands. Returns full ClipFields including volume: 1.0
+       (server didn't know about tx2 yet). `documents.normalize` shallow-merges
+       — volume = 0.5 silently clobbered → 1.0.
+T=305  tx1.dispose() — doesn't touch graph.        Graph: {volume: 1.0}  ← bug
+T=500  Server response 2 lands with volume: 0.5.    Graph: {volume: 0.5}
+```
+
+User sees the volume slider snap to 1.0 then back to 0.5 — UI flicker, optimistic patch silently lost.
+
+### The fix
+
+`Documents.normalize` now tracks entity keys it writes during the walk and calls `replayer.replayEntityOps(scope:)` after the walk completes. Pending optimistic layers' entity ops re-apply over the server-normalized graph state, in layer-id order, scoped to records the normalize actually touched.
+
+New API surface (internal-ish — most consumers don't touch this directly):
+- `Optimistic.replayEntityOps(scope: Set<CacheKey>)` — public method, mirrors the existing `replay(connectionKeys:)`.
+- `OptimisticReplayer.replayEntityOps(scope:)` — protocol method (was previously just `replay(connectionKeys:)`).
+- `Documents.setReplayer(_:)` — injection point, wired automatically from `CachebayClient.init`.
+
+After the fix, the same timeline becomes:
+
+```
+T=0    tx1: captionsEnabled = true.
+T=100  tx2: volume = 0.5.
+T=300  Server response 1: normalize → {volume: 1.0}.
+       replayEntityOps(scope: {"Clip:c1"}) → tx2's op (volume=0.5) re-applies.
+       Graph: {captionsEnabled: true, volume: 0.5}   ← no clobber, no flicker
+T=305  tx1.dispose(). Graph unchanged.
+T=500  Server response 2: normalize → {volume: 0.5}. Replay no-op.
+```
+
+### What's protected (symmetric with connection-side replay)
+
+- Mutation responses (`executeMutation`).
+- Subscription frames (`executeSubscription` — auto-normalize per frame).
+- Query refreshes (`executeQuery` cache-and-network path).
+- Explicit `writeFragment` calls (anything that funnels through `documents.normalize`).
+
+A layer's recorded entity op survives any subsequent normalize until the layer is committed, reverted, or disposed via its lifecycle method. Server data wins on UNpatched fields; pending optimistic patches win on patched fields. Latest-id layer wins on per-field conflicts between layers.
+
+### Tests
+
+New file: [`OptimisticReplayAfterNormalizeTests`](./Tests/CachebayTests/Runtime/OptimisticReplayAfterNormalizeTests.swift) — 10 contract tests covering:
+
+- The core race (mutation response clobbers pending entity field patch).
+- Scoping (replay runs only for entities the normalize touched).
+- Layer-id ordering (latest layer wins on per-field conflicts between layers).
+- Multi-field merge (server wins on UNpatched fields; layer wins on patched fields).
+- Multi-entity normalize (replay runs per entity, not just the first).
+- No-pending-layers baseline (replay hook is free when no layers exist).
+- **Subscription frames trigger replay** — single-frame and multi-frame scenarios. Subscriptions are the most race-prone path (originally motivated v0.7.0's chat-pipeline fix); this is where the protection matters most.
+- `.replace`-mode entity ops survive replay (fields not in the patch stay dropped after server normalize).
+- Mixed entity + connection ops in one normalize (both entity-replay AND connection-replay fire, no interference).
+
+655/655 tests green (was 645; +10 new).
+
+### Internal performance
+
+- Added pre-lock fast path to `Optimistic.replayEntityOps(scope:)` and `Optimistic.replay(connectionKeys:)`. Both are called from `documents.normalize` / `canonical.updateConnection` on every server-response merge — that's the runtime's hottest path. An unsynchronized `Array.isEmpty` read short-circuits when no layers are pending, making the no-pending-layers case truly free (one branch, no lock acquisition, no array sort). False-negative race window is benign: a layer added concurrently with the check just gets its replay deferred to the next normalize.
+
+### Migration
+
+None. Fully internal behavior change. Consumers don't see new API surface unless they were implementing custom `OptimisticReplayer` conformances (none in practice — protocol exists only for the `Optimistic ↔ Canonical` decoupling).
+
+### Performance
+
+The replay walk is O(layers × layer-ops × scope-hits). At typical optimistic depths (1-5 pending layers, 1-3 ops each) the walk is microseconds. The scope check (`Set<CacheKey>.contains`) is O(1). Won't show up in profiles for normal use.
+
+For high-stacking flows (>50 pending layers — uncommon), consider committing or disposing layers eagerly. Stacking is itself a Cachebay perf anti-pattern; this fix doesn't change that.
+
+## [0.9.0] — Explicit storage warmup
+
+Replaces the fire-and-forget background hydration that ran inside `CachebayClient.init` with an explicit, synchronous `client.warmup()` method. Callers control when (and on which thread) the SQLite read happens — no hidden Tasks, no race window between client construction and the first query.
+
+The motivation: the hidden auto-warmup made it impossible to *guarantee* the in-memory graph was hydrated before queries fired. A query issued in `App.init` would race the background load and fall through to the network even when the data was already on disk. Making warmup explicit eliminates the race by construction — the consumer decides when the graph is ready.
+
+### Breaking — `CachebayClient.init` no longer hydrates in the background
+
+```swift
+// Before (v0.8.x):
+let client = CachebayClient(options: options)
+// ↑ fired off Task { await storage.load(); … } — races first queries
+
+// After (v0.9.0):
+let client = CachebayClient(options: options)
+// ↑ in-memory graph is empty until you call:
+client.warmup()                                   // sync (~10-300 ms)
+// or
+Task.detached(priority: .userInitiated) {
+    client.warmup()                               // background, fire-and-forget
+}
+// or
+await Task.detached(priority: .userInitiated) {
+    client.warmup()                               // explicit await
+}.value
+```
+
+`warmup()` is **synchronous on the calling thread** — wrap it in a `Task` if you want async semantics. iOS launch-time recipe: call it directly from `App.init` (cost is bounded, fits inside the launch screen) or `await` it inside your existing auth/bootstrap async flow.
+
 ### Added
-- **`URLSessionWebSocketTransport.ConnectionEvent.subscriptionsChanged(active: Int)`** — emitted on every live-subscription count transition. Fires on `subscribe()` registration (+1), per-subscription teardown via consumer cancel / server `complete` / server `error` (−1), and bulk drains via `disconnect()` / terminal `stopWithTerminalReason` (→ 0). It does NOT fire on the auto-reconnect cycle (subscriptions are preserved across the gap), nor on the internal `.pending → .subscribed` status flip (count is unchanged), nor on bulk drains of an already-empty registry (no spurious 0→0 events).
+- **`CachebayClient.warmup()`** — public sync method. No-op when no storage adapter is configured. Idempotent (safe to call multiple times). Gap-fill semantics: never overwrites records already in the in-memory graph (live network data beats disk on conflict).
+- **`StorageAdapter.loadSync()`** — protocol method for adapters to expose a synchronous bulk read. SQLite implementation runs on the worker queue via `queue.sync` so the load serializes against any pending writes.
 
-  Use it to drive UI ("N subscriptions live"), telemetry, or to gate background-refresh logic on whether anything is listening.
+### Removed
+- Auto-async-warmup `Task { await storage.load(); … }` from `CachebayClient.init`. Storage-backed clients now require an explicit `warmup()` call.
 
-  The `active` payload is captured **under `lock`** at the moment of the mutation — concurrent register/unregister callers can't reorder the count sequence consumers observe. (Internal: introduces an `emitLocked(_:)` helper that yields without releasing the lock; safe because `AsyncStream.Continuation.yield` is non-blocking and `onTermination` runs from the consumer's task, not synchronously from yield.)
+### Migration
 
-### Source compatibility
-- The new enum case is **source-breaking for downstream `switch` statements that don't have a `default` / `@unknown default`**. The cachebay-shipped consumer wiring example in `Docs/SUBSCRIPTIONS.md` was updated to fold the new case into the existing no-op branch.
+One line per app, typically inside your existing async bootstrap:
+
+```swift
+// In your AuthViewModel.bootstrap (or equivalent first-screen entry point):
+func bootstrap() async {
+    await Task.detached(priority: .userInitiated) {
+        CachebayService.client.warmup()   // ← add this
+    }.value
+    // … existing auth / first-query flow …
+}
+```
+
+Or, if you want to block App.init for the load (acceptable for caches under ~10K records — see perf numbers below):
+
+```swift
+@main
+struct MyApp: App {
+    init() {
+        _ = CachebayService.client       // existing
+        CachebayService.client.warmup()  // ← add this
+    }
+    // …
+}
+```
+
+### Performance — measured warmup latency across realistic cache sizes
+
+New `StorageWarmupTests.test_perf_sqlite_warmup_acrossTiers` benchmarks bulk warmup at three tiers (Apple Silicon, release mode):
+
+| Tier | Records | Wall clock (median) | Per-record |
+|---|---|---|---|
+| Small  | 500    | 15 ms     | 30 µs |
+| Medium | 5 000  | 148 ms    | 30 µs |
+| Large  | 50 000 | 1 490 ms  | 30 µs |
+
+Linear scaling — SQLite open + prepared-stmt overhead amortizes fully across record count. For typical app caches (~3-10K records) warmup is invisible inside the iOS launch screen. 50K+ caches feel the cost; offer a Task-wrapped warmup with a "loading" splash UI, or batch-warm during idle frames.
+
+Sanity-check assertions in CI: small <200ms, medium <1.5s, large <10s. Regressions break the suite.
+
+### Tests
+- New file: [`StorageWarmupTests`](./Tests/CachebayTests/Storage/StorageWarmupTests.swift) — 6 contract tests + 1 perf benchmark.
+- Migrated: `SQLiteStorageTests.test_client_persists_and_reloads` — was using `Task.sleep(100ms)` to wait for the auto-warmup; now calls `client2.warmup()` explicitly.
+- `RecorderStorage` / `RecordingStorage` test mocks gained `loadSync()` conformance.
+
+645/645 tests green deterministically.
+
+## [0.8.0] — Split-closure `modifyOptimistic`
+
+Replaces the dual-phase `(b, ctx) -> Void` builder with **two separate closures**: one for optimistic ops, one for commit ops. Typed server data flows into the commit closure via ordinary Swift closure capture from outer scope — no more `ctx.data: JSONValue?` plumbing, no manual `case .object(let raw) = ctx.data ?? .null` unwrap, no generic `commit<O: OperationData>(_:)` overload, no `BuilderContext` / `BuilderPhase` types.
+
+Motivated by the `ChatMutations.sendMessage` callsite in ferment-cuts-ios where the manual JSON-walk to recover typed `SendProjectMessage.Data` from `ctx.data` was both verbose and error-prone. The author flagged it inline ("Worth flagging upstream"); this is the upstream fix.
+
+### Breaking — API rename + signature change
+
+```swift
+// Before (v0.7.x):
+let tx = client.modifyOptimistic { b, ctx in
+    switch ctx.phase {
+    case .optimistic:
+        b.patch(.key("Post:tmp"), [...], mode: .merge)
+    case .commit:
+        // Manual ctx.data unwrap — typed Data not visible.
+        guard case .object(let raw) = ctx.data ?? .null,
+              let payload = SendProjectMessage.Data(__data: raw).sendProjectMessage
+        else { return }
+        b.patch(.key("Post:\(payload.id)"), [...], mode: .merge)
+    }
+}
+tx.commit(.object(serverData))   // or tx.commit(typedData) typed extension
+
+// After (v0.8.0):
+let tx = client.modifyOptimistic { b in
+    b.patch(.key("Post:tmp"), [...], mode: .merge)
+}
+let response = try await client.executeMutation(...)
+tx.commit { b in
+    // `response` captured directly from outer scope — fully typed,
+    // no JSONValue, no generic, no ctx.
+    if let payload = response.data?.sendProjectMessage {
+        b.patch(.key("Post:\(payload.id)"), [...], mode: .merge)
+    }
+}
+```
+
+**Removed:**
+- `BuilderContext` and `BuilderPhase` types — the closure no longer needs them.
+- `OptimisticTransaction.commit(_ data: JSONValue?)` — replaced by `commit(_ build: (OptimisticBuilder) -> Void)`.
+- `OptimisticTransaction.commit<O: OperationData>(_:)` typed extension — replaced by capturing typed data in the new commit closure's outer scope.
+
+**Changed:**
+- `OptimisticBuilder` closure shape: `(b: OptimisticBuilder, ctx: BuilderContext) -> Void` → `(b: OptimisticBuilder) -> Void`.
+- `Optimistic.applyAutoCommit` likewise takes a single-arg closure.
+- `OptimisticTransaction.commit` now takes a builder closure; `revert()` and `dispose()` are unchanged.
+
+### Migration
+
+Three mechanical patterns cover the bulk of consumer code:
+
+| Before | After |
+|---|---|
+| `{ b, _ in … }` | `{ b in … }` |
+| `{ b, ctx in switch ctx.phase { … } }` | Two separate closures — split the cases |
+| `tx.commit(nil)` | `tx.dispose()` (locks optimistic ops in — same net effect) |
+| `tx.commit(.object(data))` / `tx.commit(typedData)` | `tx.commit { b in … }` capturing the data from outer scope |
+| `tx.commit { _ in }` | `tx.revert()` (semantically equivalent: drop layer + restore baseline + run nothing) |
+
+For deferred / temp-id-swap flows the migration is non-mechanical — see "Optimistic create flow" in [`Docs/OPTIMISTIC_UPDATES.md`](./Docs/OPTIMISTIC_UPDATES.md) for the full pattern.
+
+### Why split-closure beats `(b, ctx)`
+
+The dual-phase model conflated two distinct concerns. Splitting them:
+
+1. **No `JSONValue?` plumbing.** Typed server data is captured via Swift closure semantics, not boxed into a generic JSON value and re-unwrapped per callsite.
+2. **No `phase` switch.** Each closure does one thing; the optimistic-vs-commit branching that lived in user code is gone.
+3. **No generic over operation/data type on `modifyOptimistic`.** The library doesn't need to know what type the commit closure uses — that's a pure user-side concern in the closure body.
+4. **Multiple operations in one transaction work cleanly.** A commit closure can handle two await results from outer scope; the old `commit<O: OperationData>(_:)` could only carry one type.
+5. **A whole class of bugs structurally disappears.** The dual-phase model encouraged "I forgot to guard with `if ctx.phase == .optimistic` and the optimistic ops accidentally re-ran on commit" mistakes. Split closures make this impossible.
+
+### Smaller behavior fix in this release
+- `applyAutoCommit` was previously documented as "runs the closure once at `.commit` phase". With the rename it's literally "runs the closure once" — same effect, simpler description.
+
+### Tests
+- New file: [`OptimisticSplitClosuresTests`](./Tests/CachebayTests/Runtime/OptimisticSplitClosuresTests.swift) — 8 contract tests pinning the split-closure semantics (closure-runs-once, recorded-ops-replay-on-sibling-commit, commit-closure-captures-from-outer-scope, dispose-vs-revert-vs-commit asymmetry, temp-id swap end-to-end).
+- Removed: `OptimisticTypedCommitTests` — entire file tested the removed `commit<O: OperationData>(_:)` overload.
+- Removed: `test_commit_restoresPreOptimisticBaseline_wipingServerUpdates` from `OptimisticDisposeTests` — pinned a bug-mode that existed only in the old `commit(nil)`-replays-the-closure model. With explicit commit closures the bug is structurally impossible.
+- Migrated: `OptimisticTwoCycleTests` — was testing dual-phase replay; now tests split-closure equivalent (temp-id swap, edge-meta update across phases).
+
+638/638 tests green deterministically.
+
+## [0.7.0] — Connections ≠ entity store
+
+This release reframes connection mutations as **purely structural** — they manage edges and pageInfo, never entity scalars. The motivation is closing a class of "stale-payload replay clobbers later normalize state" races (see [`OptimisticLinkNodeContractTests`](./Tests/CachebayTests/Runtime/OptimisticLinkNodeContractTests.swift) and the `chatMessageCreated`/`chatMessageUpdated` racing scenario from production). Two stores, two APIs:
+
+- **Entity records** (`Post:p1`, `User:u1`, …) — owned by `documents.normalize` (auto from queries / mutations / subscriptions) or by explicit `b.writeFragment` / `b.patch` / `b.delete`.
+- **Connection structure** (edge refs, edge meta, pageInfo) — owned by `b.connection(...).linkNode/unlinkNode/patch`.
+
+### Breaking — API rename + signature change
+- **`addNode` → `linkNode`**, **`removeNode` → `unlinkNode`**. The verb names the action precisely; the old name implied "add a node" which encouraged conflating entity creation with connection insertion.
+- **`AddNodeOptions` → `LinkNodeOptions`**. Drops `fragmentDocument` / `fragmentName` / `fragmentVariables` fields — the plan-aware path is gone (see below).
+- **The raw entry point now takes `EntityRef`, not `[String: JSONValue]`**:
+  ```swift
+  // Before:
+  func addNode(_ node: [String: JSONValue], options: AddNodeOptions)
+  // After:
+  func linkNode(_ ref: EntityRef, options: LinkNodeOptions)
+  ```
+  Migrate dict callers via `linkNode(.object(dict), options:)` or `linkNode(.key("Post:p1"), options:)`. The signature itself enforces the contract: there is no scalar parameter that *could* leak onto the entity record.
+- **Typed overloads collapsed to three:**
+  ```swift
+  func linkNode<N: OperationData>(node: N, options: LinkNodeOptions = .init())
+  func linkNode<F: Fragment, ID>(fragment: F.Type, id: ID, options: LinkNodeOptions = .init())
+  func unlinkNode<F: Fragment, ID>(fragment: F.Type, id: ID)
+  ```
+  The deleted overloads were `addNode<N, F>(node:fragment:options:)`, `addNode<F>(node:F.Data,fragment:...)`, and `addNode<F>(fragment:options:build:)` (the closure-builder draft form). Optimistic-create flows that used these now do two explicit calls — `b.writeFragment(fragment:id:data:)` then `b.connection(...).linkNode(fragment:id:)`. Cleaner separation, harder to misuse.
+- **`Optimistic.ReplayResult` field rename**: `.added` → `.linked`, `.removed` → `.unlinked`. Internal `ConnectionOpKind.addNode/removeNode` likewise renamed.
+
+### Breaking — behavior change
+- **`linkNode` no longer writes entity-record scalars.** Previously, `addNode(node, fragment:)` shallow-merged scalar fields from `node` into the entity record. That broke under concurrent-writer scenarios:
+  1. Subscription `chatMessageCreated` lands → `documents.normalize` writes entity (`status: streaming, toolCalls: null`).
+  2. Subscription `chatMessageUpdated` lands ~6 ms later → normalize merges (`status: complete, toolCalls: [...]`).
+  3. The user's deferred `Created`-handler runs `addNode(stale_msg, fragment:)` — the merged scalars from step 1 silently revert step 2's state.
+  In the new design, step 3 takes an `EntityRef` only and cannot clobber. Tests covering the race are in [`OptimisticLinkNodeContractTests`](./Tests/CachebayTests/Runtime/OptimisticLinkNodeContractTests.swift).
+- **Plan-aware fragment-walk helpers deleted**: `stampTypenameFromPlan`, `stripSelectionSetFields`, `isEntityShaped`, `initializeNestedConnections`. Nested `@connection` canonicals are now initialized by `documents.normalize` (via `b.writeFragment`), not by `linkNode`.
+
+### Migration
+
+For most callers the change is mechanical:
+
+```swift
+// Before — composite addNode that wrote entity scalars + linked
+b.connection(key).addNode(node: msg, fragment: ProjectMessageFields.self,
+                          options: AddNodeOptions(position: .start))
+
+// After (case A: entity is already in cache from a server response)
+b.connection(key).linkNode(node: msg, options: LinkNodeOptions(position: .start))
+
+// After (case B: optimistic-create — ensure entity exists first)
+b.writeFragment(fragment: PostFields.self, id: tempId, data: draft)
+b.connection(key).linkNode(fragment: PostFields.self, id: tempId,
+                            options: LinkNodeOptions(position: .start))
+```
+
+For `removeNode → unlinkNode`: pure rename.
+
+### Fixed — concurrency bugs uncovered while landing the rename
+
+- **`Graph.flush` short-circuit dropped fanouts under concurrent writers.** When two threads' flushes overlapped, the second saw `isFlushing == true` and returned early — but the records its writer added to `pending` weren't drained until the next external flush. Watchers depending on those records never saw an emit. Fix: the running flush thread now **loops until pending is empty**, so writes that landed during its own handler call are fanned out before exit. ([`ConcurrencyStressTests.test_watcher_never_drops_final_state_under_burst`](./Tests/CachebayTests/Stress/ConcurrencyStressTests.swift))
+- **`MaterializeContext.readEntity` produced inconsistent `(record, version)` snapshots.** `graph.getRecord` and `graph.version` were two separate locked calls, so a writer could slip a write between them — yielding a `(stale-record, newer-version)` tuple. A subsequent materialize at the *same version* (with the actual newer record) would then version-collide with the stale one, `recycleSnapshots` would short-circuit them as equal, and the watcher would silently drop the emit. Fix: new `Graph.recordAndVersion(_:)` returns both under one lock acquisition; `readEntity` uses that snapshot for both the record contents and the fingerprint version.
+- **Removed `notifyDataBySignature` from `executeMutation`.** That path delivered a *pre-materialized* snapshot to watchers based on signature match, but the snapshot was captured between the mutation's normalize and its notify call — under concurrency, two mutations could race their pre-materialized snapshots and the older one could land last. The dep-fanout (triggered synchronously by `graph.flush()` inside `materialize`) already covers watcher delivery and re-materializes at notify time, so it always reflects the latest graph state. Net effect: simpler, race-free.
+
+### Performance / dev-loop
+- **Stress test rewritten with a programmatic deadline** instead of a fixed `Task.sleep(50ms)`. A failing run now terminates within 1 s with a deterministic error; the happy path resolves in a single poll (~ms).
+
+### Memo to consumers
+- The chat-pipeline workaround pattern (`writeFragment` defensive call inside a subscription Updated handler) can be removed once a project upgrades to v0.7.0 — the structural-only `linkNode` makes the underlying race impossible by construction. Audit your subscription handlers for the pattern and simplify.
+
+## [0.6.0] — Pure-fragment-spread reuse in codegen
 
 ## [0.6.0] — Pure-fragment-spread reuse in codegen
 

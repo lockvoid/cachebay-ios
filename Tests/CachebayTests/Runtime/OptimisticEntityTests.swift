@@ -26,10 +26,10 @@ final class OptimisticEntityTests: XCTestCase {
             data: .object(["__typename": "Post", "id": "p1", "title": "Old"])
         )
 
-        client.modifyOptimistic { b, _ in
+        client.modifyOptimistic { b in
             b.patch(.object(["__typename": "Post", "id": "p1"]),
                     ["title": .string("New")], mode: .merge)
-        }.commit(nil)
+        }.dispose()
 
         XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "New")
     }
@@ -44,12 +44,12 @@ final class OptimisticEntityTests: XCTestCase {
             data: .object(["__typename": "Post", "id": "p1", "title": "Post 1"])
         )
 
-        client.modifyOptimistic { b, _ in
+        client.modifyOptimistic { b in
             b.patch(.key("Post:p1"), mode: .merge) { prev in
                 let title = prev["title"]?.string ?? ""
                 return ["title": .string(title + "!")]
             }
-        }.commit(nil)
+        }.dispose()
 
         XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "Post 1!",
             "closure-form patch should see the cached prior snapshot")
@@ -63,7 +63,7 @@ final class OptimisticEntityTests: XCTestCase {
             data: .object(["__typename": "User", "id": "7", "name": "Old"])
         )
 
-        let tx = client.modifyOptimistic { b, _ in
+        let tx = client.modifyOptimistic { b in
             b.patch(.key("User:7"), mode: .merge) { prev in
                 let name = prev["name"]?.string ?? ""
                 return ["name": .string(name + "-modified")]
@@ -84,9 +84,9 @@ final class OptimisticEntityTests: XCTestCase {
         )
 
         // Closure returns empty dict — should be treated as no-op.
-        client.modifyOptimistic { b, _ in
+        client.modifyOptimistic { b in
             b.patch(.key("Post:p1"), mode: .merge) { _ in [:] }
-        }.commit(nil)
+        }.dispose()
 
         XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "Stable")
     }
@@ -101,12 +101,12 @@ final class OptimisticEntityTests: XCTestCase {
             data: .object(["__typename": "User", "id": "9", "email": "x@x.com"])
         )
 
-        let tx = client.modifyOptimistic { b, _ in
+        let tx = client.modifyOptimistic { b in
             b.delete(.key("User:9"))
         }
         XCTAssertNil(client.graph.getRecord("User:9"))
 
-        tx.commit(nil)
+        tx.dispose()
         // After commit, the record is gone permanently. revert is a no-op.
         tx.revert()
         XCTAssertNil(client.graph.getRecord("User:9"),
@@ -123,10 +123,10 @@ final class OptimisticEntityTests: XCTestCase {
             data: .object(["__typename": "User", "id": "7", "name": "Old"])
         )
 
-        let tx = client.modifyOptimistic { b, _ in
+        let tx = client.modifyOptimistic { b in
             b.patch(.key("User:7"), ["name": .string("New")], mode: .merge)
         }
-        tx.commit(nil)
+        tx.dispose()
         tx.revert()
 
         XCTAssertEqual(client.graph.getField("User:7", "name")?.string, "New",
@@ -143,9 +143,9 @@ final class OptimisticEntityTests: XCTestCase {
             data: .object(["__typename": "User", "id": "9", "email": "x@x.com"])
         )
 
-        client.modifyOptimistic { b, _ in
+        client.modifyOptimistic { b in
             b.delete(.object(["__typename": "User", "id": "9"]))
-        }.commit(nil)
+        }.dispose()
 
         XCTAssertNil(client.graph.getRecord("User:9"))
     }

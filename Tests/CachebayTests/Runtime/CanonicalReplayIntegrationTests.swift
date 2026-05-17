@@ -6,14 +6,14 @@ import XCTest
 /// "replayOptimistic")` to assert the canonical merger called replay
 /// with the right connection scope after `updateConnection`. iOS
 /// has no spy mechanism, but the same invariant is observable via
-/// effects: an optimistic addNode landed for that connection is
+/// effects: an optimistic linkNode landed for that connection is
 /// re-asserted on the canonical after the merger applies a
 /// server-side page.
 ///
 /// Lock the contract that:
 ///   * `Canonical.updateConnection` triggers the replayer for the
 ///     same connection canonical key the page belonged to,
-///   * an optimistic `addNode` survives a server-cycle merge (the
+///   * an optimistic `linkNode` survives a server-cycle merge (the
 ///     optimistic edge is reasserted on top of the merged canonical).
 final class CanonicalReplayIntegrationTests: XCTestCase {
 
@@ -26,7 +26,7 @@ final class CanonicalReplayIntegrationTests: XCTestCase {
     }
 
     /// Web `canonical.test.ts:1157` "triggers optimistic replay after
-    /// update". Effect-based check: an optimistic `addNode` for
+    /// update". Effect-based check: an optimistic `linkNode` for
     /// `Post:p99` lands as an optimistic-only edge on the canonical;
     /// after a server-cycle page merge, the merger re-asserts the
     /// optimistic edge on the canonical (via the replayer bridge).
@@ -58,16 +58,15 @@ final class CanonicalReplayIntegrationTests: XCTestCase {
         ])
         client.graph.flush()
 
-        // Optimistic addNode: a new post that the server hasn't sent
+        // Optimistic linkNode: a new post that the server hasn't sent
         // yet. The op records on the layer; replay later reapplies it.
-        _ = client.modifyOptimistic { b, _ in
-            b.connection(key: canonicalKey).addNode(
-                [
+        _ = client.modifyOptimistic { b in
+            b.connection(key: canonicalKey).linkNode(
+                .object([
                     CachebayConstants.typenameField: .string("Post"),
                     "id": .string("p99"),
-                    "title": .string("Optimistic Post"),
-                ],
-                options: AddNodeOptions(position: .start)
+                ]),
+                options: LinkNodeOptions(position: .start)
             )
         }
 
@@ -110,26 +109,25 @@ final class CanonicalReplayIntegrationTests: XCTestCase {
         ])
         client.graph.flush()
 
-        _ = client.modifyOptimistic { b, _ in
-            b.connection(key: canonicalKey).addNode(
-                [
+        _ = client.modifyOptimistic { b in
+            b.connection(key: canonicalKey).linkNode(
+                .object([
                     CachebayConstants.typenameField: .string("User"),
                     "id": .string("admin99"),
-                    "name": .string("Optimistic Admin"),
-                ],
-                options: AddNodeOptions(position: .start)
+                ]),
+                options: LinkNodeOptions(position: .start)
             )
         }
 
-        // Replay scoped to this filtered canonical reports the add.
+        // Replay scoped to this filtered canonical reports the link.
         let result = client.optimistic.replay(connectionKeys: [canonicalKey])
-        XCTAssertTrue(result.added.contains("User:admin99"),
-                      "filtered-connection replay must report added entity, got \(result.added)")
+        XCTAssertTrue(result.linked.contains("User:admin99"),
+                      "filtered-connection replay must report linked entity, got \(result.linked)")
         // And replay scoped to a DIFFERENT filter must NOT pick up
         // this layer's op.
         let otherKey: CacheKey = #"@connection.users({"role":"member"})"#
         let resultOther = client.optimistic.replay(connectionKeys: [otherKey])
-        XCTAssertFalse(resultOther.added.contains("User:admin99"),
-                       "scope filter must isolate replay; admin99 leaked into role:member: \(resultOther.added)")
+        XCTAssertFalse(resultOther.linked.contains("User:admin99"),
+                       "scope filter must isolate replay; admin99 leaked into role:member: \(resultOther.linked)")
     }
 }

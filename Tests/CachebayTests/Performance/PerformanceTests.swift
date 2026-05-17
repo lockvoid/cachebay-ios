@@ -6,10 +6,10 @@ import XCTest
 /// These tests answer four questions:
 ///
 /// 1. **Apply + revert throughput** — how many full optimistic round-trips
-///    per second for entity patches and for connection addNode/removeNode?
+///    per second for entity patches and for connection linkNode/unlinkNode?
 /// 2. **Stacked-layer cost** — with K pending layers, what is the cost of
 ///    applying layer K+1 and of reverting a middle layer?
-/// 3. **Connection-size scaling** — does addNode cost stay sublinear as the
+/// 3. **Connection-size scaling** — does linkNode cost stay sublinear as the
 ///    canonical connection grows from 10 to 10 000 edges?
 /// 4. **Commit path** — how many commits per second (baseline restore +
 ///    builder replay in `.commit` phase + graph flush)?
@@ -60,7 +60,7 @@ final class PerformanceTests: XCTestCase {
         measure {
             elapsed = time {
                 for i in 0..<iterations {
-                    let tx = client.modifyOptimistic { b, _ in
+                    let tx = client.modifyOptimistic { b in
                         b.patch(.key("Post:p1"), ["title": .string("v\(i)")], mode: .merge)
                     }
                     tx.revert()
@@ -86,7 +86,7 @@ final class PerformanceTests: XCTestCase {
             var pending: [OptimisticTransaction] = []
             pending.reserveCapacity(depth)
             for i in 0..<depth {
-                let tx = client.modifyOptimistic { b, _ in
+                let tx = client.modifyOptimistic { b in
                     b.patch(.key("Post:p1"), ["title": .string("d\(i)")], mode: .merge)
                 }
                 pending.append(tx)
@@ -95,7 +95,7 @@ final class PerformanceTests: XCTestCase {
             let iterations = 1_000
             let elapsed = time {
                 for i in 0..<iterations {
-                    let tx = client.modifyOptimistic { b, _ in
+                    let tx = client.modifyOptimistic { b in
                         b.patch(.key("Post:p1"), ["title": .string("n\(i)")], mode: .merge)
                     }
                     tx.revert()
@@ -122,7 +122,7 @@ final class PerformanceTests: XCTestCase {
             )
             var pending: [OptimisticTransaction] = []
             for i in 0..<depth {
-                pending.append(client.modifyOptimistic { b, _ in
+                pending.append(client.modifyOptimistic { b in
                     b.patch(.key("Post:p1"), ["title": .string("d\(i)")], mode: .merge)
                 })
             }
@@ -137,7 +137,7 @@ final class PerformanceTests: XCTestCase {
         }
     }
 
-    // MARK: - 4. Connection addNode throughput
+    // MARK: - 4. Connection linkNode throughput
 
     /// How fast can we prepend/append to a canonical connection via the
     /// optimistic path? Each iteration is one full layer.
@@ -150,23 +150,23 @@ final class PerformanceTests: XCTestCase {
         measure {
             elapsed = time {
                 for i in 0..<iterations {
-                    let tx = client.modifyOptimistic { b, _ in
+                    let tx = client.modifyOptimistic { b in
                         let c = b.connection(selector)
-                        c.addNode(
-                            ["__typename": "Post", "id": .string("p\(i)"), "title": .string("t\(i)")],
-                            options: AddNodeOptions(position: .end)
+                        c.linkNode(
+                            .object(["__typename": "Post", "id": .string("p\(i)")]),
+                            options: LinkNodeOptions(position: .end)
                         )
                     }
-                    tx.commit(nil) // keep the edge; measures the hot add path
+                    tx.dispose() // keep the edge; measures the hot add path
                 }
             }
         }
-        report("connection addNode+commit", ops: iterations, seconds: elapsed)
+        report("connection linkNode+commit", ops: iterations, seconds: elapsed)
     }
 
-    // MARK: - 5. addNode cost vs. existing connection size
+    // MARK: - 5. linkNode cost vs. existing connection size
 
-    /// addNode currently scans existing edges to de-dup by node key. This
+    /// linkNode currently scans existing edges to de-dup by node key. This
     /// test measures whether cost grows linearly with the canonical's edge
     /// count. Expect super-linear behaviour to show up as a red flag.
     func test_perf_connection_addNode_scales_with_edge_count() {
@@ -176,31 +176,31 @@ final class PerformanceTests: XCTestCase {
 
             // Preload `preload` edges committed once — this is the steady-state
             // canonical shape we're benchmarking add-into.
-            let seed = client.modifyOptimistic { b, _ in
+            let seed = client.modifyOptimistic { b in
                 let c = b.connection(selector)
                 for i in 0..<preload {
-                    c.addNode(
-                        ["__typename": "Post", "id": .string("seed\(i)"), "title": "-"],
-                        options: AddNodeOptions(position: .end)
+                    c.linkNode(
+                        .object(["__typename": "Post", "id": .string("seed\(i)")]),
+                        options: LinkNodeOptions(position: .end)
                     )
                 }
             }
-            seed.commit(nil)
+            seed.dispose()
 
             let iterations = 500
             let elapsed = time {
                 for i in 0..<iterations {
-                    let tx = client.modifyOptimistic { b, _ in
+                    let tx = client.modifyOptimistic { b in
                         let c = b.connection(selector)
-                        c.addNode(
-                            ["__typename": "Post", "id": .string("new\(i)"), "title": "-"],
-                            options: AddNodeOptions(position: .start)
+                        c.linkNode(
+                            .object(["__typename": "Post", "id": .string("new\(i)")]),
+                            options: LinkNodeOptions(position: .start)
                         )
                     }
-                    tx.commit(nil)
+                    tx.dispose()
                 }
             }
-            report("connection addNode   (preload=\(preload))", ops: iterations, seconds: elapsed)
+            report("connection linkNode   (preload=\(preload))", ops: iterations, seconds: elapsed)
         }
     }
 
@@ -219,25 +219,22 @@ final class PerformanceTests: XCTestCase {
             elapsed = time {
                 for i in 0..<iterations {
                     let tempId = "temp:\(i)"
-                    let tx = client.modifyOptimistic { b, ctx in
-                        let c = b.connection(selector)
-                        switch ctx.phase {
-                        case .optimistic:
-                            c.addNode(
-                                ["__typename": "Post", "id": .string(tempId), "title": "t"],
-                                options: AddNodeOptions(position: .start)
-                            )
-                        case .commit:
-                            // Promote to the server-assigned id carried on the commit payload.
-                            if let data = ctx.data, let realId = data["id"]?.string {
-                                c.addNode(
-                                    ["__typename": "Post", "id": .string(realId), "title": "t"],
-                                    options: AddNodeOptions(position: .start)
-                                )
-                            }
-                        }
+                    let realId = "real\(i)"
+                    let tx = client.modifyOptimistic { b in
+                        b.connection(selector).linkNode(
+                            .object(["__typename": "Post", "id": .string(tempId)]),
+                            options: LinkNodeOptions(position: .start)
+                        )
                     }
-                    tx.commit(.object(["id": .string("real\(i)")]))
+                    // Commit closure captures `realId` from outer scope —
+                    // promotes the temp edge to the real-id edge after
+                    // baseline restore drops the temp.
+                    tx.commit { b in
+                        b.connection(selector).linkNode(
+                            .object(["__typename": "Post", "id": .string(realId)]),
+                            options: LinkNodeOptions(position: .start)
+                        )
+                    }
                 }
             }
         }
@@ -247,7 +244,7 @@ final class PerformanceTests: XCTestCase {
     // MARK: - 7. Mixed realistic burst
 
     /// Realistic shape: for each "server write" equivalent, we fire 1 entity
-    /// patch + 1 connection addNode under a layer. Closest to "user taps
+    /// patch + 1 connection linkNode under a layer. Closest to "user taps
     /// favourite while scrolling".
     func test_perf_mixed_burst() {
         let client = makeClient()
@@ -263,22 +260,22 @@ final class PerformanceTests: XCTestCase {
         measure {
             elapsed = time {
                 for i in 0..<iterations {
-                    let tx = client.modifyOptimistic { b, _ in
+                    let tx = client.modifyOptimistic { b in
                         b.patch(.key("Post:p1"), ["likes": .int(Int64(i))], mode: .merge)
                         let c = b.connection(selector)
-                        c.addNode(
-                            ["__typename": "Notification", "id": .string("n\(i)"), "text": "ping"],
-                            options: AddNodeOptions(position: .start)
+                        c.linkNode(
+                            .object(["__typename": "Notification", "id": .string("n\(i)")]),
+                            options: LinkNodeOptions(position: .start)
                         )
                     }
                     tx.revert()
                 }
             }
         }
-        report("mixed patch+addNode apply+revert", ops: iterations, seconds: elapsed)
+        report("mixed patch+linkNode apply+revert", ops: iterations, seconds: elapsed)
     }
 
-    // MARK: - 8. Tail-latency sanity: addNode @ preload=5000
+    // MARK: - 8. Tail-latency sanity: linkNode @ preload=5000
 
     /// The "mean" numbers in other tests smooth over occasional spikes. This
     /// test runs a fixed number of insertions into a pre-seeded canonical and
@@ -292,26 +289,26 @@ final class PerformanceTests: XCTestCase {
         let selector = ConnectionSelector(parent: .key("Query"), key: "posts")
 
         // Pre-seed the canonical with 5000 edges.
-        let seed = client.modifyOptimistic { b, _ in
+        let seed = client.modifyOptimistic { b in
             let c = b.connection(selector)
             for i in 0..<5_000 {
-                c.addNode(
-                    ["__typename": "Post", "id": .string("seed\(i)"), "title": "-"],
-                    options: AddNodeOptions(position: .end)
+                c.linkNode(
+                    .object(["__typename": "Post", "id": .string("seed\(i)")]),
+                    options: LinkNodeOptions(position: .end)
                 )
             }
         }
-        seed.commit(nil)
+        seed.dispose()
 
         // Warmup — first-touch / allocator effects should not pollute the tail.
         for w in 0..<200 {
-            let tx = client.modifyOptimistic { b, _ in
-                b.connection(selector).addNode(
-                    ["__typename": "Post", "id": .string("warm\(w)"), "title": "-"],
-                    options: AddNodeOptions(position: .start)
+            let tx = client.modifyOptimistic { b in
+                b.connection(selector).linkNode(
+                    .object(["__typename": "Post", "id": .string("warm\(w)")]),
+                    options: LinkNodeOptions(position: .start)
                 )
             }
-            tx.commit(nil)
+            tx.dispose()
         }
 
         let iterations = 5_000
@@ -320,13 +317,13 @@ final class PerformanceTests: XCTestCase {
 
         for i in 0..<iterations {
             let start = DispatchTime.now().uptimeNanoseconds
-            let tx = client.modifyOptimistic { b, _ in
-                b.connection(selector).addNode(
-                    ["__typename": "Post", "id": .string("tail\(i)"), "title": "-"],
-                    options: AddNodeOptions(position: .start)
+            let tx = client.modifyOptimistic { b in
+                b.connection(selector).linkNode(
+                    .object(["__typename": "Post", "id": .string("tail\(i)")]),
+                    options: LinkNodeOptions(position: .start)
                 )
             }
-            tx.commit(nil)
+            tx.dispose()
             samplesNs.append(DispatchTime.now().uptimeNanoseconds - start)
         }
 
@@ -342,7 +339,7 @@ final class PerformanceTests: XCTestCase {
         let p999 = pctUs(0.999)
         let maxUs = Double(samplesNs.last ?? 0) / 1000.0
 
-        print(String(format: "[perf] addNode tail (preload=5000)  mean=%6.2f µs  p50=%6.2f  p95=%6.2f  p99=%6.2f  p99.9=%6.2f  max=%7.2f  (p99/p50=%.1fx)",
+        print(String(format: "[perf] linkNode tail (preload=5000)  mean=%6.2f µs  p50=%6.2f  p95=%6.2f  p99=%6.2f  p99.9=%6.2f  max=%7.2f  (p99/p50=%.1fx)",
                      meanUs, p50, p95, p99, p999, maxUs, p99 / p50))
 
         // Local M-series typically lands at p99/p50 ≈ 1.3×. GitHub-hosted
@@ -373,11 +370,11 @@ final class PerformanceTests: XCTestCase {
             let selector = ConnectionSelector(parent: .key("Query"), key: "notifications")
             let elapsed = time {
                 for i in 0..<iterations {
-                    let tx = client.modifyOptimistic { b, _ in
+                    let tx = client.modifyOptimistic { b in
                         b.patch(.key("Post:p1"), ["likes": .int(Int64(i))], mode: .merge)
-                        b.connection(selector).addNode(
-                            ["__typename": "Notification", "id": .string("n\(i)"), "text": "ping"],
-                            options: AddNodeOptions(position: .start)
+                        b.connection(selector).linkNode(
+                            .object(["__typename": "Notification", "id": .string("n\(i)")]),
+                            options: LinkNodeOptions(position: .start)
                         )
                     }
                     tx.revert()

@@ -61,7 +61,7 @@ final class ConcurrencyStressTests: XCTestCase {
         await withTaskGroup(of: Void.self) { group in
             for i in 0..<50 {
                 group.addTask { @Sendable in
-                    let tx = client.modifyOptimistic { b, _ in
+                    let tx = client.modifyOptimistic { b in
                         b.patch(.key("Post:p1"), ["counter": .int(Int64(i + 1))], mode: .merge)
                     }
                     txBox.withLock { $0.append(tx) }
@@ -130,8 +130,22 @@ final class ConcurrencyStressTests: XCTestCase {
             }
         }
 
-        // Allow any pending batched emissions to flush.
-        try await Task.sleep(nanoseconds: 50_000_000)
+        // Programmatic guard: poll until the convergence invariant holds
+        // (last emission == graph's final field) or fail with a hard
+        // deadline. A fixed `Task.sleep(50ms)` is unreliable under
+        // contention — too short produces false failures, too long
+        // wastes CI time. The deadline below is generous (1 s) but the
+        // happy path resolves in microseconds, so well-behaved runs
+        // exit immediately on the first poll. A failing run still
+        // terminates within the deadline and reports a deterministic
+        // error rather than a flaky timing race.
+        let deadline = Date().addingTimeInterval(1.0)
+        while Date() < deadline {
+            let final = client.graph.getField("Post:p1", "title")?.string
+            let last = emissions.value.last
+            if final != nil, final == last { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
         handle.unsubscribe()
 
         let final = client.graph.getField("Post:p1", "title")?.string
@@ -173,7 +187,7 @@ final class ConcurrencyStressTests: XCTestCase {
             }
             for i in 0..<20 {
                 group.addTask { @Sendable in
-                    let tx = client.modifyOptimistic { b, _ in
+                    let tx = client.modifyOptimistic { b in
                         b.patch(.key("Post:base"), ["title": .string("opt-\(i)")], mode: .merge)
                     }
                     tx.revert()
