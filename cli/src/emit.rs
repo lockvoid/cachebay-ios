@@ -55,16 +55,23 @@ fn render_schema(interfaces: &BTreeMap<String, Vec<String>>) -> String {
     s.push_str("/// `fragment X on InterfaceName { ... }` to apply against the\n");
     s.push_str("/// concrete records when normalising/materialising.\n");
     s.push_str("public enum CachebaySchema {\n");
-    s.push_str("    public static let interfaces: [String: [String]] = [\n");
-    for (iface, impls) in interfaces {
-        let inner = impls
-            .iter()
-            .map(|n| format!("\"{}\"", n))
-            .collect::<Vec<_>>()
-            .join(", ");
-        s.push_str(&format!("        \"{}\": [{}],\n", iface, inner));
+    if interfaces.is_empty() {
+        // Swift parses `[]` as Array literal; the empty Dictionary
+        // literal is `[:]`. Emit the dict form so consumers that have
+        // no interfaces still get a valid `[String: [String]]` value.
+        s.push_str("    public static let interfaces: [String: [String]] = [:]\n");
+    } else {
+        s.push_str("    public static let interfaces: [String: [String]] = [\n");
+        for (iface, impls) in interfaces {
+            let inner = impls
+                .iter()
+                .map(|n| format!("\"{}\"", n))
+                .collect::<Vec<_>>()
+                .join(", ");
+            s.push_str(&format!("        \"{}\": [{}],\n", iface, inner));
+        }
+        s.push_str("    ]\n");
     }
-    s.push_str("    ]\n");
     s.push_str("}\n");
     s
 }
