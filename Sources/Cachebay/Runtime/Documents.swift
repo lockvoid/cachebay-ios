@@ -71,6 +71,7 @@ public final class Documents: @unchecked Sendable {
     private let planner: Planner
     private let canonical: Canonical
     private let logger: Logger?
+    let profiler: (any CachebayProfiler)?
 
     private let lock = NSLock()
     private var materializeCache: [String: MaterializeResult] = [:]
@@ -82,11 +83,12 @@ public final class Documents: @unchecked Sendable {
     /// `Canonical.replayer` injection pattern for connection canonicals.
     private var replayer: OptimisticReplayer?
 
-    public init(graph: Graph, planner: Planner, canonical: Canonical, logger: Logger? = nil) {
+    public init(graph: Graph, planner: Planner, canonical: Canonical, logger: Logger? = nil, profiler: (any CachebayProfiler)? = nil) {
         self.graph = graph
         self.planner = planner
         self.canonical = canonical
         self.logger = logger
+        self.profiler = profiler
     }
 
     public func setReplayer(_ replayer: OptimisticReplayer?) {
@@ -96,6 +98,8 @@ public final class Documents: @unchecked Sendable {
     // MARK: - Normalize
 
     public func normalize(plan: CachePlan, variables: [String: JSONValue], data: JSONValue, rootId: CacheKey? = nil) {
+        let span = profiler?.begin("cachebay.documents.normalize")
+        defer { span?.end() }
         let startId = rootId ?? CachebayConstants.rootID
         let shouldLink = (startId != CachebayConstants.rootID) || (plan.operation == .query)
         let isRoot = startId == CachebayConstants.rootID || startId.hasPrefix("@mutation.") || startId.hasPrefix("@subscription.")
@@ -466,6 +470,8 @@ public final class Documents: @unchecked Sendable {
     // MARK: - Materialize
 
     public func materialize(plan: CachePlan, variables: [String: JSONValue], options: MaterializeOptions = .init()) -> MaterializeResult {
+        let span = profiler?.begin("cachebay.documents.materialize")
+        defer { span?.end() }
         let strictSig = plan.makeSignature(canonical: false, variables: variables)
         let canonicalSig = options.canonical ? plan.makeSignature(canonical: true, variables: variables) : nil
         let cacheKey = makeMaterializeCacheKey(signature: options.canonical ? canonicalSig! : strictSig, fingerprint: options.fingerprint, rootId: options.rootId)
@@ -475,6 +481,7 @@ public final class Documents: @unchecked Sendable {
             if var hit = materializeCache[cacheKey] {
                 hit.hot = true
                 lock.unlock()
+                span?.attribute("source", "cache")
                 return hit
             }
             lock.unlock()

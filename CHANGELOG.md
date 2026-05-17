@@ -6,6 +6,60 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.10.0] — Built-in profiling protocol + `OSSignpostProfiler`
+
+Adds an opt-in `CachebayProfiler` protocol that instruments every user-facing operation and every internal hot path. Wire `OSSignpostProfiler()` into `CachebayOptions.profiler` and Cachebay's runtime shows up as a signpost timeline in Instruments — drill into a slow frame, see exactly which `normalize` / `materialize` / `watchers.fanout` span dominates. Ship your own conformance to route into OpenTelemetry, Datadog, Firebase Performance, or any other telemetry pipeline.
+
+The default — `profiler == nil` — pays one nil check per call site and zero allocations. Every test in the existing suite passes unchanged with no profiler set.
+
+### What's instrumented
+
+Spans (duration intervals):
+
+- `cachebay.modifyOptimistic`, `cachebay.applyAutoCommit`, `cachebay.optimistic.replay.connection`, `cachebay.optimistic.replay.entity`
+- `cachebay.executeMutation`, `cachebay.executeQuery`, `cachebay.executeSubscription.frame`
+- `cachebay.documents.normalize`, `cachebay.documents.materialize`
+- `cachebay.readFragment`, `cachebay.writeFragment`
+- `cachebay.graph.flush`, `cachebay.watchers.fanout`
+- `cachebay.storage.warmup`
+
+Counter events:
+
+- `cachebay.watchers.emitted` — N watchers fired per fanout
+
+Each span carries structured attributes where useful: `planID`, `policy`, `watcherCount`, `emittedCount`, `scopeSize`, `layerCount`, `recordCount`, `kind` (fragment vs query watcher).
+
+### Host-callback exclusion
+
+Cachebay holds itself to a contract: **time spent in your code is never counted against Cachebay's reported duration.** Your `modifyOptimistic` builder closure, your watcher `onData` callback, your transport's network round-trip, your `commit { ... }` closure, your storage adapter's disk read — none of these appear inside a Cachebay span.
+
+Two patterns enforce this throughout the runtime:
+
+- **Pattern A** (`excludingHost`) — when a host closure is invoked inside an open span, the span is paused around it and resumed after. Used for `modifyOptimistic`'s builder, `executeMutation`'s network call, `executeQuery`'s network call, `warmup`'s `loadSync`.
+- **Pattern B** (end-before-host) — when the host call is the tail of an operation, the span is ended *before* the host invocation so the host's time lives outside any span by construction. Used for `watchers.fanout` (the onData loop runs after `span.end()`).
+
+`Docs/PROFILING.md` documents the contract; `CachebayProfilerTests` enforces it for every instrumented site.
+
+### Added
+
+- `CachebayOptions.profiler: (any CachebayProfiler)?` — optional injection point at client init time.
+- `protocol CachebayProfiler` — the protocol consumers conform to.
+- `protocol CachebayProfileSpan` — the span handle returned by `begin(...)`.
+- `extension Optional<CachebayProfileSpan>.excludingHost(_:)` — sync + async overloads. The canonical way to wrap a host call so its time is subtracted from the enclosing span.
+- `OSSignpostProfiler` — Apple-platform reference conformance. Backed by `OSSignposter`; near-zero cost when Instruments isn't recording.
+- `CachebayProfileName` enum — the inventory of span names, exposed for documentation + test assertions. Call sites still use `StaticString` literals directly so names live in the binary's `__cstring` section (zero allocation).
+- `RecordingProfiler` (test helper) — captures every span and event in memory so tests can assert call-site coverage and host-exclusion correctness.
+
+### Migration
+
+Nothing required. The new `profiler:` parameter in `CachebayOptions.init` is optional and defaults to `nil`. Existing apps see no behavioural difference. The CachebayClient and subsystem internals gained an `(any CachebayProfiler)?` field but the wiring is invisible to consumers.
+
+### Tests
+
+New file: [`CachebayProfilerTests`](./Tests/CachebayTests/Profiling/CachebayProfilerTests.swift) — 17 contract tests covering protocol surface, span lifecycle, idempotent end(), pause/resume, `excludingHost` (sync + nil span), every instrumented call site, host-exclusion contract for builder closures + onData callbacks + network round-trips + disk loads.
+
+679/679 tests green (was 662; +17 new).
+
 ## [0.9.2] — `OptimisticTransaction` lifetime tied to ARC (drop = dispose)
 
 Changes `OptimisticTransaction` from a `struct` to a `final class` and adds a `deinit` that calls `dispose()`. A transaction whose owning reference is dropped without an explicit `commit` / `revert` / `dispose` is now released automatically when ARC tears it down, instead of leaking its layer for the lifetime of the client.

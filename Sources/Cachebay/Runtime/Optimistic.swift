@@ -283,6 +283,7 @@ public final class Optimistic: @unchecked Sendable {
     private let graph: Graph
     private let planner: Planner?
     private let documents: Documents?
+    let profiler: (any CachebayProfiler)?
     private let lock = NSRecursiveLock()
 
     fileprivate enum EntityOpKind: Sendable { case write(patch: [String: JSONValue], mode: EntityPatchMode); case delete }
@@ -310,10 +311,11 @@ public final class Optimistic: @unchecked Sendable {
     /// any layer. Restored on revert/commit before replaying surviving layers.
     private var committedBaselines: [CacheKey: [String: JSONValue]?] = [:]
 
-    public init(graph: Graph, planner: Planner? = nil, documents: Documents? = nil) {
+    public init(graph: Graph, planner: Planner? = nil, documents: Documents? = nil, profiler: (any CachebayProfiler)? = nil) {
         self.graph = graph
         self.planner = planner
         self.documents = documents
+        self.profiler = profiler
     }
 
     /// Open a new optimistic layer. The closure runs **once**,
@@ -326,6 +328,9 @@ public final class Optimistic: @unchecked Sendable {
     /// closure is separate — it captures typed data from outer
     /// scope; there is no `ctx.data` / `BuilderContext` plumbing.
     public func modifyOptimistic(_ builder: @Sendable (_ b: OptimisticBuilder) -> Void) -> OptimisticTransaction {
+        let span = profiler?.begin("cachebay.modifyOptimistic")
+        defer { span?.end() }
+
         lock.lock()
         nextLayerId += 1
         let layer = Layer(id: nextLayerId)
@@ -333,7 +338,8 @@ public final class Optimistic: @unchecked Sendable {
         lock.unlock()
 
         let b = BuilderImpl(optimistic: self, layer: layer, recording: true)
-        builder(b)
+        // Host code — excluded from the span's reported duration.
+        span.excludingHost { builder(b) }
         graph.flush()
 
         let weakSelf = self
@@ -364,12 +370,16 @@ public final class Optimistic: @unchecked Sendable {
     /// Callers reach this via
     /// `client.modifyOptimistic(autoCommit: true) { … }`.
     public func applyAutoCommit(_ builder: @Sendable (_ b: OptimisticBuilder) -> Void) {
+        let span = profiler?.begin("cachebay.applyAutoCommit")
+        defer { span?.end() }
+
         // Dummy layer — never appended to `layers`, never replayed,
         // never reverted. Held only so BuilderImpl has a stable
         // reference; in non-recording mode it's never read.
         let dummy = Layer(id: 0)
         let b = BuilderImpl(optimistic: self, layer: dummy, recording: false)
-        builder(b)
+        // Host code — excluded from the span's reported duration.
+        span.excludingHost { builder(b) }
         graph.flush()
     }
 
@@ -392,6 +402,8 @@ public final class Optimistic: @unchecked Sendable {
         // Connection-merge runs this on every page update; cheap exit
         // when no layers are pending matters.
         if layers.isEmpty { return ReplayResult() }
+        let span = profiler?.begin("cachebay.optimistic.replay.connection")
+        defer { span?.end() }
         lock.lock()
         if layers.isEmpty {
             lock.unlock()
@@ -399,6 +411,8 @@ public final class Optimistic: @unchecked Sendable {
         }
         let sorted = layers.sorted { $0.id < $1.id }
         lock.unlock()
+        span?.attribute("layerCount", "\(sorted.count)")
+        span?.attribute("scopeSize", "\(connectionKeys.count)")
         let scope = connectionKeys.isEmpty ? nil : Set(connectionKeys)
         var linked: Set<CacheKey> = []
         var unlinked: Set<CacheKey> = []
@@ -452,6 +466,9 @@ public final class Optimistic: @unchecked Sendable {
         // benign: a layer added concurrently with this check just
         // gets its replay deferred to the next normalize call.
         if layers.isEmpty { return }
+        let span = profiler?.begin("cachebay.optimistic.replay.entity")
+        defer { span?.end() }
+        span?.attribute("scopeSize", "\(entityKeys.count)")
         lock.lock()
         // Re-check under the lock — a concurrent `modifyOptimistic`
         // could have raced our unlocked read above.

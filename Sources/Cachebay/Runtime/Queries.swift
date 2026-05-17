@@ -48,6 +48,7 @@ public final class Queries: @unchecked Sendable {
     private let planner: Planner
     private let documents: Documents
     private let logger: Logger?
+    let profiler: (any CachebayProfiler)?
     private let lock = NSRecursiveLock()
 
     private struct WatcherState {
@@ -69,11 +70,12 @@ public final class Queries: @unchecked Sendable {
     private var signatureToWatchers: [String: Set<Int>] = [:]
     private var watcherSeq: Int = 0
 
-    public init(graph: Graph, planner: Planner, documents: Documents, logger: Logger? = nil) {
+    public init(graph: Graph, planner: Planner, documents: Documents, logger: Logger? = nil, profiler: (any CachebayProfiler)? = nil) {
         self.graph = graph
         self.planner = planner
         self.documents = documents
         self.logger = logger
+        self.profiler = profiler
     }
 
     // MARK: - readQuery / writeQuery
@@ -270,6 +272,11 @@ public final class Queries: @unchecked Sendable {
     /// Called by Graph.onChange (via CachebayClient) with the set of touched
     /// record IDs. Watchers whose deps intersect re-materialize.
     public func notifyDataByDependencies(_ touched: Set<CacheKey>) {
+        // Profiler span covers materialize + diff + emits-list build,
+        // but ends BEFORE the loop that invokes host `onData` callbacks
+        // — pattern B from CachebayProfiler.swift. Host time stays out
+        // of the fanout's reported duration without needing pause().
+        let span = profiler?.begin("cachebay.watchers.fanout")
         lock.lock()
         var affected: Set<Int> = []
         for id in touched {
@@ -284,6 +291,8 @@ public final class Queries: @unchecked Sendable {
             // watcher registered the canonical key as a dependency.
             logger?.debug("[Cachebay] dep-fanout: touched=\(touched.count, privacy: .public) affected=0 watchersTotal=\(self.watchers.count, privacy: .public)")
             lock.unlock()
+            span?.attribute("watcherCount", "0")
+            span?.end()
             return
         }
         logger?.debug("[Cachebay] dep-fanout: touched=\(touched.count, privacy: .public) affected=\(affected.count, privacy: .public) watchersTotal=\(self.watchers.count, privacy: .public)")
@@ -312,6 +321,14 @@ public final class Queries: @unchecked Sendable {
             }
         }
         lock.unlock()
+        // End the span BEFORE invoking host onData callbacks — pattern B.
+        // The fanout duration excludes host time by construction.
+        span?.attribute("watcherCount", "\(affected.count)")
+        span?.attribute("emittedCount", "\(emits.count)")
+        span?.end()
+        if profiler != nil && !emits.isEmpty {
+            profiler?.record("cachebay.watchers.emitted", value: Double(emits.count))
+        }
         for (cb, v) in emits { cb(v) }
     }
 

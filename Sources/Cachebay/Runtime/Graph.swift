@@ -42,6 +42,7 @@ public final class Graph: @unchecked Sendable {
     private var interfaces: [String: [String]]
     private var implementers: [String: Set<String>]
     private var onChange: GraphChangeHandler?
+    let profiler: (any CachebayProfiler)?
 
     private var records: [CacheKey: [String: JSONValue]] = [:]
     private var versions: [CacheKey: UInt32] = [:]
@@ -51,10 +52,11 @@ public final class Graph: @unchecked Sendable {
 
     private let lock = NSRecursiveLock()
 
-    public init(options: GraphOptions = .init()) {
+    public init(options: GraphOptions = .init(), profiler: (any CachebayProfiler)? = nil) {
         self.keys = options.keys
         self.interfaces = options.interfaces
         self.onChange = options.onChange
+        self.profiler = profiler
 
         var impls: [String: Set<String>] = [:]
         for (iface, concrete) in options.interfaces {
@@ -252,11 +254,23 @@ public final class Graph: @unchecked Sendable {
         isFlushing = true
         let handler = onChange
 
+        // Profiler span wraps the flush, but pauses while handler? is
+        // running — the handler is downstream Cachebay code (watcher
+        // fanout, storage replication) that already has its own spans.
+        // Without the pause, those child spans would double-count under
+        // `cachebay.graph.flush` AND their own names. The remaining
+        // (un-paused) time is the pure flush bookkeeping: pending-set
+        // drain, lock juggle, re-entry detection.
+        let span = profiler?.begin("cachebay.graph.flush")
+        defer { span?.end() }
+
         while !pending.isEmpty {
             let touched = pending
             pending.removeAll(keepingCapacity: true)
             lock.unlock()
+            span?.pause()
             handler?(touched)
+            span?.resume()
             lock.lock()
         }
         isFlushing = false

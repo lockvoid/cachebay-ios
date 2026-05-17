@@ -68,6 +68,7 @@ public final class Operations: @unchecked Sendable {
     private let planner: Planner
     private let documents: Documents
     private let queries: Queries
+    let profiler: (any CachebayProfiler)?
 
     private let suspensionTimeout: TimeInterval
     private let defaultPolicy: CachePolicy
@@ -84,7 +85,8 @@ public final class Operations: @unchecked Sendable {
         documents: Documents,
         queries: Queries,
         defaultPolicy: CachePolicy = .cacheFirst,
-        suspensionTimeout: TimeInterval = 1.0
+        suspensionTimeout: TimeInterval = 1.0,
+        profiler: (any CachebayProfiler)? = nil
     ) {
         self.transport = transport
         self.planner = planner
@@ -92,12 +94,17 @@ public final class Operations: @unchecked Sendable {
         self.queries = queries
         self.defaultPolicy = defaultPolicy
         self.suspensionTimeout = suspensionTimeout
+        self.profiler = profiler
     }
 
     // MARK: - executeQuery
 
     public func executeQuery(plan: CachePlan, options: ExecuteQueryOptions) async -> OperationResult<JSONValue> {
+        let span = profiler?.begin("cachebay.executeQuery")
+        defer { span?.end() }
+        span?.attribute("planID", "\(plan.id)")
         let policy = options.cachePolicy ?? defaultPolicy
+        span?.attribute("policy", "\(policy)")
         let vars = options.variables
         let canonicalSig = plan.makeSignature(canonical: true, variables: vars)
         let strictSig = plan.makeSignature(canonical: false, variables: vars)
@@ -146,27 +153,29 @@ public final class Operations: @unchecked Sendable {
                 deliverCached(c, willFetchFromNetwork: false)
                 return OperationResult(data: c.data, error: nil, meta: .init(source: .cache))
             }
-            return await performRequest(plan: plan, options: options, canonicalSig: canonicalSig, strictSig: strictSig)
+            return await performRequest(plan: plan, options: options, canonicalSig: canonicalSig, strictSig: strictSig, parentSpan: span)
 
         case .cacheAndNetwork:
             if let c = cached, c.canonicalOK {
                 deliverCached(c, willFetchFromNetwork: true)
             }
-            return await performRequest(plan: plan, options: options, canonicalSig: canonicalSig, strictSig: strictSig)
+            return await performRequest(plan: plan, options: options, canonicalSig: canonicalSig, strictSig: strictSig, parentSpan: span)
 
         case .networkOnly:
-            return await performRequest(plan: plan, options: options, canonicalSig: canonicalSig, strictSig: strictSig)
+            return await performRequest(plan: plan, options: options, canonicalSig: canonicalSig, strictSig: strictSig, parentSpan: span)
         }
     }
 
-    private func performRequest(plan: CachePlan, options: ExecuteQueryOptions, canonicalSig: String, strictSig: String) async -> OperationResult<JSONValue> {
+    private func performRequest(plan: CachePlan, options: ExecuteQueryOptions, canonicalSig: String, strictSig: String, parentSpan: CachebayProfileSpan? = nil) async -> OperationResult<JSONValue> {
         let ctx = HTTPContext(query: plan.networkQuery, variables: options.variables, operationType: .query)
 
         // Epoch guard for staleness.
         let currentEpoch = bumpEpoch(for: canonicalSig)
 
         do {
-            let result = try await transport.http.execute(ctx)
+            // Network round-trip — excluded from parent span. Server +
+            // wire time is not Cachebay's work.
+            let result = try await parentSpan.excludingHost { try await transport.http.execute(ctx) }
             let latest = readEpoch(for: canonicalSig)
             if latest != currentEpoch {
                 let err = CombinedError.stale()
@@ -221,12 +230,18 @@ public final class Operations: @unchecked Sendable {
     // MARK: - executeMutation
 
     public func executeMutation(plan: CachePlan, options: ExecuteMutationOptions) async -> OperationResult<JSONValue> {
+        let span = profiler?.begin("cachebay.executeMutation")
+        defer { span?.end() }
+        span?.attribute("planID", "\(plan.id)")
+
         let clock = bumpMutationClock()
         let rootId = "@mutation.\(clock)"
 
         let ctx = HTTPContext(query: plan.networkQuery, variables: options.variables, operationType: .mutation)
         do {
-            let result = try await transport.http.execute(ctx)
+            // Network round-trip — excluded from the span; the server's
+            // response time isn't Cachebay's work to optimise.
+            let result = try await span.excludingHost { try await transport.http.execute(ctx) }
             if let data = result.data {
                 documents.normalize(plan: plan, variables: options.variables, data: data, rootId: rootId)
                 let fresh = documents.materialize(plan: plan, variables: options.variables, options: .init(canonical: true, rootId: rootId, fingerprint: true, preferCache: false, updateCache: false))
@@ -295,16 +310,26 @@ public final class Operations: @unchecked Sendable {
                 do {
                     for try await event in stream {
                         if let data = event.data, !isEmptyObject(data) {
+                            // One span per frame — frame work begins at
+                            // normalize and ends before yielding to host.
+                            let frameSpan = selfRef.profiler?.begin("cachebay.executeSubscription.frame")
+                            frameSpan?.attribute("planID", "\(plan.id)")
                             let c = selfRef.bumpSubscriptionClock()
                             let rootId = "@subscription.\(c)"
                             documentsRef.normalize(plan: plan, variables: options.variables, data: data, rootId: rootId)
                             let fresh = documentsRef.materialize(plan: plan, variables: options.variables, options: .init(canonical: true, rootId: rootId, fingerprint: true, preferCache: false, updateCache: false))
                             if fresh.source == .none {
+                                frameSpan?.attribute("result", "materializeFailed")
+                                frameSpan?.end()
                                 continuation.yield(OperationResult(data: nil, error: CombinedError(networkMessage: "[cachebay] Subscription materialization failed")))
                                 continue
                             }
                             let sig = plan.makeSignature(canonical: true, variables: options.variables)
                             _ = queriesRef.notifyDataBySignature(sig, data: fresh.data, fingerprints: fresh.fingerprints, dependencies: fresh.dependencies)
+                            // End span before yielding to host's continuation
+                            // — pattern B. Host's downstream awaiter is not
+                            // counted against Cachebay's frame-handling time.
+                            frameSpan?.end()
                             continuation.yield(OperationResult(data: fresh.data, error: event.error))
                         } else if let err = event.error {
                             continuation.yield(OperationResult(data: nil, error: err))

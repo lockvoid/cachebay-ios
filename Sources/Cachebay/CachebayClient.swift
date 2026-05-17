@@ -92,6 +92,13 @@ public struct CachebayOptions: Sendable {
     /// is a subset of the consuming query's selection set, leaving the
     /// entity partially-populated for the watcher).
     public var logger: Logger?
+    /// Optional profiler for performance instrumentation. When set,
+    /// every user-facing operation and internal hot path emits
+    /// duration spans + counter events. See `Docs/PROFILING.md`.
+    /// Ship `OSSignpostProfiler()` for Instruments timelines, or roll
+    /// your own conformance for OpenTelemetry / custom telemetry.
+    /// Zero overhead when nil (one nil check per call site).
+    public var profiler: (any CachebayProfiler)?
 
     public init(
         transport: Transport,
@@ -100,7 +107,8 @@ public struct CachebayOptions: Sendable {
         interfaces: [String: [String]] = [:],
         suspensionTimeout: TimeInterval = 1.0,
         storage: StorageAdapterFactory? = nil,
-        logger: Logger? = nil
+        logger: Logger? = nil,
+        profiler: (any CachebayProfiler)? = nil
     ) {
         self.transport = transport
         self.cachePolicy = cachePolicy
@@ -109,6 +117,7 @@ public struct CachebayOptions: Sendable {
         self.suspensionTimeout = suspensionTimeout
         self.storage = storage
         self.logger = logger
+        self.profiler = profiler
     }
 }
 
@@ -139,23 +148,27 @@ public final class CachebayClient: @unchecked Sendable {
     let fragments: Fragments
     let optimistic: Optimistic
     let operations: Operations
+    let profiler: (any CachebayProfiler)?
 
     private let remoteApplyFlag = RemoteApplyFlag()
 
     public init(options: CachebayOptions) {
-        let graph = Graph(options: GraphOptions(keys: options.keys, interfaces: options.interfaces, onChange: nil))
+        let profiler = options.profiler
+        let graph = Graph(options: GraphOptions(keys: options.keys, interfaces: options.interfaces, onChange: nil), profiler: profiler)
         let planner = Planner()
         let canonical = Canonical(graph: graph)
-        let documents = Documents(graph: graph, planner: planner, canonical: canonical, logger: options.logger)
-        let queries = Queries(graph: graph, planner: planner, documents: documents, logger: options.logger)
-        let fragments = Fragments(planner: planner, documents: documents)
-        let optimistic = Optimistic(graph: graph, planner: planner, documents: documents)
+        let documents = Documents(graph: graph, planner: planner, canonical: canonical, logger: options.logger, profiler: profiler)
+        let queries = Queries(graph: graph, planner: planner, documents: documents, logger: options.logger, profiler: profiler)
+        let fragments = Fragments(planner: planner, documents: documents, profiler: profiler)
+        let optimistic = Optimistic(graph: graph, planner: planner, documents: documents, profiler: profiler)
         canonical.setReplayer(optimistic)
         documents.setReplayer(optimistic)
         let operations = Operations(
             transport: options.transport, planner: planner, documents: documents, queries: queries,
-            defaultPolicy: options.cachePolicy, suspensionTimeout: options.suspensionTimeout
+            defaultPolicy: options.cachePolicy, suspensionTimeout: options.suspensionTimeout,
+            profiler: profiler
         )
+        self.profiler = profiler
         let inspect = Inspect(graph: graph)
 
         let remoteApplyFlag = self.remoteApplyFlag
@@ -263,9 +276,17 @@ public final class CachebayClient: @unchecked Sendable {
     /// is ~5-10 s, well within tolerance).
     public func warmup() {
         guard let storage = self.storage else { return }
+        let span = profiler?.begin("cachebay.storage.warmup")
+        defer { span?.end() }
         do {
-            let records = try storage.loadSync()
-            if records.isEmpty { return }
+            // Disk read — excluded from span; storage backends own their
+            // own latency. The span measures graph re-hydration cost.
+            let records = try span.excludingHost { try storage.loadSync() }
+            if records.isEmpty {
+                span?.attribute("recordCount", "0")
+                return
+            }
+            span?.attribute("recordCount", "\(records.count)")
             remoteApplyFlag.set(true)
             for (id, snap) in records where !graph.hasRecord(id) {
                 graph.putRecord(id, snap)
@@ -276,6 +297,7 @@ public final class CachebayClient: @unchecked Sendable {
             // Load failure is swallowed; cache simply stays cold.
             // (Subsystem loggers aren't on `self` — surface this via
             // a watcher's onError if you need the signal in production.)
+            span?.attribute("error", "\(error)")
         }
     }
 

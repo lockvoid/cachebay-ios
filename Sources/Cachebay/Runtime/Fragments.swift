@@ -27,6 +27,7 @@ public struct WatchFragmentHandle: Sendable {
 public final class Fragments: @unchecked Sendable {
     private let planner: Planner
     private let documents: Documents
+    let profiler: (any CachebayProfiler)?
     private let lock = NSRecursiveLock()
 
     private struct WatcherState {
@@ -49,18 +50,23 @@ public final class Fragments: @unchecked Sendable {
     private var signatureToWatchers: [String: Set<Int>] = [:]
     private var watcherSeq: Int = 0
 
-    public init(planner: Planner, documents: Documents) {
+    public init(planner: Planner, documents: Documents, profiler: (any CachebayProfiler)? = nil) {
         self.planner = planner
         self.documents = documents
+        self.profiler = profiler
     }
 
     public func readFragment(plan: CachePlan, rootId: CacheKey, variables: [String: JSONValue]) -> JSONValue? {
+        let span = profiler?.begin("cachebay.readFragment")
+        defer { span?.end() }
         let result = documents.materialize(plan: plan, variables: variables, options: .init(canonical: true, rootId: rootId, fingerprint: true, preferCache: true, updateCache: false))
         if result.source == .none { return nil }
         return result.data
     }
 
     public func writeFragment(plan: CachePlan, rootId: CacheKey, variables: [String: JSONValue], data: JSONValue) {
+        let span = profiler?.begin("cachebay.writeFragment")
+        defer { span?.end() }
         documents.normalize(plan: plan, variables: variables, data: data, rootId: rootId)
     }
 
@@ -171,12 +177,21 @@ public final class Fragments: @unchecked Sendable {
     }
 
     public func notifyDataByDependencies(_ touched: Set<CacheKey>) {
+        // Same shape as Queries.notifyDataByDependencies: span ends
+        // before invoking host onData callbacks (pattern B).
+        let span = profiler?.begin("cachebay.watchers.fanout")
         lock.lock()
         var affected: Set<Int> = []
         for id in touched {
             if let set = depIndex[id] { affected.formUnion(set) }
         }
-        if affected.isEmpty { lock.unlock(); return }
+        if affected.isEmpty {
+            lock.unlock()
+            span?.attribute("watcherCount", "0")
+            span?.attribute("kind", "fragment")
+            span?.end()
+            return
+        }
 
         var emits: [(@Sendable (JSONValue) -> Void, JSONValue)] = []
         for id in affected {
@@ -193,6 +208,10 @@ public final class Fragments: @unchecked Sendable {
             }
         }
         lock.unlock()
+        span?.attribute("watcherCount", "\(affected.count)")
+        span?.attribute("emittedCount", "\(emits.count)")
+        span?.attribute("kind", "fragment")
+        span?.end()
         for (cb, v) in emits { cb(v) }
     }
 
