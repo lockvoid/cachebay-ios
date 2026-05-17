@@ -44,13 +44,14 @@ final class OptimisticSplitClosuresTests: XCTestCase {
         let client = makeClient()
         let runCount = CaptureBox<Int>(value: 0)
 
-        _ = client.modifyOptimistic { b in
+        let _tx = client.modifyOptimistic { b in
             runCount.value += 1
             b.patch(.key("Post:p1"), ["title": .string("v1")], mode: .merge)
         }
 
         XCTAssertEqual(runCount.value, 1)
         XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "v1")
+        withExtendedLifetime(_tx) {}
     }
 
     // MARK: - Recorded ops replay after a sibling commits / reverts

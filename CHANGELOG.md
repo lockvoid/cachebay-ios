@@ -6,6 +6,69 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.9.2] — `OptimisticTransaction` lifetime tied to ARC (drop = dispose)
+
+Changes `OptimisticTransaction` from a `struct` to a `final class` and adds a `deinit` that calls `dispose()`. A transaction whose owning reference is dropped without an explicit `commit` / `revert` / `dispose` is now released automatically when ARC tears it down, instead of leaking its layer for the lifetime of the client.
+
+### The behaviour change
+
+```swift
+// v0.9.1 and earlier — leaked the layer forever:
+func optimisticUpdateAndForget() {
+    _ = client.modifyOptimistic { b in
+        b.patch(.key("Post:p1"), ["likes": .int(42)], mode: .merge)
+    }
+    // Returned tx is dropped. Layer remains in `Optimistic.layers`
+    // indefinitely. Every subsequent normalize replays it. Memory + CPU
+    // creep on every long-running session that ever forgot to resolve.
+}
+
+// v0.9.2 — layer disposes automatically when ARC releases the tx:
+func optimisticUpdateAndForget() {
+    _ = client.modifyOptimistic { b in
+        b.patch(.key("Post:p1"), ["likes": .int(42)], mode: .merge)
+    }
+    // Returned tx has no surviving reference → deinit fires → dispose()
+    // runs → layer removed. Same observable behaviour as an explicit
+    // `tx.dispose()` call.
+}
+```
+
+`dispose` is the right default (not `revert`): the patch was already visible to the UI, and "drop without resolution" is the failure mode of error paths and task cancellation — replaying a half-applied layer on top of a possibly-evicted baseline would be worse than just leaving the visible state alone. Consumers that want rollback semantics must call `tx.revert()` explicitly.
+
+### Failure modes this closes
+
+- `Task` cancellation between `modifyOptimistic` and the awaited mutation — the tx local goes out of scope when the task unwinds, deinit cleans up.
+- `throw` between `modifyOptimistic` and the explicit resolution call — same path: the throwing scope releases the tx local, deinit fires.
+- Holder objects (view models, coordinators) being torn down with a pending tx — releasing the holder cascades to the tx via ARC.
+- Bare-call sites (`_ = client.modifyOptimistic { ... }`) — the tx is released at the end of the enclosing statement.
+
+### What "explicit resolution" still does
+
+`commit`, `revert`, and `dispose` are unchanged on the surface. Internally, `commit` / `revert` now call into a private dispose closure that is idempotent — the deinit safety net executing on a transaction that was already resolved is a no-op, not a double-free. The same idempotency guard sits at the `Optimistic.commit(layer:commitBuilder:)` boundary: if the layer is already gone, `commit` exits before running its closure.
+
+### Tests
+
+New file: [`OptimisticTransactionLifetimeTests`](./Tests/CachebayTests/Runtime/OptimisticTransactionLifetimeTests.swift) — 7 contract tests covering:
+
+- `_ = client.modifyOptimistic { ... }` releases the tx and disposes the layer.
+- `var tx: OptimisticTransaction? = ...; tx = nil` disposes (manual ARC release).
+- `Task { let tx = ...; ... }.cancel()` disposes (cancellation between open and resolve).
+- A `throw` between `modifyOptimistic` and the planned resolution disposes.
+- `tx.dispose()` followed by tx release is idempotent.
+- `tx.commit { ... }` followed by tx release runs the commit closure exactly once.
+- `tx.commit { ... }` called twice runs the closure exactly once (idempotency at the boundary).
+
+### Source-level impact
+
+`OptimisticTransaction` was a `Sendable` struct; it is now `final class: @unchecked Sendable`. Same public methods (`commit`, `revert`, `dispose`), same call sites. Reference semantics replace value semantics — copying a tx no longer creates an independent handle (it never made sense to: the layer is shared state, not a value).
+
+Tests that previously bound a tx with `_ = client.modifyOptimistic { ... }` and inspected layer state afterwards now need a named binding (`let _tx = ...` plus a `withExtendedLifetime(_tx) {}` at end-of-scope) to keep the tx alive across the assertion block — otherwise ARC tears it down between the call and the read. Updated in this release: `OptimisticReplayResultTests`, `OptimisticTests`, `CanonicalReplayIntegrationTests`, `OptimisticAddNodeReplayTests`, `OptimisticSplitClosuresTests`, `OptimisticLayeringTests`, `OptimisticWriteFragmentTests`.
+
+### Migration
+
+Nothing for consumers to do unless you were relying on the leak. Code that calls `modifyOptimistic` and *always* resolves the returned tx via `commit` / `revert` / `dispose` behaves identically. Code that "forgot" to resolve will now release the layer on scope exit — observable difference: the optimistic effect disappears once your `tx` local goes out of scope. If you were depending on that effect persisting, you must hold the `OptimisticTransaction` reference somewhere with the lifetime you want (a view-model property, a session-scoped collection, etc.).
+
 ## [0.9.1] — Entity replay-after-normalize (closes the entity-axis race)
 
 Fixes a race where a server-response `normalize` could silently clobber a concurrent optimistic layer's field patch. Symmetric counterpart to the connection-side replay that's been in place since v0.4 — connection canonicals were already protected (`OptimisticReplayer.replay(connectionKeys:)` runs from `Canonical.updateConnection`), but entities had no equivalent hook.

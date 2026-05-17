@@ -130,7 +130,7 @@ final class OptimisticLayeringTests: XCTestCase {
                 options: LinkNodeOptions(position: .start)
             )
         }
-        _ = client.modifyOptimistic { b in
+        let _tx = client.modifyOptimistic { b in
             b.connection(selector).linkNode(
                 .object([
                     CachebayConstants.typenameField: .string("Post"),
@@ -156,6 +156,7 @@ final class OptimisticLayeringTests: XCTestCase {
         }
         XCTAssertEqual(nodeIds(client), ["Post:p1", "Post:p2"],
             "after L1.commit: p1 in start slot, p2 still last (ordering preserved)")
+        withExtendedLifetime(_tx) {}
     }
 
     // MARK: - multiple revert calls are safe
@@ -225,7 +226,7 @@ final class OptimisticLayeringTests: XCTestCase {
         let client = makeClient()
         let selector = ConnectionSelector(parent: .key("Query"), key: "posts")
 
-        _ = client.modifyOptimistic { b in
+        let _tx = client.modifyOptimistic { b in
             b.connection(selector).linkNode(
                 .object([
                     CachebayConstants.typenameField: .string("Post"),
@@ -240,5 +241,6 @@ final class OptimisticLayeringTests: XCTestCase {
         // edges array should also be gone (record cleared).
         await client.evictAll()
         XCTAssertNil(client.graph.getRecord(canonicalKey))
+        withExtendedLifetime(_tx) {}
     }
 }

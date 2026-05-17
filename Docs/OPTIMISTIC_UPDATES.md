@@ -76,6 +76,29 @@ tx.dispose()  // ← server normalize already wrote the canonical state.
 - **`commit { b in … }`** — temp-id swap or any case where commit-time ops differ from optimistic-time ops. The commit closure captures typed server data from outer scope (no `ctx.data` indirection).
 - **`revert()`** — the mutation failed.
 
+### ARC drops the tx → layer disposes automatically
+
+`OptimisticTransaction` is a reference type (`final class`). Its `deinit` calls `dispose()` — so a tx that goes out of scope **without** an explicit `commit` / `revert` / `dispose` will release its layer when ARC tears it down. This is the safety net for forgotten-resolution paths:
+
+```swift
+func optimisticLike(postID: String) async throws {
+    let tx = client.modifyOptimistic { b in
+        b.patch(.key("Post:\(postID)"), ["liked": .bool(true)], mode: .merge)
+    }
+    // If executeMutation throws or the surrounding Task is cancelled,
+    // `tx` goes out of scope before any explicit resolution. ARC
+    // releases it → deinit fires → layer disposes. No leak.
+    let r = try await client.executeMutation(...)
+    if r.error != nil { tx.revert() } else { tx.dispose() }
+}
+```
+
+This is **dispose semantics, not revert** — the optimistic effect on the visible graph is left in place when ARC drops the tx. The next normalize call writes server-authoritative data over it as usual; the layer just stops contributing to replay. If you want the optimistic patch reverted on every error path, call `tx.revert()` explicitly — don't rely on ARC for rollback.
+
+If you need the optimistic effect to persist *beyond* the scope where the tx is created (e.g. a view-model holding the patch until a long-running task completes), store the `OptimisticTransaction` reference in a property with the lifetime you want. Otherwise the deinit will fire at the end of the creating scope.
+
+`commit` / `revert` / `dispose` are idempotent — calling any of them after another (or after ARC has already fired deinit on a resolved tx) is a no-op, not a double-free.
+
 ---
 
 ## Single-phase variant: `autoCommit`

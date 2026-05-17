@@ -50,7 +50,7 @@ final class OptimisticReplayResultTests: XCTestCase {
         // One transaction adds Post:p1 to A and removes Post:p99 from B.
         // (p99 doesn't actually exist; unlinkNode is a no-op as a graph
         // mutation but should still register as an op for the layer.)
-        _ = client.modifyOptimistic { b in
+        let _tx = client.modifyOptimistic { b in
             b.connection(key: keyA).linkNode(
                 .object([
                     CachebayConstants.typenameField: .string("Post"),
@@ -70,6 +70,7 @@ final class OptimisticReplayResultTests: XCTestCase {
         XCTAssertTrue(resultBoth.linked.contains("Post:p1"))
         XCTAssertTrue(resultBoth.unlinked.contains("Post:p99"),
                       "scoped to both, unlinked must include Post:p99, got \(resultBoth.unlinked)")
+        withExtendedLifetime(_tx) {}
     }
 
     /// Web `optimistic.test.ts:725` "remains idempotent for the same
@@ -91,7 +92,7 @@ final class OptimisticReplayResultTests: XCTestCase {
         ])
         client.graph.flush()
 
-        _ = client.modifyOptimistic { b in
+        let _tx = client.modifyOptimistic { b in
             let c = b.connection(key: key)
             c.linkNode(.object([
                 CachebayConstants.typenameField: .string("Post"),
@@ -109,6 +110,7 @@ final class OptimisticReplayResultTests: XCTestCase {
         XCTAssertEqual(r1.unlinked, r2.unlinked)
         XCTAssertEqual(r1.linked, ["Post:p1", "Post:p2"])
         XCTAssertTrue(r1.unlinked.isEmpty)
+        withExtendedLifetime(_tx) {}
     }
 
     /// Replay with an empty `connectionKeys` array applies all ops
@@ -131,7 +133,7 @@ final class OptimisticReplayResultTests: XCTestCase {
         }
         client.graph.flush()
 
-        _ = client.modifyOptimistic { b in
+        let _tx = client.modifyOptimistic { b in
             b.connection(key: keyA).linkNode(.object([
                 CachebayConstants.typenameField: .string("Post"),
                 "id": .string("p1"),
@@ -145,5 +147,6 @@ final class OptimisticReplayResultTests: XCTestCase {
         let result = client.optimistic.replay(connectionKeys: [])
         XCTAssertEqual(result.linked, ["Post:p1", "Post:p2"],
                        "unscoped replay must report both, got \(result.linked)")
+        withExtendedLifetime(_tx) {}
     }
 }

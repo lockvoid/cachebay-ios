@@ -83,7 +83,7 @@ final class OptimisticTests: XCTestCase {
     func test_addNode_dedup_by_entity() throws {
         let client = makeClient()
         let selector = ConnectionSelector(parent: .key("Query"), key: "posts")
-        _ = client.modifyOptimistic { b in
+        let _tx = client.modifyOptimistic { b in
             let c = b.connection(selector)
             c.linkNode(.object(["__typename": "Post", "id": "p1"]), options: LinkNodeOptions(position: .start))
             // Same entity — should no-op on edges list.
@@ -92,12 +92,13 @@ final class OptimisticTests: XCTestCase {
         let canonicalKey = "@connection.posts({})"
         let edges = client.graph.getField(canonicalKey, CachebayConstants.connectionEdgesField)?.refList ?? []
         XCTAssertEqual(edges.count, 1)
+        withExtendedLifetime(_tx) {}
     }
 
     func test_connection_patch_pageInfo() throws {
         let client = makeClient()
         let selector = ConnectionSelector(parent: .key("Query"), key: "posts")
-        _ = client.modifyOptimistic { b in
+        let _tx = client.modifyOptimistic { b in
             let c = b.connection(selector)
             c.patch([
                 "pageInfo": .object(["hasNextPage": false, "endCursor": "c1"]),
@@ -110,5 +111,6 @@ final class OptimisticTests: XCTestCase {
         XCTAssertEqual(client.graph.getField(pageInfoRef!, "hasNextPage")?.bool, false)
         XCTAssertEqual(client.graph.getField(pageInfoRef!, "endCursor")?.string, "c1")
         XCTAssertEqual(client.graph.getField(canonicalKey, "totalCount")?.int, 42)
+        withExtendedLifetime(_tx) {}
     }
 }

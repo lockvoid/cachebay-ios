@@ -59,7 +59,38 @@ public struct LinkNodeOptions: Sendable {
     }
 }
 
-public struct OptimisticTransaction: Sendable {
+/// Handle for a pending optimistic layer. **Reference-typed** —
+/// the layer's lifetime is bound to the lifetime of this transaction
+/// reference. When the last strong reference is released without an
+/// explicit `commit` / `revert` / `dispose`, `deinit` auto-disposes
+/// the layer as a safety net.
+///
+/// This is the **v0.9.2 shape change** from a `Sendable struct` of
+/// closures to a `final class @unchecked Sendable`. Source-compatible
+/// for the 99%+ case: `tx.commit(...)`, `tx.revert()`, `tx.dispose()`
+/// all keep the same signatures. The semantic change is lifetime:
+/// holding `tx` keeps the layer pending; dropping `tx` cleans it up.
+///
+/// Holding a long-lived optimistic layer (an unsent draft, a streaming
+/// upload preview, a 30-second voice-recording stub) means holding
+/// the `OptimisticTransaction` reference for as long as the optimistic
+/// state should remain visible. The layer is auto-disposed when the
+/// last strong reference goes out of scope.
+public final class OptimisticTransaction: @unchecked Sendable {
+    private let _commit: @Sendable (@escaping @Sendable (OptimisticBuilder) -> Void) -> Void
+    private let _revert: @Sendable () -> Void
+    private let _dispose: @Sendable () -> Void
+
+    init(
+        commit: @escaping @Sendable (@escaping @Sendable (OptimisticBuilder) -> Void) -> Void,
+        revert: @escaping @Sendable () -> Void,
+        dispose: @escaping @Sendable () -> Void
+    ) {
+        self._commit = commit
+        self._revert = revert
+        self._dispose = dispose
+    }
+
     /// Finalize the layer with a separate commit-phase closure.
     ///
     /// Semantics:
@@ -72,8 +103,13 @@ public struct OptimisticTransaction: Sendable {
     ///   * Baselines for records no longer referenced by any surviving
     ///     layer are dropped.
     ///
-    /// The commit closure captures typed server data from outer scope
-    /// — there is no `ctx.data` plumbing, no `JSONValue?` unwrap, no
+    /// Idempotent: a second `commit(...)` call after the layer has
+    /// already been resolved is a no-op — the closure is NOT invoked
+    /// twice. (Underlying `Optimistic.commit` uses `firstIndex` to
+    /// short-circuit.)
+    ///
+    /// The commit closure captures typed server data from outer scope —
+    /// there is no `ctx.data` plumbing, no `JSONValue?` unwrap, no
     /// generic over `OperationData`. Just an ordinary Swift closure.
     ///
     /// ```swift
@@ -89,8 +125,17 @@ public struct OptimisticTransaction: Sendable {
     ///     }
     /// }
     /// ```
-    public let commit: @Sendable (_ build: @escaping @Sendable (_ b: OptimisticBuilder) -> Void) -> Void
-    public let revert: @Sendable () -> Void
+    public func commit(_ build: @escaping @Sendable (OptimisticBuilder) -> Void) {
+        _commit(build)
+    }
+
+    /// Revert: restore baselines for the layer's touched records,
+    /// replay surviving layers' ops on top, drop the layer.
+    /// Idempotent — a second `revert()` is a no-op.
+    public func revert() {
+        _revert()
+    }
+
     /// Drop the layer without restoring baselines or running any
     /// commit-time work. Use when the server's response was already
     /// normalized into the cache (via `executeMutation`'s pipeline)
@@ -106,7 +151,36 @@ public struct OptimisticTransaction: Sendable {
     ///     their baseline.
     ///   * Graph state is NOT modified — whatever the cache holds
     ///     after `executeMutation`'s normalize is the final state.
-    public let dispose: @Sendable () -> Void
+    ///
+    /// Idempotent — a second `dispose()` is a no-op.
+    public func dispose() {
+        _dispose()
+    }
+
+    /// Safety net: when the last strong reference to this transaction
+    /// goes out of scope without an explicit resolve, auto-dispose
+    /// the layer. Prevents the "I forgot to handle the error path"
+    /// leak class where a layer would otherwise stay pending forever
+    /// (and after v0.9.1, replay its ops on every subsequent
+    /// `documents.normalize`, causing unbounded phantom writes).
+    ///
+    /// Dispose is chosen over revert as the default because:
+    ///   * The layer's ops were already applied to the graph when the
+    ///     layer opened. `dispose` preserves that observable state.
+    ///   * `revert` would assume the caller wanted to undo their
+    ///     optimistic edit — paternalistic and likely wrong for the
+    ///     "common error path" leak case.
+    ///   * If the layer's intent was tied to a server mutation that
+    ///     never returned, the next server normalize on the same
+    ///     record will overwrite via the standard merge — no need
+    ///     for an explicit rollback.
+    ///   * Idempotent at the `Optimistic` layer: if the caller
+    ///     already explicitly resolved (commit/revert/dispose), this
+    ///     deinit-fired `dispose` is a no-op (`firstIndex` returns
+    ///     nil, guard returns early).
+    deinit {
+        _dispose()
+    }
 }
 
 /// The builder surface used inside `cache.modifyOptimistic { b in ... }`
@@ -441,6 +515,16 @@ public final class Optimistic: @unchecked Sendable {
 
     private func commit(layer: Layer, commitBuilder: @Sendable (_ b: OptimisticBuilder) -> Void) {
         lock.lock()
+        // Idempotency guard — symmetric with `dispose` and `revert`,
+        // both of which use `firstIndex` to short-circuit re-entry.
+        // Without this guard, calling `commit` twice (e.g. via the
+        // v0.9.2 `OptimisticTransaction.deinit` safety net firing
+        // after an explicit commit) would re-run the caller's commit
+        // builder closure and double-write whatever it touches.
+        guard layers.firstIndex(where: { $0.id == layer.id }) != nil else {
+            lock.unlock()
+            return
+        }
         layers.removeAll { $0.id == layer.id }
         let touched = Array(layer.touched)
         let survivors = layers.sorted { $0.id < $1.id }

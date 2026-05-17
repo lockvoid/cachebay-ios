@@ -92,7 +92,7 @@ final class OptimisticWriteFragmentTests: XCTestCase {
     func test_writeFragment_normalizesNestedEntityList() {
         let client = makeClient()
 
-        client.modifyOptimistic { b in
+        let _tx = client.modifyOptimistic { b in
             b.writeFragment(fragment: StoryFields.self, id: "s1", data: Self.makeStoryData())
         }
 
@@ -107,6 +107,7 @@ final class OptimisticWriteFragmentTests: XCTestCase {
             "each nested entity must exist as its own normalized record")
         XCTAssertEqual(c1?["__typename"], .string("Comment"))
         XCTAssertEqual(client.graph.getRecord("Comment:c2")?["body"], .string("second"))
+        withExtendedLifetime(_tx) {}
     }
 
     // MARK: - 2. Revert undoes the entire entity tree

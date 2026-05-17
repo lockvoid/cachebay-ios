@@ -56,7 +56,7 @@ final class OptimisticAddNodeReplayTests: XCTestCase {
 
         // Optimistic linkNode — pure structural, leaves the entity untouched.
         let canonicalKey: CacheKey = "@connection.posts({})"
-        _ = client.modifyOptimistic { b in
+        let _tx = client.modifyOptimistic { b in
             b.connection(key: canonicalKey).linkNode(
                 .object([
                     CachebayConstants.typenameField: .string("Post"),
@@ -101,5 +101,6 @@ final class OptimisticAddNodeReplayTests: XCTestCase {
             "ServerTitle",
             "linkNode is structural — entity scalars are owned by documents.normalize, and replay must not reassert anything linkNode never wrote."
         )
+        withExtendedLifetime(_tx) {}
     }
 }

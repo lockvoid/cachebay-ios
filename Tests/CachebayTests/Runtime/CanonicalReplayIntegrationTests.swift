@@ -60,7 +60,7 @@ final class CanonicalReplayIntegrationTests: XCTestCase {
 
         // Optimistic linkNode: a new post that the server hasn't sent
         // yet. The op records on the layer; replay later reapplies it.
-        _ = client.modifyOptimistic { b in
+        let _tx = client.modifyOptimistic { b in
             b.connection(key: canonicalKey).linkNode(
                 .object([
                     CachebayConstants.typenameField: .string("Post"),
@@ -86,6 +86,7 @@ final class CanonicalReplayIntegrationTests: XCTestCase {
         let after = edgeRefs.compactMap { client.graph.getField($0, "node")?.ref }
         XCTAssertTrue(after.contains("Post:p99"),
                       "optimistic edge must survive replay; canonical edges: \(after)")
+        withExtendedLifetime(_tx) {}
     }
 
     /// Web `canonical.test.ts:1180` "triggers replay for filtered
@@ -109,7 +110,7 @@ final class CanonicalReplayIntegrationTests: XCTestCase {
         ])
         client.graph.flush()
 
-        _ = client.modifyOptimistic { b in
+        let _tx = client.modifyOptimistic { b in
             b.connection(key: canonicalKey).linkNode(
                 .object([
                     CachebayConstants.typenameField: .string("User"),
@@ -129,5 +130,6 @@ final class CanonicalReplayIntegrationTests: XCTestCase {
         let resultOther = client.optimistic.replay(connectionKeys: [otherKey])
         XCTAssertFalse(resultOther.linked.contains("User:admin99"),
                        "scope filter must isolate replay; admin99 leaked into role:member: \(resultOther.linked)")
+        withExtendedLifetime(_tx) {}
     }
 }
