@@ -27,6 +27,21 @@ result.meta?.source     // .cache | .network
 
 JSON-shaped variant accepts `query: String` + `[String: JSONValue]`. See [OPERATIONS.md](./OPERATIONS.md#executequery) for the full signature.
 
+A **sync overload** with the same `onCacheData` / `onNetworkData` / `onError` callbacks is also available — same surface, no `async throws`, returns a `CachebayToken` for cancellation:
+
+```swift
+client.executeQuery(
+    query: GetPost.self,
+    variables: .init(id: "p1"),
+    cachePolicy: .cacheAndNetwork,
+    onCacheData: { data, willFetch in /* render cache hit */ },
+    onNetworkData: { data in /* render network response */ },
+    onError: { err in /* … */ }
+)
+```
+
+Use the sync form from view actions and other sync contexts where wrapping in `Task { await … }` would defer same-tick work. See [OPERATIONS.md#sync-overloads](./OPERATIONS.md#sync-overloads).
+
 ---
 
 ## Low-level helpers

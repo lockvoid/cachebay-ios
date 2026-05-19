@@ -29,7 +29,21 @@ for try await event in stream {
 
 JSON-shaped overload (`query: String`, `variables: [String: JSONValue]`) is also available for ad-hoc subscriptions without codegen.
 
-Each emitted frame is normalised into the cache under a synthetic `@subscription.N` rootId, then merged into entities by `__typename:id`. Watchers depending on those entities update automatically — your `for try await` is just one way to observe.
+A **sync overload** with `onData` / `onError` callbacks is also available — same surface as the stream form, but you receive each frame via the callback instead of `for try await`. Returns a `CachebayToken` you can hold and `cancel()` to tear down the stream:
+
+```swift
+let token = client.executeSubscription(
+    subscription: PostUpdated.self,
+    variables: .init(id: "p1"),
+    onData: { event in /* render frame */ },
+    onError: { err in /* … */ }
+)
+// later: token.cancel()
+```
+
+Use the sync form when you don't have a long-lived `Task` to host the `for try await` loop, or when the subscription should outlive a particular SwiftUI view's structured-concurrency scope (the internal task is detached). See [OPERATIONS.md#sync-overloads](./OPERATIONS.md#sync-overloads).
+
+Each emitted frame is normalised into the cache under a synthetic `@subscription.N` rootId, then merged into entities by `__typename:id`. Watchers depending on those entities update automatically — your `for try await` or `onData` is just one way to observe.
 
 Empty / null frames are silently dropped:
 - `{ data: null }` → ignored (handles `connection_ack`-style messages).

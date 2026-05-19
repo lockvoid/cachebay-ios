@@ -115,9 +115,37 @@ After dispose, you may also `b.delete(fragment: PostFields.self, id: id)` to dro
 
 ---
 
-## Pattern: optimistic patch
+## Pattern: optimistic patch — SwiftUI (sync overload)
 
-Merge known fields immediately; the server response normalizes into the cache via `executeMutation`. After success, `dispose()` drops the layer cleanly without reverting server-side updates.
+In a SwiftUI view action, the **same render tick** must observe the optimistic patch before any re-render reads the cache. Wrapping the mutation in `Task { await … }` schedules the whole closure (including the optimistic patch) to the next tick → flicker.
+
+Use the sync overload of `executeMutation` for view actions. The call returns immediately; `onData` / `onError` fire when the server responds; the internal task is **detached** from the caller's lifecycle so view teardown does NOT cancel the operation mid-flight (which would catch-block-revert and snap the UI back).
+
+```swift
+// Inside a SwiftUI view action, view model method, etc.
+let tx = client.modifyOptimistic { b in
+    b.patch(fragment: PostFields.self, id: input.id) { d in
+        if let v = input.title { d.title = v }
+        d.updatedAt = Date().iso8601String
+    }
+}
+
+client.executeMutation(
+    mutation: UpdatePost.self,
+    variables: .init(input: input),
+    onData: { _ in tx.dispose() },         // server normalize already wrote canonical state
+    onError: { err in
+        tx.revert()                         // roll back optimistic
+        Toast.show("Couldn't save: \(err.localizedDescription)")
+    }
+)
+```
+
+Returns a `CachebayToken` — hold it if you need `token.cancel()`, discard for fire-and-forget. See [OPERATIONS.md#sync-overloads](./OPERATIONS.md#sync-overloads) for the full contract.
+
+## Pattern: optimistic patch — async context
+
+When you already have a `try await` chain (a view model `async` method, a service orchestration, a test), the async form is the right fit. The `tx`-then-`await` ordering still gives a sync optimistic — `modifyOptimistic` is itself sync, and the patch commits before the `await` suspension point.
 
 ```swift
 let tx = client.modifyOptimistic { b in

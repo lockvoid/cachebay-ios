@@ -70,6 +70,24 @@ tx.dispose()  // ← server normalize already wrote the canonical state.
 
 `commit { b in … }` is still useful when you genuinely want commit-time ops — the canonical "temp-id swap" pattern. But for mutations where the server returns the full entity (or any superset of the optimistic patch), prefer `dispose()`.
 
+### From a SwiftUI view action (sync overload)
+
+When the call site is a view action and there's no `async` context, use the **sync** overload of `executeMutation` rather than wrapping in `Task { await ... }`. The sync form keeps the optimistic patch visible on the same render tick (no flicker) and decouples the operation from the view's structured-concurrency lifetime so onDisappear doesn't cancel the in-flight mutation mid-revert.
+
+```swift
+let tx = client.modifyOptimistic { b in
+    b.patch(fragment: PostFields.self, id: id) { d in d.title = optimisticTitle }
+}
+client.executeMutation(
+    mutation: UpdatePost.self,
+    variables: .init(input: input),
+    onData: { _ in tx.dispose() },
+    onError: { _ in tx.revert() }
+)
+```
+
+See [MUTATIONS.md#pattern-optimistic-patch--swiftui-sync-overload](./MUTATIONS.md#pattern-optimistic-patch--swiftui-sync-overload) for the full pattern and [OPERATIONS.md#sync-overloads](./OPERATIONS.md#sync-overloads) for the contract.
+
 ### When to use each
 
 - **`dispose()`** — server response is authoritative for the touched records. Examples: `updateProject`, `updateClip`, `deleteProject`, `upsertElement`. ~80% of real mutations.
