@@ -174,6 +174,189 @@ public extension CachebayClient {
         }
     }
 
+    // MARK: - Sync (callback-returning) execute* overloads
+    //
+    // These exist alongside the async forms above for callers that
+    // need to fire an operation without wrapping the whole thing in a
+    // `Task { ... }`. The driving motivation is the SwiftUI tick-N
+    // problem: code that runs in the same render tick (e.g. a
+    // `modifyOptimistic` patch issued right before the call) must
+    // observably commit to the cache before any subsequent render
+    // observation can read it. With the async form the only way to
+    // fire a mutation from a sync context is `Task { await ... }`,
+    // which defers everything past the next frame.
+    //
+    // The sync overloads return a `CachebayToken` and accept the same
+    // `onData` / `onError` (and for queries `onCacheData` /
+    // `onNetworkData`) callbacks as the async form. Internally a
+    // `Task.detached` drives the async path so the operation is
+    // decoupled from the caller's lifecycle — view teardown between
+    // call and server response does NOT cancel the operation. To
+    // cancel, hold the token and call `cancel()`; wrapped callbacks
+    // check `isCancelled` before invoking the consumer's handler so
+    // no callback fires after cancel.
+
+    /// Sync mutation. Returns immediately; the network call runs on a
+    /// detached task. `onData` / `onError` fire as the underlying
+    /// pipeline produces values. Hold the returned token if you need
+    /// to cancel; discard it for fire-and-forget.
+    @discardableResult
+    func executeMutation<Op: Operation>(
+        mutation op: Op.Type,
+        variables: Op.Variables,
+        onData: (@Sendable (Op.Data) -> Void)? = nil,
+        onError: (@Sendable (CombinedError) -> Void)? = nil
+    ) -> CachebayToken {
+        let token = CachebayToken()
+        // Wrap each consumer callback so that any fire after cancel()
+        // sees the token flag and no-ops. The underlying async path
+        // may have a response in-flight when cancel arrives — wrapping
+        // here is what makes cancel-suppression airtight regardless of
+        // network timing.
+        var wrappedOnData: (@Sendable (Op.Data) -> Void)? = nil
+        if let cb = onData {
+            wrappedOnData = { [token] data in
+                if token.isCancelled { return }
+                cb(data)
+            }
+        }
+        var wrappedOnError: (@Sendable (CombinedError) -> Void)? = nil
+        if let cb = onError {
+            wrappedOnError = { [token] err in
+                if token.isCancelled { return }
+                cb(err)
+            }
+        }
+        let task = Task.detached { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try await self.executeMutation(
+                    mutation: op,
+                    variables: variables,
+                    onData: wrappedOnData,
+                    onError: wrappedOnError
+                )
+            } catch {
+                // The async form throws on plan-compile / encoding
+                // failures (not network errors — those surface via
+                // `result.error` and the onError callback above). Wrap
+                // and surface through onError so the sync overload
+                // never silently swallows a thrown error.
+                wrappedOnError?(CombinedError(networkError: error))
+            }
+        }
+        token.attachTask(task)
+        return token
+    }
+
+    /// Sync query. Returns immediately; the network call (when the
+    /// cache policy requires one) runs on a detached task. `onCacheData`
+    /// fires when the cache satisfies; `onNetworkData` fires when the
+    /// network response arrives. Hold the returned token if you need
+    /// to cancel; discard it for fire-and-forget.
+    @discardableResult
+    func executeQuery<Op: Operation>(
+        query op: Op.Type,
+        variables: Op.Variables,
+        cachePolicy: CachePolicy? = nil,
+        onCacheData: (@Sendable (_ data: Op.Data, _ willFetchFromNetwork: Bool) -> Void)? = nil,
+        onNetworkData: (@Sendable (_ data: Op.Data) -> Void)? = nil,
+        onError: (@Sendable (CombinedError) -> Void)? = nil
+    ) -> CachebayToken {
+        let token = CachebayToken()
+        var wrappedOnCache: (@Sendable (Op.Data, Bool) -> Void)? = nil
+        if let cb = onCacheData {
+            wrappedOnCache = { [token] data, willFetch in
+                if token.isCancelled { return }
+                cb(data, willFetch)
+            }
+        }
+        var wrappedOnNetwork: (@Sendable (Op.Data) -> Void)? = nil
+        if let cb = onNetworkData {
+            wrappedOnNetwork = { [token] data in
+                if token.isCancelled { return }
+                cb(data)
+            }
+        }
+        var wrappedOnError: (@Sendable (CombinedError) -> Void)? = nil
+        if let cb = onError {
+            wrappedOnError = { [token] err in
+                if token.isCancelled { return }
+                cb(err)
+            }
+        }
+        let task = Task.detached { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try await self.executeQuery(
+                    query: op,
+                    variables: variables,
+                    cachePolicy: cachePolicy,
+                    onCacheData: wrappedOnCache,
+                    onNetworkData: wrappedOnNetwork,
+                    onError: wrappedOnError
+                )
+            } catch {
+                wrappedOnError?(CombinedError(networkError: error))
+            }
+        }
+        token.attachTask(task)
+        return token
+    }
+
+    /// Sync subscription. Returns immediately; the WS stream is
+    /// driven from a detached task. `onData` fires once per server
+    /// frame with the decoded `Op.Data`; `onError` fires for transport
+    /// errors. Hold the returned token to `cancel()` and tear down the
+    /// stream.
+    @discardableResult
+    func executeSubscription<Op: Operation>(
+        subscription op: Op.Type,
+        variables: Op.Variables,
+        onData: (@Sendable (Op.Data) -> Void)? = nil,
+        onError: (@Sendable (CombinedError) -> Void)? = nil
+    ) -> CachebayToken {
+        let token = CachebayToken()
+        var wrappedOnData: (@Sendable (Op.Data) -> Void)? = nil
+        if let cb = onData {
+            wrappedOnData = { [token] data in
+                if token.isCancelled { return }
+                cb(data)
+            }
+        }
+        var wrappedOnError: (@Sendable (CombinedError) -> Void)? = nil
+        if let cb = onError {
+            wrappedOnError = { [token] err in
+                if token.isCancelled { return }
+                cb(err)
+            }
+        }
+        let task = Task.detached { [weak self] in
+            guard let self else { return }
+            do {
+                let stream = try self.executeSubscription(
+                    subscription: op,
+                    variables: variables
+                )
+                for try await event in stream {
+                    if token.isCancelled { return }
+                    if let data = event.data {
+                        wrappedOnData?(data)
+                    }
+                    if let error = event.error {
+                        wrappedOnError?(error)
+                    }
+                }
+            } catch is CancellationError {
+                // Stream was torn down by our own cancel() — silent.
+            } catch {
+                wrappedOnError?(CombinedError(networkError: error))
+            }
+        }
+        token.attachTask(task)
+        return token
+    }
+
     // MARK: - readFragment / writeFragment / watchFragment
 
     /// Synchronous typed read of a fragment off an entity by bare id.
