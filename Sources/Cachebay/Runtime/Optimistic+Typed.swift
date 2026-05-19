@@ -43,7 +43,22 @@ public extension OptimisticBuilder {
         // otherwise use it as-is. Keeps a typed patch on a variant
         // fragment landing on the same cache record as patches on the
         // interface fragment.
-        patch(.key("\(canonicalTypename(F.onTypename)):\(id)"), draft.__data, mode: mode)
+        //
+        // Go through `patchFragment` so the runtime walks the fragment
+        // plan + draft in tandem and translates inline-container /
+        // entity / list values into graph-shape (`.ref` / `.refList` +
+        // synthetic or canonical sub-records). The raw JSON
+        // `patch(_ target:_:mode:)` path is plan-agnostic and would
+        // shove an `.object` straight into a selection-set field —
+        // which the strict materializer rejects.
+        patchFragment(
+            document: F.document,
+            fragmentName: F.fragmentName,
+            rootId: "\(canonicalTypename(F.onTypename)):\(id)",
+            variables: [:],
+            data: draft.__data,
+            mode: mode
+        )
     }
 
     /// Typed entity delete keyed by bare id — fragment supplies the

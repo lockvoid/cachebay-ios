@@ -233,6 +233,63 @@ public protocol OptimisticBuilder: AnyObject, Sendable {
         variables: [String: JSONValue],
         data: [String: JSONValue]
     )
+
+    /// Plan-aware optimistic patch — backs the typed
+    /// `patch<F>(fragment:id:_:)` overload. Walks the fragment plan in
+    /// tandem with the supplied (partial) data dict and translates any
+    /// data-shape values for selection-set fields into graph-shape
+    /// equivalents:
+    ///
+    /// - **Inline-container** (id-less object on a selection-set field) →
+    ///   parent gets `.ref("<parent>.<fieldKey>")`, the inline contents
+    ///   land at the synthetic container key. Mirrors `documents.normalize`
+    ///   for the same shape.
+    /// - **Entity object** (`__typename + id` resolves a cache key) →
+    ///   parent gets `.ref("Type:id")`, the entity record gets the
+    ///   inline fields merged in.
+    /// - **List of either** → parent gets `.refList`, each element
+    ///   becomes its own record (synthetic key for inline, canonical key
+    ///   for entity).
+    /// - **Scalars / `.null` / `.undefined` / `.ref` / `.refList`** →
+    ///   pass through unchanged.
+    ///
+    /// Each produced write goes through the existing
+    /// `patch(_ target:_:mode:)` path so baseline capture and revert
+    /// semantics work uniformly across the root record AND any
+    /// synthetic container / entity records the translation introduces.
+    ///
+    /// `mode` propagates to every write: a `.replace` patch on a
+    /// `Project` whose draft touched `Project.settings` will drop the
+    /// parent's unrelated fields AND replace the synthetic container's
+    /// contents. Consumers who only want surgical scalar edits should
+    /// keep using the JSON-shaped `patch(_ target: EntityRef, _ patch:
+    /// [String: JSONValue], mode:)` directly — that path is plan-agnostic
+    /// and assumes the patch is already graph-shaped.
+    func patchFragment(
+        document: QueryDocument,
+        fragmentName: String,
+        rootId: CacheKey,
+        variables: [String: JSONValue],
+        data: [String: JSONValue],
+        mode: EntityPatchMode
+    )
+}
+
+public extension OptimisticBuilder {
+    /// Backwards-compatible default: falls back to the dumb JSON patch
+    /// so external conformers don't break when `patchFragment` lands as
+    /// a new protocol requirement. Cachebay's own `BuilderImpl` overrides
+    /// with the plan-aware translation.
+    func patchFragment(
+        document: QueryDocument,
+        fragmentName: String,
+        rootId: CacheKey,
+        variables: [String: JSONValue],
+        data: [String: JSONValue],
+        mode: EntityPatchMode
+    ) {
+        patch(.key(rootId), data, mode: mode)
+    }
 }
 
 /// Connection mutation surface — manipulates the structural shape of
@@ -955,6 +1012,269 @@ public final class Optimistic: @unchecked Sendable {
 
             documents.normalize(plan: plan, variables: variables, data: .object(data), rootId: rootId)
         }
+
+        func patchFragment(
+            document: QueryDocument,
+            fragmentName: String,
+            rootId: CacheKey,
+            variables: [String: JSONValue],
+            data: [String: JSONValue],
+            mode: EntityPatchMode
+        ) {
+            // Resolve the plan once. If the planner can't reach the
+            // document (misconfigured Optimistic instance), fall back to
+            // a dumb patch so the surface stays usable — though
+            // inline-container fields will silence under that fallback.
+            // The protocol's default impl does the same; we duplicate it
+            // here because the planner check is per-call.
+            guard let planner = optimistic.planner,
+                  let plan = try? planner.getPlan(document, fragmentName: fragmentName)
+            else {
+                patch(.key(rootId), data, mode: mode)
+                return
+            }
+
+            // Translate the data into a flat list of (recordId, fields)
+            // ops. Synthetic-container keys ride the same `patch(...)`
+            // pathway as the root, so each gets a baseline captured and
+            // revert restores them properly.
+            let ops = optimistic.translateTypedPatch(
+                plan: plan,
+                variables: variables,
+                rootId: rootId,
+                data: data
+            )
+            for op in ops {
+                patch(.key(op.recordId), op.fields, mode: mode)
+            }
+        }
+    }
+
+    /// One translated write produced by `translateTypedPatch`.
+    fileprivate struct TranslatedPatchOp {
+        let recordId: CacheKey
+        let fields: [String: JSONValue]
+    }
+
+    /// Translate a typed-patch `__data` dict into a flat list of
+    /// (recordId, fields) writes. Mirrors the shape `documents.normalize`
+    /// produces for the same data, but scoped strictly to the fields the
+    /// caller touched — never walks into the cache beyond what the
+    /// patch references.
+    ///
+    /// The translation rules per (planField, value):
+    /// - **selection-set field + `.object` + identifiable entity**
+    ///   (`graph.identify(obj)` succeeds): write `.ref(entityKey)` onto
+    ///   the parent; emit a sub-op writing `obj`'s recognised fields to
+    ///   `entityKey`.
+    /// - **selection-set field + `.object` + no identity**: inline
+    ///   container. Write `.ref("<parent>.<storeKey>")` onto the parent;
+    ///   emit a sub-op writing the contents to that synthetic key.
+    /// - **selection-set field + `.array`**: walk each element as
+    ///   above, collect refs, write `.refList(refs)` onto the parent.
+    ///   Inline-container list elements are keyed
+    ///   `"<parent>.<storeKey>.<index>"`.
+    /// - **selection-set field + `.ref` / `.refList` / `.null` /
+    ///   `.undefined`**: pass through unchanged — caller already wrote
+    ///   graph-shape, or is explicitly clearing.
+    /// - **scalar field**: pass through unchanged.
+    ///
+    /// Recursive: nested objects (entity-in-entity, inline-in-inline,
+    /// entity-in-inline, etc.) all walk through the same rules with
+    /// the appropriate parent context.
+    fileprivate func translateTypedPatch(
+        plan: CachePlan,
+        variables: [String: JSONValue],
+        rootId: CacheKey,
+        data: [String: JSONValue]
+    ) -> [TranslatedPatchOp] {
+        var rootFields: [String: JSONValue] = [:]
+        var subOps: [TranslatedPatchOp] = []
+        translateLevel(
+            data: data,
+            selectionMap: plan.rootSelectionMap,
+            parentId: rootId,
+            variables: variables,
+            outFields: &rootFields,
+            subOps: &subOps
+        )
+        // Root op first — the field links must exist when revert / replay
+        // walks the layer's entityOps. Sub-ops follow in walk order.
+        var ops: [TranslatedPatchOp] = [TranslatedPatchOp(recordId: rootId, fields: rootFields)]
+        ops.append(contentsOf: subOps)
+        return ops
+    }
+
+    private func translateLevel(
+        data: [String: JSONValue],
+        selectionMap: [String: PlanField],
+        parentId: CacheKey,
+        variables: [String: JSONValue],
+        outFields: inout [String: JSONValue],
+        subOps: inout [TranslatedPatchOp]
+    ) {
+        for (responseKey, value) in data {
+            // No matching plan field — pass through under the response
+            // key. Covers `__typename`/`id` (always passed) and any
+            // extra hand-written keys outside the plan's selection set.
+            guard let field = selectionMap[responseKey] else {
+                outFields[responseKey] = value
+                continue
+            }
+            translateValue(
+                value: value,
+                field: field,
+                parentId: parentId,
+                variables: variables,
+                outFields: &outFields,
+                subOps: &subOps
+            )
+        }
+    }
+
+    private func translateValue(
+        value: JSONValue,
+        field: PlanField,
+        parentId: CacheKey,
+        variables: [String: JSONValue],
+        outFields: inout [String: JSONValue],
+        subOps: inout [TranslatedPatchOp]
+    ) {
+        let storeKey = Keys.buildFieldKey(field: field, variables: variables)
+
+        // Scalar field — pass through whatever JSONValue the caller
+        // supplied. Type-correctness is the caller's problem; we don't
+        // re-validate here.
+        guard let childSelectionMap = field.selectionMap else {
+            outFields[storeKey] = value
+            return
+        }
+
+        switch value {
+        case .null, .undefined, .ref, .refList:
+            // Caller already gave us graph-shape, OR is clearing the
+            // field. Pass through.
+            outFields[storeKey] = value
+        case .object(let obj):
+            translateObject(
+                obj: obj,
+                field: field,
+                storeKey: storeKey,
+                parentId: parentId,
+                childSelectionMap: childSelectionMap,
+                variables: variables,
+                outFields: &outFields,
+                subOps: &subOps
+            )
+        case .array(let arr):
+            translateArray(
+                arr: arr,
+                field: field,
+                storeKey: storeKey,
+                parentId: parentId,
+                childSelectionMap: childSelectionMap,
+                variables: variables,
+                outFields: &outFields,
+                subOps: &subOps
+            )
+        default:
+            // Scalar on a field whose plan says it should have a
+            // selection set. Caller error, but tolerate — pass through
+            // and let the strict materializer surface the warning.
+            outFields[storeKey] = value
+        }
+    }
+
+    private func translateObject(
+        obj: [String: JSONValue],
+        field: PlanField,
+        storeKey: String,
+        parentId: CacheKey,
+        childSelectionMap: [String: PlanField],
+        variables: [String: JSONValue],
+        outFields: inout [String: JSONValue],
+        subOps: inout [TranslatedPatchOp]
+    ) {
+        // Try to resolve as an entity (typename + identifying key).
+        if let entityKey = graph.identify(obj) {
+            outFields[storeKey] = .ref(entityKey)
+            var entityFields: [String: JSONValue] = [:]
+            translateLevel(
+                data: obj,
+                selectionMap: childSelectionMap,
+                parentId: entityKey,
+                variables: variables,
+                outFields: &entityFields,
+                subOps: &subOps
+            )
+            subOps.append(TranslatedPatchOp(recordId: entityKey, fields: entityFields))
+            return
+        }
+        // Inline container — synthetic key under the parent.
+        let containerKey = "\(parentId).\(storeKey)"
+        outFields[storeKey] = .ref(containerKey)
+        var containerFields: [String: JSONValue] = [:]
+        translateLevel(
+            data: obj,
+            selectionMap: childSelectionMap,
+            parentId: containerKey,
+            variables: variables,
+            outFields: &containerFields,
+            subOps: &subOps
+        )
+        subOps.append(TranslatedPatchOp(recordId: containerKey, fields: containerFields))
+    }
+
+    private func translateArray(
+        arr: [JSONValue],
+        field: PlanField,
+        storeKey: String,
+        parentId: CacheKey,
+        childSelectionMap: [String: PlanField],
+        variables: [String: JSONValue],
+        outFields: inout [String: JSONValue],
+        subOps: inout [TranslatedPatchOp]
+    ) {
+        var refs: [CacheKey] = []
+        refs.reserveCapacity(arr.count)
+        for (i, item) in arr.enumerated() {
+            switch item {
+            case .object(let obj):
+                if let entityKey = graph.identify(obj) {
+                    refs.append(entityKey)
+                    var entityFields: [String: JSONValue] = [:]
+                    translateLevel(
+                        data: obj,
+                        selectionMap: childSelectionMap,
+                        parentId: entityKey,
+                        variables: variables,
+                        outFields: &entityFields,
+                        subOps: &subOps
+                    )
+                    subOps.append(TranslatedPatchOp(recordId: entityKey, fields: entityFields))
+                } else {
+                    let containerKey = "\(parentId).\(storeKey).\(i)"
+                    refs.append(containerKey)
+                    var containerFields: [String: JSONValue] = [:]
+                    translateLevel(
+                        data: obj,
+                        selectionMap: childSelectionMap,
+                        parentId: containerKey,
+                        variables: variables,
+                        outFields: &containerFields,
+                        subOps: &subOps
+                    )
+                    subOps.append(TranslatedPatchOp(recordId: containerKey, fields: containerFields))
+                }
+            case .ref(let r):
+                refs.append(r)
+            default:
+                // Non-object element in a selection-set list. Caller
+                // error; skip to avoid corrupting the refList.
+                continue
+            }
+        }
+        outFields[storeKey] = .refList(refs)
     }
 
     /// Walk a data tree and capture baselines for every object that
