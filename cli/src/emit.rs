@@ -829,6 +829,9 @@ fn render_selection_struct(
     // Shared accessors.
     for child in &shared {
         s.push_str(&render_field_accessor(child, &format!("{indent}    ")));
+        if is_inline_container_object(child) {
+            s.push_str(&render_patch_field(child, &format!("{indent}    ")));
+        }
     }
 
     // Type-case downcasts: `var asDog: AsDog? { __typename == "Dog" ? ... : nil }`.
@@ -860,9 +863,15 @@ fn render_selection_struct(
         s.push_str(&format!("{indent}        public init(__data: [String: Cachebay.JSONValue]) {{ self.__data = __data }}\n"));
         for shared_child in &shared {
             s.push_str(&render_field_accessor(shared_child, &format!("{indent}        ")));
+            if is_inline_container_object(shared_child) {
+                s.push_str(&render_patch_field(shared_child, &format!("{indent}        ")));
+            }
         }
         for field in fields {
             s.push_str(&render_field_accessor(field, &format!("{indent}        ")));
+            if is_inline_container_object(field) {
+                s.push_str(&render_patch_field(field, &format!("{indent}        ")));
+            }
         }
         for shared_child in &shared {
             if !shared_child.children.is_empty() && shared_child.reuse_fragment.is_none() {
@@ -935,6 +944,21 @@ fn render_selection_struct(
         ));
     }
 
+    // `partial()` — companion to `make(...)`. Returns a Data populated
+    // with only `__typename`; consumers fill in fields through property
+    // setters or `patch<Field>(_:)` closures. Always emitted when we
+    // have a parent_named_type to anchor `__typename` on, regardless of
+    // polymorphism — addresses the "partial optimistic patch" use case
+    // where `make(...)` would force defaults that clobber unedited
+    // server-authoritative fields.
+    if !parent_named_type.is_empty() {
+        s.push_str(&render_partial(
+            swift_name,
+            parent_named_type,
+            &format!("{indent}    "),
+        ));
+    }
+
     s.push_str(&format!("{indent}}}\n"));
     s
 }
@@ -989,6 +1013,73 @@ fn factory_param_type(f: &PlanField, qualify_prefix: Option<&str>) -> String {
         }
         OutputShape::Leaf { .. } => swift_type_for_field(f),
     }
+}
+
+/// Detection rule: should this field get a closure-form `patch<Field>(_:)`
+/// emitted on its parent `Data` struct?
+///
+/// Inline container ⇔ this fragment's selection on the field is a
+/// non-empty object selection that does **not** include `id`. List-shaped
+/// fields are intentionally excluded — see the proposal: list-form
+/// patchers are deferred until a concrete use case justifies the
+/// semantics (index identity? in-place mutate? append/remove?).
+///
+/// Entity-ref fields (selection includes `id`) are intentionally NOT
+/// emitted: those should be patched via the entity's own fragment by
+/// id, not nested inside the parent.
+fn is_inline_container_object(f: &PlanField) -> bool {
+    match f.output_shape {
+        OutputShape::Object { list: false, .. } => {
+            !f.children.is_empty()
+                && !f.children.iter().any(|c| c.response_key == "id")
+        }
+        _ => false,
+    }
+}
+
+/// Emit a `partial()` static method on a `Data` struct. Returns a value
+/// populated with only `__typename`; consumers populate fields through
+/// the property setters. Companion to `make(...)` — used for partial
+/// optimistic patches where forcing every non-optional field through
+/// `make(...)` would clobber the unedited fields with default values.
+fn render_partial(swift_name: &str, typename: &str, indent: &str) -> String {
+    let mut s = String::new();
+    s.push_str(&format!("{indent}public static func partial() -> {swift_name} {{\n"));
+    s.push_str(&format!("{indent}    {swift_name}(__data: [\n"));
+    s.push_str(&format!("{indent}        \"__typename\": Cachebay.JSONValue.string(\"{typename}\"),\n"));
+    s.push_str(&format!("{indent}    ])\n"));
+    s.push_str(&format!("{indent}}}\n"));
+    s
+}
+
+/// Emit a closure-form `patch<FieldName>(_ build: (inout SubData) -> Void)`
+/// mutating method on the parent struct, for an inline-container field.
+///
+/// The body reads any live draft sub-state from `__data[fieldKey]` (so
+/// successive `patchX` calls inside one top-level patch closure
+/// compose), falls back to `SubData.partial()` if the field hasn't
+/// been touched yet, hands the closure an `inout` sub-draft, then
+/// writes the result back. Only the fields the closure actually
+/// touched land in `__data[fieldKey].object` — same minimal-patch
+/// guarantee as the typed `b.patch(fragment:id:) { draft in ... }`
+/// surface.
+fn render_patch_field(f: &PlanField, indent: &str) -> String {
+    let response_key = &f.response_key;
+    let cap_name = title_case(response_key);
+    let sub_type = nested_type_name(f);
+    let mut s = String::new();
+    s.push_str(&format!(
+        "{indent}public mutating func patch{cap_name}(_ build: (inout {sub_type}) -> Void) {{\n"
+    ));
+    s.push_str(&format!(
+        "{indent}    var sub = (__data[\"{response_key}\"]?.object).map {{ {sub_type}(__data: $0) }} ?? {sub_type}.partial()\n"
+    ));
+    s.push_str(&format!("{indent}    build(&sub)\n"));
+    s.push_str(&format!(
+        "{indent}    __data[\"{response_key}\"] = Cachebay.JSONValue.object(sub.__data)\n"
+    ));
+    s.push_str(&format!("{indent}}}\n"));
+    s
 }
 
 fn render_factory(
@@ -1062,3 +1153,207 @@ pub(crate) fn _suppress_unused_warnings(
     _c: ConnectionMode,
     _a: ArgPiece,
 ) {}
+
+#[cfg(test)]
+mod codegen_tests {
+    //! Unit coverage for the two ergonomic codegen helpers consumed by
+    //! optimistic-patch flows:
+    //!
+    //!   1. `partial()` — static factory that returns a `Data` populated
+    //!      with only `__typename`. Replaces the awkward
+    //!      `Data(__data: ["__typename": .string("...")])` idiom and the
+    //!      "use `make(...)` with all-`auto` defaults" workaround that
+    //!      stomped fields the caller didn't intend to touch.
+    //!
+    //!   2. `patch<Field>(_ build: (inout SubData) -> Void)` — mutating
+    //!      method on a parent `Data` for **inline-container** sub-objects.
+    //!      Reads any live draft state for the field, hands the closure an
+    //!      `inout` sub-draft, and writes it back. Composes recursively
+    //!      for nested inline containers.
+    //!
+    //! Detection rule for `patch<Field>` emission (the only subtle bit):
+    //!
+    //!   * Field's output_shape is Object, list: false
+    //!   * Children are non-empty
+    //!   * Children do **not** include `id` — i.e. this fragment's
+    //!     selection on this field is an id-less inline container, not an
+    //!     entity reference. The rule is **syntactic on this fragment's
+    //!     selection**, not semantic on the schema type. The same schema
+    //!     type can appear inline-container-shaped in one fragment and
+    //!     entity-ref-shaped in another; the codegen tracks the selection.
+
+    use super::*;
+    use crate::plan::{OutputShape, PlanField};
+
+    fn scalar(name: &str, named_type: &str) -> PlanField {
+        PlanField {
+            response_key: name.into(),
+            field_name: name.into(),
+            expected_arg_names: vec![],
+            arg_template: vec![],
+            type_condition: None,
+            is_connection: false,
+            connection_key: None,
+            connection_filters: vec![],
+            connection_mode: None,
+            page_args: vec![],
+            named_type: named_type.into(),
+            output_shape: OutputShape::Leaf { nullable: false, list: false },
+            sel_id: format!("leaf-{name}"),
+            children: vec![],
+            reuse_fragment: None,
+        }
+    }
+
+    fn typename_field() -> PlanField { scalar("__typename", "String") }
+    fn id_field() -> PlanField { scalar("id", "ID") }
+    fn title_scalar() -> PlanField { scalar("title", "String") }
+
+    fn object(name: &str, named_type: &str, children: Vec<PlanField>) -> PlanField {
+        PlanField {
+            response_key: name.into(),
+            field_name: name.into(),
+            expected_arg_names: vec![],
+            arg_template: vec![],
+            type_condition: None,
+            is_connection: false,
+            connection_key: None,
+            connection_filters: vec![],
+            connection_mode: None,
+            page_args: vec![],
+            named_type: named_type.into(),
+            output_shape: OutputShape::Object { nullable: false, list: false },
+            sel_id: format!("obj-{name}"),
+            children,
+            reuse_fragment: None,
+        }
+    }
+
+    fn object_list(name: &str, named_type: &str, children: Vec<PlanField>) -> PlanField {
+        let mut f = object(name, named_type, children);
+        f.output_shape = OutputShape::Object { nullable: false, list: true };
+        f
+    }
+
+    fn emit(parent_named_type: &str, children: Vec<PlanField>) -> String {
+        let mut extensions: Vec<String> = vec![];
+        render_selection_struct("Data", parent_named_type, &children, "", "Data", &mut extensions)
+    }
+
+    // MARK: - partial()
+
+    #[test]
+    fn partial_is_emitted_for_every_data_struct() {
+        let output = emit("Post", vec![typename_field(), id_field(), title_scalar()]);
+        assert!(
+            output.contains("public static func partial()"),
+            "partial() must be present; output was:\n{output}"
+        );
+    }
+
+    #[test]
+    fn partial_bakes_parent_named_type_as_typename() {
+        let output = emit("Post", vec![typename_field(), id_field(), title_scalar()]);
+        assert!(
+            output.contains("\"__typename\": Cachebay.JSONValue.string(\"Post\")"),
+            "partial() must hardcode parent_named_type as __typename; output:\n{output}"
+        );
+    }
+
+    // MARK: - patch<Field> for inline-container children
+
+    #[test]
+    fn patch_field_emitted_for_inline_container_child() {
+        // Fragment: ProjectFields on Project {
+        //   __typename id
+        //   settings { __typename exportQuality }       ← inline container (no id)
+        // }
+        let settings = object(
+            "settings",
+            "ProjectSettings",
+            vec![typename_field(), scalar("exportQuality", "String")],
+        );
+        let output = emit("Project", vec![typename_field(), id_field(), settings]);
+        assert!(
+            output.contains("public mutating func patchSettings("),
+            "inline-container child must yield patch<Field>; output:\n{output}"
+        );
+    }
+
+    #[test]
+    fn patch_field_NOT_emitted_for_entity_ref_child() {
+        // Fragment: PostFields on Post {
+        //   __typename id
+        //   author { id name }       ← entity ref (id IS in the selection)
+        // }
+        let author = object(
+            "author",
+            "User",
+            vec![id_field(), scalar("name", "String")],
+        );
+        let output = emit("Post", vec![typename_field(), id_field(), author]);
+        assert!(
+            !output.contains("patchAuthor"),
+            "entity-ref child (id selected) must NOT yield patch<Field>; output:\n{output}"
+        );
+    }
+
+    #[test]
+    fn patch_field_NOT_emitted_for_inline_container_list() {
+        // Fragment: ProjectWithTags on Project {
+        //   tags { __typename label }       ← inline-container LIST (deferred)
+        // }
+        let tags = object_list(
+            "tags",
+            "Tag",
+            vec![typename_field(), scalar("label", "String")],
+        );
+        let output = emit("Project", vec![typename_field(), id_field(), tags]);
+        assert!(
+            !output.contains("patchTags"),
+            "list-shaped child must NOT yield patch<Field>; output:\n{output}"
+        );
+    }
+
+    #[test]
+    fn patch_field_recursive_for_nested_inline_container() {
+        // Fragment: ProjectFields on Project {
+        //   settings {                                ← inline container
+        //     captionStyle { __typename preset }       ← nested inline container
+        //   }
+        // }
+        let caption_style = object(
+            "captionStyle",
+            "CaptionStyle",
+            vec![typename_field(), scalar("preset", "String")],
+        );
+        let settings = object(
+            "settings",
+            "ProjectSettings",
+            vec![typename_field(), caption_style],
+        );
+        let output = emit("Project", vec![typename_field(), id_field(), settings]);
+        // Outer patcher on Project.
+        assert!(
+            output.contains("public mutating func patchSettings("),
+            "outer patchSettings must be present; output:\n{output}"
+        );
+        // Inner patcher inside the nested Settings struct.
+        assert!(
+            output.contains("public mutating func patchCaptionStyle("),
+            "nested patchCaptionStyle must be present inside the inline-container struct; output:\n{output}"
+        );
+    }
+
+    // MARK: - Scalar-only fragment doesn't emit any patcher
+
+    #[test]
+    fn patch_field_NOT_emitted_when_no_object_children() {
+        // Fragment: scalars only.
+        let output = emit("Post", vec![typename_field(), id_field(), title_scalar()]);
+        assert!(
+            !output.contains("public mutating func patch"),
+            "scalar-only fragment must not emit any patch<Field>; output:\n{output}"
+        );
+    }
+}
