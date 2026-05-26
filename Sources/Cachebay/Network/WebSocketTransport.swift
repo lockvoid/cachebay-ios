@@ -75,6 +75,12 @@ public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendabl
     /// `ContinuousClock` (real wall-clock).
     public let clock: any Clock<Duration>
 
+    /// Optional profiler — when present, the per-frame JSON decode step
+    /// gets its own `cachebay.transport.ws.decode` span. Wire RTT (the
+    /// server's time) stays excluded; only Cachebay-side parse work is
+    /// timed.
+    public let profiler: (any CachebayProfiler)?
+
     private let lock = NSLock()
     private var task: URLSessionWebSocketTask?
     private var receiveTask: Task<Void, Never>?
@@ -97,7 +103,8 @@ public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendabl
         connectionParams: [String: JSONValue] = [:],
         reconnectPolicy: ReconnectPolicy = .default,
         pingInterval: Duration? = nil,
-        clock: any Clock<Duration> = ContinuousClock()
+        clock: any Clock<Duration> = ContinuousClock(),
+        profiler: (any CachebayProfiler)? = nil
     ) {
         self.url = url
         self.session = session ?? Self.makeDefaultSession()
@@ -106,6 +113,7 @@ public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendabl
         self.reconnectPolicy = reconnectPolicy
         self.pingInterval = pingInterval
         self.clock = clock
+        self.profiler = profiler
     }
 
     /// Default WS-specific connect timeout (seconds) used when the
@@ -511,7 +519,16 @@ public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendabl
     }
 
     private func dispatch(_ data: Data) {
-        guard let value = try? JSONValue.from(json: data),
+        // Per-frame JSON decode — Cachebay's work, not the server's.
+        // Wire arrival is on the receive loop above; this span captures
+        // only the parse step. Useful when subscription frames are
+        // large (delta-style or batched) and the consumer needs to know
+        // whether parse cost is dominating per-frame latency.
+        let decodeSpan = profiler?.begin("cachebay.transport.ws.decode")
+        decodeSpan?.attribute("bytes", "\(data.count)")
+        let parsed = try? JSONValue.from(json: data)
+        decodeSpan?.end()
+        guard let value = parsed,
               case .object(let obj) = value,
               let type = obj["type"]?.string
         else { return }

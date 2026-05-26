@@ -174,6 +174,28 @@ public enum CachebayProfileName: String, CaseIterable {
     // Graph / watcher fanout
     case graphFlush             = "cachebay.graph.flush"
     case watchersFanout         = "cachebay.watchers.fanout"
+    /// Umbrella span for the signature-emit path
+    /// (`Queries.notifyDataBySignature`). Counterpart to `watchersFanout`
+    /// on the dep-based path. Closes the dark time between materialize
+    /// completion and host callback fire on the initial-emit path.
+    case watchersNotifySignature = "cachebay.watchers.notify.signature"
+    /// Per-watcher recycle + deep-eq work. Fired once per affected
+    /// watcher inside both notify paths; lets consumers see the cost
+    /// of "deciding whether to emit" separately from materialize and
+    /// from host onData time.
+    case watchersRecycle        = "cachebay.watchers.recycle"
+    /// Single span around the `for cb in emits { cb(v) }` loop. Tags
+    /// callback count as an attribute. This is the host's onData time
+    /// — consumers measuring their own perceived `firstEmit` can
+    /// subtract this span's duration from the total to back out
+    /// Cachebay's runtime contribution.
+    case watchersEmitCallbacks  = "cachebay.watchers.emit.callbacks"
+
+    // Transport (decode only — wire RTT is the server's time, not
+    // Cachebay's, and stays excluded from the parent operation span by
+    // `excludingHost { ... }`.)
+    case transportHTTPDecode    = "cachebay.transport.http.decode"
+    case transportWSDecode      = "cachebay.transport.ws.decode"
 
     // Storage
     case storageFlush           = "cachebay.storage.flush"

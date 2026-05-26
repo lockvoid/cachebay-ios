@@ -12,16 +12,25 @@ public struct URLSessionHTTPTransport: HTTPTransport {
     public var headers: [String: String]
     public var requestModifier: (@Sendable (_ request: inout URLRequest) -> Void)?
 
+    /// Optional profiler — when present, the JSON decode step of each
+    /// response gets its own `cachebay.transport.http.decode` span. The
+    /// wire RTT itself is intentionally NOT measured (server time isn't
+    /// Cachebay's optimisation target); only the decode work that
+    /// actually runs on the Cachebay side is timed.
+    public let profiler: (any CachebayProfiler)?
+
     public init(
         url: URL,
         session: URLSession = .shared,
         headers: [String: String] = [:],
-        requestModifier: (@Sendable (_ request: inout URLRequest) -> Void)? = nil
+        requestModifier: (@Sendable (_ request: inout URLRequest) -> Void)? = nil,
+        profiler: (any CachebayProfiler)? = nil
     ) {
         self.url = url
         self.session = session
         self.headers = headers
         self.requestModifier = requestModifier
+        self.profiler = profiler
     }
 
     public func execute(_ context: HTTPContext) async throws -> OperationResult<JSONValue> {
@@ -44,9 +53,18 @@ public struct URLSessionHTTPTransport: HTTPTransport {
                 let body = String(data: data, encoding: .utf8) ?? ""
                 return OperationResult(data: nil, error: CombinedError(networkMessage: "HTTP \(http.statusCode): \(body)"))
             }
+            // Decode the response body — Cachebay's work, not the server's.
+            // Wire RTT is excluded by the parent `executeQuery` span's
+            // `excludingHost { ... }` wrapper; this span captures only
+            // the parse + extract step. Useful when consumers see large
+            // `firstEmit` durations and need to know whether the response
+            // size is dominating before any normalize work begins.
+            let decodeSpan = profiler?.begin("cachebay.transport.http.decode")
+            decodeSpan?.attribute("bytes", "\(data.count)")
             let parsed = try JSONValue.from(json: data)
             let payloadData = parsed["data"] ?? .null
             let graphqlErrors = parseGraphQLErrors(parsed["errors"])
+            decodeSpan?.end()
             let err: CombinedError? = graphqlErrors.isEmpty ? nil : CombinedError(graphqlErrors: graphqlErrors)
             if case .null = payloadData {
                 return OperationResult(data: nil, error: err)

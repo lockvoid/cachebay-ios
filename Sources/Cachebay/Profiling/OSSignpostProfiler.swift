@@ -32,8 +32,13 @@ public final class OSSignpostProfiler: CachebayProfiler {
 
     public func begin(_ name: StaticString) -> CachebayProfileSpan? {
         let id = signposter.makeSignpostID()
+        // Capture thread state at begin so every span auto-emits which
+        // thread it started on — no call-site instrumentation needed.
+        // `Thread.isMainThread` is a thread-local read, ~1-5 ns; well
+        // below the cost of the surrounding `beginInterval` call.
+        let beganOnMain = Thread.isMainThread
         let state = signposter.beginInterval(name, id: id)
-        return OSSignpostSpan(signposter: signposter, name: name, id: id, state: state)
+        return OSSignpostSpan(signposter: signposter, name: name, id: id, state: state, beganOnMain: beganOnMain)
     }
 
     public func record(_ name: StaticString, value: Double) {
@@ -60,15 +65,17 @@ private final class OSSignpostSpan: CachebayProfileSpan, @unchecked Sendable {
     private let signposter: OSSignposter
     private let name: StaticString
     private let id: OSSignpostID
+    private let beganOnMain: Bool
     private let lock = NSLock()
     private var state: OSSignpostIntervalState?
     private var ended = false
 
-    init(signposter: OSSignposter, name: StaticString, id: OSSignpostID, state: OSSignpostIntervalState) {
+    init(signposter: OSSignposter, name: StaticString, id: OSSignpostID, state: OSSignpostIntervalState, beganOnMain: Bool) {
         self.signposter = signposter
         self.name = name
         self.id = id
         self.state = state
+        self.beganOnMain = beganOnMain
     }
 
     func end() {
@@ -76,6 +83,17 @@ private final class OSSignpostSpan: CachebayProfileSpan, @unchecked Sendable {
         if ended { return }
         ended = true
         if let s = state {
+            // Emit thread metadata BEFORE endInterval so it's
+            // associated with the interval in Instruments. begin/end
+            // pair surfaces async hops automatically — a span that
+            // begins on background and ends on main reveals a queue
+            // crossing without any consumer code change.
+            let endedOnMain = Thread.isMainThread
+            signposter.emitEvent(
+                name,
+                id: id,
+                "thread.begin=\(self.beganOnMain ? "main" : "bg", privacy: .public) thread.end=\(endedOnMain ? "main" : "bg", privacy: .public)"
+            )
             signposter.endInterval(name, s)
             state = nil
         }

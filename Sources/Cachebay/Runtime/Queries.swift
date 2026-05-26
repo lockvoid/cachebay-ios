@@ -217,16 +217,35 @@ public final class Queries: @unchecked Sendable {
     /// given canonical signature, bypassing the dep-based flush.
     @discardableResult
     public func notifyDataBySignature(_ signature: String, data: JSONValue, fingerprints: JSONValue, dependencies: Set<CacheKey>) -> Bool {
+        // Umbrella span for the entire signature-emit path — mirrors the
+        // existing `cachebay.watchers.fanout` span on the dep-based path.
+        // Without this, the recycle + deep-eq + emits-list build between
+        // materialize completion and host callback fire was invisible to
+        // the profiler — pure dark time inside `firstEmit`.
+        let span = profiler?.begin("cachebay.watchers.notify.signature")
+        defer { span?.end() }
         lock.lock()
-        guard let ids = signatureToWatchers[signature], !ids.isEmpty else { lock.unlock(); return false }
+        guard let ids = signatureToWatchers[signature], !ids.isEmpty else {
+            lock.unlock()
+            span?.attribute("watcherCount", "0")
+            return false
+        }
+        span?.attribute("watcherCount", "\(ids.count)")
 
         var callbacks: [(@Sendable (JSONValue) -> Void, JSONValue)] = []
         callbacks.reserveCapacity(ids.count)
         for id in ids {
             guard var w = watchers[id] else { continue }
             updateDependenciesLocked(id: id, next: dependencies)
+            // Recycle-and-diff is genuinely expensive on large trees
+            // (fingerprint tree walk + value-by-value deep-eq). Wrapped
+            // per-watcher so the profiler sees the cost of "deciding
+            // whether to emit," distinct from the cost of materialize.
+            let recycleSpan = profiler?.begin("cachebay.watchers.recycle")
             let recycled = recycleSnapshots(w.lastData ?? .undefined, data, w.lastFingerprints ?? .undefined, fingerprints)
-            if !isDataDeepEqual(recycled, w.lastData ?? .undefined) {
+            let changed = !isDataDeepEqual(recycled, w.lastData ?? .undefined)
+            recycleSpan?.end()
+            if changed {
                 w.lastData = recycled
                 w.lastFingerprints = fingerprints
                 w.skipNextPropagate = true
@@ -241,7 +260,18 @@ public final class Queries: @unchecked Sendable {
             }
         }
         lock.unlock()
-        for (cb, val) in callbacks { cb(val) }
+        span?.attribute("emittedCount", "\(callbacks.count)")
+        // Host callback time is its own span so the consumer can
+        // separate "Cachebay's recycle + diff" from "my onData closure."
+        // Set count as an attribute so consumers can compute per-callback
+        // time even when there's more than one watcher attached to the
+        // same signature.
+        if !callbacks.isEmpty {
+            let cbSpan = profiler?.begin("cachebay.watchers.emit.callbacks")
+            cbSpan?.attribute("count", "\(callbacks.count)")
+            for (cb, val) in callbacks { cb(val) }
+            cbSpan?.end()
+        }
         return true
     }
 
@@ -312,8 +342,15 @@ public final class Queries: @unchecked Sendable {
                 logger?.warning("[Cachebay] watcher silenced: id=\(id, privacy: .public) signature=\(w.signature, privacy: .public) — dep changed but materialize returned .none (see materialize miss warnings above)")
                 continue
             }
+            // Per-watcher recycle + deep-eq — wrapped in its own span so
+            // the profiler distinguishes "Cachebay's diff work" from
+            // "materialize" (which already has its own span) and from
+            // "host callback time" (which comes next, below).
+            let recycleSpan = profiler?.begin("cachebay.watchers.recycle")
             let recycled = recycleSnapshots(w.lastData ?? .undefined, result.data, w.lastFingerprints ?? .undefined, result.fingerprints)
-            if !isDataDeepEqual(recycled, w.lastData ?? .undefined) {
+            let changed = !isDataDeepEqual(recycled, w.lastData ?? .undefined)
+            recycleSpan?.end()
+            if changed {
                 w.lastData = recycled
                 w.lastFingerprints = result.fingerprints
                 watchers[id] = w
@@ -321,15 +358,23 @@ public final class Queries: @unchecked Sendable {
             }
         }
         lock.unlock()
-        // End the span BEFORE invoking host onData callbacks — pattern B.
-        // The fanout duration excludes host time by construction.
+        // End the fanout span BEFORE invoking host onData callbacks —
+        // pattern B. The fanout duration excludes host time by
+        // construction; the callbacks span below measures host time
+        // explicitly so consumers can separate Cachebay's work from
+        // their own onData closure.
         span?.attribute("watcherCount", "\(affected.count)")
         span?.attribute("emittedCount", "\(emits.count)")
         span?.end()
         if profiler != nil && !emits.isEmpty {
             profiler?.record("cachebay.watchers.emitted", value: Double(emits.count))
         }
-        for (cb, v) in emits { cb(v) }
+        if !emits.isEmpty {
+            let cbSpan = profiler?.begin("cachebay.watchers.emit.callbacks")
+            cbSpan?.attribute("count", "\(emits.count)")
+            for (cb, v) in emits { cb(v) }
+            cbSpan?.end()
+        }
     }
 
     // MARK: - Evict

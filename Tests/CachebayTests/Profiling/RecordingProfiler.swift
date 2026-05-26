@@ -12,6 +12,13 @@ public final class RecordingProfiler: CachebayProfiler, @unchecked Sendable {
         public internal(set) var endedAt: TimeInterval?
         public internal(set) var attributes: [String: String] = [:]
         public internal(set) var pauseSegments: [(TimeInterval, TimeInterval)] = []
+        /// Thread on which `begin(_:)` was invoked.
+        public let beganOnMain: Bool
+        /// Thread on which `end()` was invoked (nil while the span is
+        /// still open). When `beganOnMain != endedOnMain`, the span's
+        /// work crossed a queue boundary — a useful diagnostic for
+        /// async paths.
+        public internal(set) var endedOnMain: Bool?
         /// Whether the span has been ended.
         public var isEnded: Bool { endedAt != nil }
         /// Sum of paused intervals (host-callback exclusion regions).
@@ -40,9 +47,14 @@ public final class RecordingProfiler: CachebayProfiler, @unchecked Sendable {
 
     public func begin(_ name: StaticString) -> CachebayProfileSpan? {
         let nameStr = "\(name)"
+        // Capture thread state before taking the lock — `Thread.isMainThread`
+        // is a thread-local read (~1-5 ns), well below the cost of the
+        // surrounding work. Centralising it here means call sites don't need
+        // to plug per-span thread instrumentation.
+        let beganOnMain = Thread.isMainThread
         lock.lock()
         let index = _spans.count
-        _spans.append(SpanRecord(name: nameStr, beganAt: Self.now()))
+        _spans.append(SpanRecord(name: nameStr, beganAt: Self.now(), beganOnMain: beganOnMain))
         _activeNames.append(nameStr)
         lock.unlock()
         return Span(profiler: self, index: index, name: nameStr)
@@ -84,10 +96,12 @@ public final class RecordingProfiler: CachebayProfiler, @unchecked Sendable {
     // MARK: Span-internal mutators
 
     fileprivate func endSpan(at index: Int) {
+        let endedOnMain = Thread.isMainThread
         lock.lock(); defer { lock.unlock() }
         guard index < _spans.count else { return }
         if _spans[index].endedAt != nil { return }
         _spans[index].endedAt = Self.now()
+        _spans[index].endedOnMain = endedOnMain
         if let idx = _activeNames.firstIndex(of: _spans[index].name) {
             _activeNames.remove(at: idx)
         }
