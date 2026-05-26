@@ -72,6 +72,11 @@ public final class Documents: @unchecked Sendable {
     private let canonical: Canonical
     private let logger: Logger?
     let profiler: (any CachebayProfiler)?
+    /// Per-type entity reducers. Keyed by canonical `__typename`.
+    /// Empty by default — when empty, the normalize entity-write hook
+    /// compiles to a single empty-dict check (no closure dispatch, no
+    /// snapshot work).
+    private let typeReducers: [String: EntityReducer]
 
     private let lock = NSLock()
     private var materializeCache: [String: MaterializeResult] = [:]
@@ -83,12 +88,20 @@ public final class Documents: @unchecked Sendable {
     /// `Canonical.replayer` injection pattern for connection canonicals.
     private var replayer: OptimisticReplayer?
 
-    public init(graph: Graph, planner: Planner, canonical: Canonical, logger: Logger? = nil, profiler: (any CachebayProfiler)? = nil) {
+    public init(
+        graph: Graph,
+        planner: Planner,
+        canonical: Canonical,
+        logger: Logger? = nil,
+        profiler: (any CachebayProfiler)? = nil,
+        typeReducers: [String: EntityReducer] = [:]
+    ) {
         self.graph = graph
         self.planner = planner
         self.canonical = canonical
         self.logger = logger
         self.profiler = profiler
+        self.typeReducers = typeReducers
     }
 
     public func setReplayer(_ replayer: OptimisticReplayer?) {
@@ -103,6 +116,33 @@ public final class Documents: @unchecked Sendable {
         let startId = rootId ?? CachebayConstants.rootID
         let shouldLink = (startId != CachebayConstants.rootID) || (plan.operation == .query)
         let isRoot = startId == CachebayConstants.rootID || startId.hasPrefix("@mutation.") || startId.hasPrefix("@subscription.")
+
+        // Type-reducer hook for entity-rooted normalize (writeFragment,
+        // writes targeting a specific entity by id). Nested entities are
+        // caught by the hook inside `normalizeEntityObject`; this branch
+        // covers the case where the root itself is an entity.
+        let rootReducer: EntityReducer?
+        let rootReducerPrev: [String: JSONValue]?
+        let rootReducerIdPart: String
+        if !isRoot && !typeReducers.isEmpty {
+            let firstColon = startId.firstIndex(of: ":")
+            let canonicalTypename = firstColon.map { String(startId[..<$0]) } ?? startId
+            if let r = typeReducers[canonicalTypename] {
+                rootReducer = r
+                rootReducerPrev = graph.getRecord(startId)
+                rootReducerIdPart = firstColon
+                    .map { String(startId[startId.index(after: $0)...]) }
+                    ?? ""
+            } else {
+                rootReducer = nil
+                rootReducerPrev = nil
+                rootReducerIdPart = ""
+            }
+        } else {
+            rootReducer = nil
+            rootReducerPrev = nil
+            rootReducerIdPart = ""
+        }
 
         if isRoot {
             graph.putRecord(startId, [
@@ -145,6 +185,21 @@ public final class Documents: @unchecked Sendable {
         // race where a server response's shallow-merge would otherwise
         // clobber a concurrent optimistic layer's field patch.
         // See `OptimisticReplayAfterNormalizeTests`.
+        // Root-level entity reducer (writeFragment path). Fires after
+        // every nested write has landed so `next` is the merge candidate
+        // for the rooted entity.
+        if let rootReducer {
+            let nextSnapshot = graph.getRecord(startId) ?? [:]
+            let result = rootReducer(EntityMergeContext(
+                id: rootReducerIdPart,
+                prev: rootReducerPrev,
+                next: nextSnapshot
+            ))
+            if !recordsEqual(result, nextSnapshot) {
+                graph.replaceRecord(startId, result)
+            }
+        }
+
         if !touchedEntities.isEmpty {
             replayer?.replayEntityOps(scope: touchedEntities)
         }
@@ -362,6 +417,34 @@ public final class Documents: @unchecked Sendable {
     ) -> Bool {
         guard let rootId = graph.identify(obj) else { return false }
 
+        // Type-reducer hook: pre-resolve before any writes so we can
+        // snapshot `prev`. Fast path — when no reducers are registered,
+        // this is one empty-dict check; the entire hook compiles out.
+        let reducer: EntityReducer?
+        let prevSnapshot: [String: JSONValue]?
+        let reducerIdPart: String
+        if typeReducers.isEmpty {
+            reducer = nil
+            prevSnapshot = nil
+            reducerIdPart = ""
+        } else {
+            // Split rootId once into "Type" + "id". `identify` always
+            // produces "Type:id" — the first colon delimits.
+            let firstColon = rootId.firstIndex(of: ":")
+            let canonicalTypename = firstColon.map { String(rootId[..<$0]) } ?? rootId
+            if let r = typeReducers[canonicalTypename] {
+                reducer = r
+                prevSnapshot = graph.getRecord(rootId)
+                reducerIdPart = firstColon
+                    .map { String(rootId[rootId.index(after: $0)...]) }
+                    ?? ""
+            } else {
+                reducer = nil
+                prevSnapshot = nil
+                reducerIdPart = ""
+            }
+        }
+
         var patch: [String: JSONValue] = [:]
         if let tn = obj[CachebayConstants.typenameField] { patch[CachebayConstants.typenameField] = tn }
         graph.putRecord(rootId, patch)
@@ -383,6 +466,38 @@ public final class Documents: @unchecked Sendable {
             pageKey: isNode ? nil : frame.pageKey
         )
         normalizeObject(obj, frame: childrenFrame, plan: plan, variables: variables, shouldLink: true, pendingPages: &pendingPages, touchedEntities: &touchedEntities)
+
+        // Run the reducer once per entity, with both sides fully
+        // materialised at the record level. `next` is the merge
+        // candidate — the record as it stands after the default
+        // field-wise merge above. A reducer that returns `prev`
+        // reverts the write; the watcher diff then sees no
+        // observable change and no emit fires.
+        if let reducer {
+            let nextSnapshot = graph.getRecord(rootId) ?? [:]
+            let result = reducer(EntityMergeContext(
+                id: reducerIdPart,
+                prev: prevSnapshot,
+                next: nextSnapshot
+            ))
+            if !recordsEqual(result, nextSnapshot) {
+                graph.replaceRecord(rootId, result)
+            }
+        }
+
+        return true
+    }
+
+    /// Shallow record equality — counts must match and every field's
+    /// `JSONValue` must be `isDataDeepEqual`. Used only by the type-reducer
+    /// hook to detect whether the reducer's return value differs from the
+    /// default-merge candidate, so we can skip a no-op `replaceRecord`.
+    private func recordsEqual(_ a: [String: JSONValue], _ b: [String: JSONValue]) -> Bool {
+        if a.count != b.count { return false }
+        for (k, v) in a {
+            guard let w = b[k] else { return false }
+            if !isDataDeepEqual(v, w) { return false }
+        }
         return true
     }
 

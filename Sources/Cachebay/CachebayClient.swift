@@ -99,6 +99,13 @@ public struct CachebayOptions: Sendable {
     /// your own conformance for OpenTelemetry / custom telemetry.
     /// Zero overhead when nil (one nil check per call site).
     public var profiler: (any CachebayProfiler)?
+    /// Per-type entity reducers. Fired once per wire-side entity write
+    /// (query responses, mutation responses, subscription frames,
+    /// fragment writes). Optimistic writes bypass the hook. Keyed by
+    /// canonical `__typename`. Empty by default — when empty, the
+    /// entire hook compiles to one is-empty check per entity, no
+    /// closure cost. See `EntityMergeContext` / `EntityReducer`.
+    public var typeReducers: [String: EntityReducer]
 
     public init(
         transport: Transport,
@@ -108,7 +115,8 @@ public struct CachebayOptions: Sendable {
         suspensionTimeout: TimeInterval = 1.0,
         storage: StorageAdapterFactory? = nil,
         logger: Logger? = nil,
-        profiler: (any CachebayProfiler)? = nil
+        profiler: (any CachebayProfiler)? = nil,
+        typeReducers: [String: EntityReducer] = [:]
     ) {
         self.transport = transport
         self.cachePolicy = cachePolicy
@@ -118,6 +126,7 @@ public struct CachebayOptions: Sendable {
         self.storage = storage
         self.logger = logger
         self.profiler = profiler
+        self.typeReducers = typeReducers
     }
 }
 
@@ -157,7 +166,7 @@ public final class CachebayClient: @unchecked Sendable {
         let graph = Graph(options: GraphOptions(keys: options.keys, interfaces: options.interfaces, onChange: nil), profiler: profiler)
         let planner = Planner()
         let canonical = Canonical(graph: graph)
-        let documents = Documents(graph: graph, planner: planner, canonical: canonical, logger: options.logger, profiler: profiler)
+        let documents = Documents(graph: graph, planner: planner, canonical: canonical, logger: options.logger, profiler: profiler, typeReducers: options.typeReducers)
         let queries = Queries(graph: graph, planner: planner, documents: documents, logger: options.logger, profiler: profiler)
         let fragments = Fragments(planner: planner, documents: documents, profiler: profiler)
         let optimistic = Optimistic(graph: graph, planner: planner, documents: documents, profiler: profiler)

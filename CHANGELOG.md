@@ -6,6 +6,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.1.0] — Per-type entity reducers
+
+Adds an opt-in `typeReducers` hook fired at every wire-side entity write — query responses, mutation responses, subscription frames, fragment writes. Each reducer receives both sides of the merge (the currently-stored record and the field-wise merge candidate) and returns the dict that actually lands in the cache.
+
+Motivating use case: a single entity receiving writes from multiple parallel subscription channels can have stale snapshots clobber newer state under default last-write-wins. A reducer guards against this with a one-line `updatedAt` compare:
+
+```swift
+let client = CachebayClient(options: CachebayOptions(
+    transport: Transport(http: URLSessionHTTPTransport(endpoint: api)),
+    typeReducers: [
+        "Chat": { ctx in
+            guard let prev = ctx.prev else { return ctx.next }
+            let prevT = prev["updatedAt"]?.string ?? ""
+            let nextT = ctx.next["updatedAt"]?.string ?? ""
+            return nextT >= prevT ? ctx.next : prev
+        }
+    ]
+))
+```
+
+### Semantics
+
+- **Per-type opt-in.** Registered as `[String: EntityReducer]` keyed by canonical `__typename`. Only writes for registered types pay any closure cost; every other type is untouched.
+- **Atomic per-entity.** The reducer fires once per entity per wire write with the full merge candidate — not per field — so `next` carries every field the cache would have stored, including ones the wire payload didn't carry (read fields off `next` even for partial payloads).
+- **Differ handles no-op fanout.** Returning `ctx.prev` reverts the write; the watcher diff then sees zero field changes and no emit fires. No "skip" signaling needed.
+- **Optimistic writes bypass structurally.** `modifyOptimistic` writes go through `Optimistic.swift` directly, never through the entity normalize where the hook lives.
+
+### Performance contract
+
+- **No reducers registered** (the default): one `Dictionary.isEmpty` check per entity write. No allocations, no snapshots, no closure dispatch. Release-mode benchmarks (705-flat-posts, 5×140 nested projects) are indistinguishable from the pre-feature baseline.
+- **Reducer registered for type T**: writes for T pay two `getRecord` snapshots + one closure call. Writes for other types pay only the dict miss.
+
+### Added
+
+- `CachebayOptions.typeReducers: [String: EntityReducer]` — empty by default.
+- `struct EntityMergeContext { id, prev, next }` — what the reducer receives.
+- `typealias EntityReducer = @Sendable (EntityMergeContext) -> [String: JSONValue]` — the reducer signature.
+- `Docs/TYPE_REDUCERS.md` — full reference, use cases, when the hook fires.
+
 ## [0.10.0] — Built-in profiling protocol + `OSSignpostProfiler`
 
 Adds an opt-in `CachebayProfiler` protocol that instruments every user-facing operation and every internal hot path. Wire `OSSignpostProfiler()` into `CachebayOptions.profiler` and Cachebay's runtime shows up as a signpost timeline in Instruments — drill into a slow frame, see exactly which `normalize` / `materialize` / `watchers.fanout` span dominates. Ship your own conformance to route into OpenTelemetry, Datadog, Firebase Performance, or any other telemetry pipeline.
