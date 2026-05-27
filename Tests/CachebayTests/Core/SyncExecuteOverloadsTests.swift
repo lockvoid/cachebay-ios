@@ -426,6 +426,203 @@ final class SyncExecuteOverloadsTests: XCTestCase {
         _ = token  // keep alive across the wait
     }
 
+    // MARK: - 9a. executeQuery (sync) threading contract (v0.13.0)
+    //
+    // The cache portion of the sync overload runs synchronously on the
+    // caller's thread, matching `watchQuery(immediate: true)` and the
+    // async `executeQuery` overload. Only the network portion is
+    // detached. Verified properties:
+    //   • onCacheData fires before executeQuery returns (cache hit)
+    //   • onCacheData fires on the same thread as the caller
+    //   • modifyOptimistic → executeQuery(.cacheFirst) sees patch sync
+    //   • cancel() AFTER cache delivery does not un-deliver
+    //   • cache miss on .cacheAndNetwork does NOT fire onCacheData
+    //   • re-entrant cache read from inside onCacheData does not deadlock
+
+    func test_executeQuery_sync_cacheFirstHit_firesOnCacheDataSync_beforeReturn() throws {
+        let (client, _, _) = makeClient()
+        try client.writeQuery(
+            query: PostQ.self,
+            variables: .init(id: "p1"),
+            data: PostQ.Data(__data: [
+                "post": .object([
+                    "__typename": .string("Post"),
+                    "id": .string("p1"),
+                    "title": .string("from cache"),
+                ])
+            ])
+        )
+        // Three-marker dance: marker 1 before the call, marker 2 inside
+        // the callback, marker 3 after the call returns. If the callback
+        // fires synchronously, the recorded sequence is exactly [1,2,3].
+        let order = Collector<Int>()
+        order.append(1)
+        _ = client.executeQuery(
+            query: PostQ.self,
+            variables: .init(id: "p1"),
+            cachePolicy: .cacheFirst,
+            onCacheData: { _, _ in order.append(2) }
+        )
+        order.append(3)
+        XCTAssertEqual(order.snapshot(), [1, 2, 3],
+            "onCacheData must fire synchronously before executeQuery returns")
+    }
+
+    func test_executeQuery_sync_cacheFirstHit_firesOnCacheData_onCallingThread() throws {
+        let (client, _, _) = makeClient()
+        try client.writeQuery(
+            query: PostQ.self,
+            variables: .init(id: "p1"),
+            data: PostQ.Data(__data: [
+                "post": .object([
+                    "__typename": .string("Post"),
+                    "id": .string("p1"),
+                    "title": .string("t"),
+                ])
+            ])
+        )
+        let callerThread = Thread.current
+        let callbackThread = Collector<ObjectIdentifier>()
+        _ = client.executeQuery(
+            query: PostQ.self,
+            variables: .init(id: "p1"),
+            cachePolicy: .cacheFirst,
+            onCacheData: { _, _ in
+                callbackThread.append(ObjectIdentifier(Thread.current))
+            }
+        )
+        XCTAssertEqual(callbackThread.snapshot(), [ObjectIdentifier(callerThread)],
+            "cache delivery must run on the calling thread, not a cooperative-pool thread")
+    }
+
+    func test_executeQuery_sync_modifyOptimisticThenCacheFirst_seesOptimisticPatchSync() throws {
+        let (client, _, _) = makeClient()
+        try client.writeQuery(
+            query: PostQ.self,
+            variables: .init(id: "p1"),
+            data: PostQ.Data(__data: [
+                "post": .object([
+                    "__typename": .string("Post"),
+                    "id": .string("p1"),
+                    "title": .string("baseline"),
+                ])
+            ])
+        )
+        // Same render tick: optimistic patch then sync query, no Task,
+        // no await. Optimistic state must be visible to onCacheData.
+        let tx = client.modifyOptimistic { b in
+            b.patch(fragment: PostFields.self, id: "p1") { draft in
+                draft.__data["title"] = .string("optimistic")
+            }
+        }
+        let captured = Collector<String>()
+        _ = client.executeQuery(
+            query: PostQ.self,
+            variables: .init(id: "p1"),
+            cachePolicy: .cacheFirst,
+            onCacheData: { data, _ in
+                captured.append(data.post?.title ?? "")
+            }
+        )
+        XCTAssertEqual(captured.snapshot(), ["optimistic"],
+            "executeQuery(.cacheFirst) must see optimistic patch synchronously — that's the whole point of the sync overload")
+        tx.dispose()
+    }
+
+    func test_executeQuery_sync_cancelAfterCacheHit_doesNotPreventCacheDelivery() throws {
+        let http = MockHTTPTransport()
+        http.whenQueryContains("PostQ", respondWith: .object([
+            "post": .object([
+                "__typename": .string("Post"),
+                "id": .string("p1"),
+                "title": .string("from network"),
+            ])
+        ]))
+        let (client, _, _) = makeClient(http: http)
+        try client.writeQuery(
+            query: PostQ.self,
+            variables: .init(id: "p1"),
+            data: PostQ.Data(__data: [
+                "post": .object([
+                    "__typename": .string("Post"),
+                    "id": .string("p1"),
+                    "title": .string("from cache"),
+                ])
+            ])
+        )
+        let cacheCount = Collector<Bool>()
+        let networkSuppressed = expectation(description: "no onNetworkData after cancel")
+        networkSuppressed.isInverted = true
+
+        let token = client.executeQuery(
+            query: PostQ.self,
+            variables: .init(id: "p1"),
+            cachePolicy: .cacheAndNetwork,
+            onCacheData: { _, _ in cacheCount.append(true) },
+            onNetworkData: { _ in networkSuppressed.fulfill() }
+        )
+        // Cancel after the synchronous cache delivery has already run.
+        token.cancel()
+
+        XCTAssertEqual(cacheCount.count(), 1,
+            "cache delivery happens synchronously, before cancel() can land")
+        wait(for: [networkSuppressed], timeout: 0.6)
+    }
+
+    func test_executeQuery_sync_cacheMissOnCacheAndNetwork_doesNotFireOnCacheData() {
+        let http = MockHTTPTransport()
+        http.whenQueryContains("PostQ", respondWith: .object([
+            "post": .object([
+                "__typename": .string("Post"),
+                "id": .string("p1"),
+                "title": .string("from network"),
+            ])
+        ]))
+        let (client, _, _) = makeClient(http: http)
+
+        let cacheSuppressed = expectation(description: "onCacheData must not fire on miss")
+        cacheSuppressed.isInverted = true
+        let networkFired = expectation(description: "onNetworkData fires from network")
+        _ = client.executeQuery(
+            query: PostQ.self,
+            variables: .init(id: "p1"),
+            cachePolicy: .cacheAndNetwork,
+            onCacheData: { _, _ in cacheSuppressed.fulfill() },
+            onNetworkData: { _ in networkFired.fulfill() }
+        )
+        wait(for: [cacheSuppressed, networkFired], timeout: 2.0)
+    }
+
+    func test_executeQuery_sync_onCacheDataReentrancy_doesNotDeadlock() throws {
+        let (client, _, _) = makeClient()
+        try client.writeQuery(
+            query: PostQ.self,
+            variables: .init(id: "p1"),
+            data: PostQ.Data(__data: [
+                "post": .object([
+                    "__typename": .string("Post"),
+                    "id": .string("p1"),
+                    "title": .string("hello"),
+                ])
+            ])
+        )
+        // Re-entrant cache read from inside the synchronous onCacheData.
+        // NSRecursiveLock in Graph makes this safe; the test pins it.
+        let calls = Collector<String>()
+        _ = client.executeQuery(
+            query: PostQ.self,
+            variables: .init(id: "p1"),
+            cachePolicy: .cacheFirst,
+            onCacheData: { data, _ in
+                calls.append(data.post?.title ?? "")
+                let read = client.readQuery(query: PostQ.networkQuery, variables: ["id": .string("p1")])
+                calls.append(read?["post"]?["title"]?.string ?? "missing")
+            }
+        )
+        XCTAssertEqual(calls.snapshot(), ["hello", "hello"],
+            "re-entrant cache read from inside onCacheData must not deadlock")
+    }
+
     // MARK: - 9. CachebayToken contract
 
     func test_token_isCancelled_flipsOnCancel() {

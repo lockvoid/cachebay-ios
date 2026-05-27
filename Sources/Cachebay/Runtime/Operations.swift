@@ -99,12 +99,36 @@ public final class Operations: @unchecked Sendable {
 
     // MARK: - executeQuery
 
-    public func executeQuery(plan: CachePlan, options: ExecuteQueryOptions) async -> OperationResult<JSONValue> {
-        let span = profiler?.begin("cachebay.executeQuery")
-        defer { span?.end() }
-        span?.attribute("planID", "\(plan.id)")
+    /// Outcome of `tryDeliverFromCacheSync` — whether the cache fully
+    /// satisfied the call (no network needed) or whether the caller must
+    /// follow up with a network request.
+    public enum CacheDeliveryOutcome: Sendable {
+        /// Cache satisfied the call (or `.cacheOnly` errored out). The
+        /// embedded `OperationResult` is the terminal result the caller
+        /// should hand back. `onCacheData` (or `onError`) has already
+        /// fired synchronously.
+        case terminal(OperationResult<JSONValue>)
+        /// A network request is still required. Cache may have delivered
+        /// (cacheAndNetwork hit) or not (any miss / networkOnly); the
+        /// caller must invoke `performNetworkOnly` or recurse with
+        /// `.networkOnly`.
+        case needsNetwork
+    }
+
+    /// Synchronously attempt to satisfy the query from the cache, firing
+    /// `onCacheData` (or `onError`) on the calling thread. Used by both:
+    ///
+    /// - The async `executeQuery(plan:options:)` overload, which calls
+    ///   this before any `await` so cache delivery happens on the
+    ///   caller's thread even on the async path.
+    /// - The sync (token-returning) overload in `CachebayClient+Typed`,
+    ///   which calls this before deciding whether to spawn a detached
+    ///   network Task — so `.cacheFirst` hits return without ever
+    ///   spawning a Task at all.
+    ///
+    /// No `await` anywhere; cheap to call from any thread.
+    public func tryDeliverFromCacheSync(plan: CachePlan, options: ExecuteQueryOptions) -> CacheDeliveryOutcome {
         let policy = options.cachePolicy ?? defaultPolicy
-        span?.attribute("policy", "\(policy)")
         let vars = options.variables
         let canonicalSig = plan.makeSignature(canonical: true, variables: vars)
         let strictSig = plan.makeSignature(canonical: false, variables: vars)
@@ -133,7 +157,7 @@ public final class Operations: @unchecked Sendable {
         if isWithinSuspension(strictSig) {
             if let c = cached, c.source != .none {
                 deliverCached(c, willFetchFromNetwork: false)
-                return OperationResult(data: c.data, error: nil, meta: .init(source: .cache))
+                return .terminal(OperationResult(data: c.data, error: nil, meta: .init(source: .cache)))
             }
         }
 
@@ -141,27 +165,59 @@ public final class Operations: @unchecked Sendable {
         case .cacheOnly:
             if let c = cached, c.source != .none {
                 deliverCached(c, willFetchFromNetwork: false)
-                return OperationResult(data: c.data, error: nil, meta: .init(source: .cache))
+                return .terminal(OperationResult(data: c.data, error: nil, meta: .init(source: .cache)))
             }
             let err = CombinedError.cacheMiss()
             options.onError?(err)
             _ = queries.notifyErrorBySignature(canonicalSig, error: err)
-            return OperationResult(data: nil, error: err)
+            return .terminal(OperationResult(data: nil, error: err))
 
         case .cacheFirst:
             if let c = cached, c.canonicalOK, c.strictOK, c.strictSignature == strictSig {
                 deliverCached(c, willFetchFromNetwork: false)
-                return OperationResult(data: c.data, error: nil, meta: .init(source: .cache))
+                return .terminal(OperationResult(data: c.data, error: nil, meta: .init(source: .cache)))
             }
-            return await performRequest(plan: plan, options: options, canonicalSig: canonicalSig, strictSig: strictSig, parentSpan: span)
+            return .needsNetwork
 
         case .cacheAndNetwork:
             if let c = cached, c.canonicalOK {
                 deliverCached(c, willFetchFromNetwork: true)
             }
-            return await performRequest(plan: plan, options: options, canonicalSig: canonicalSig, strictSig: strictSig, parentSpan: span)
+            return .needsNetwork
 
         case .networkOnly:
+            return .needsNetwork
+        }
+    }
+
+    /// Run the network portion of an `executeQuery` after the cache
+    /// portion has already been handled. Used by the sync (token)
+    /// overload from inside its `Task.detached` body. The async
+    /// `executeQuery(plan:options:)` calls `performRequest` directly
+    /// because it already holds the umbrella span.
+    public func performNetworkOnly(plan: CachePlan, options: ExecuteQueryOptions) async -> OperationResult<JSONValue> {
+        let span = profiler?.begin("cachebay.executeQuery")
+        defer { span?.end() }
+        span?.attribute("planID", "\(plan.id)")
+        span?.attribute("policy", "networkOnly")
+        let canonicalSig = plan.makeSignature(canonical: true, variables: options.variables)
+        let strictSig = plan.makeSignature(canonical: false, variables: options.variables)
+        return await performRequest(plan: plan, options: options, canonicalSig: canonicalSig, strictSig: strictSig, parentSpan: span)
+    }
+
+    public func executeQuery(plan: CachePlan, options: ExecuteQueryOptions) async -> OperationResult<JSONValue> {
+        let span = profiler?.begin("cachebay.executeQuery")
+        defer { span?.end() }
+        span?.attribute("planID", "\(plan.id)")
+        let policy = options.cachePolicy ?? defaultPolicy
+        span?.attribute("policy", "\(policy)")
+
+        switch tryDeliverFromCacheSync(plan: plan, options: options) {
+        case .terminal(let result):
+            return result
+        case .needsNetwork:
+            let canonicalSig = plan.makeSignature(canonical: true, variables: options.variables)
+            let strictSig = plan.makeSignature(canonical: false, variables: options.variables)
             return await performRequest(plan: plan, options: options, canonicalSig: canonicalSig, strictSig: strictSig, parentSpan: span)
         }
     }

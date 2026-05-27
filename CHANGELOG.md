@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.13.0] — Sync `executeQuery` runs cache portion on caller's thread
+
+Brings the token-returning `executeQuery` overload's threading model into alignment with `watchQuery(immediate: true)` and the `async`/`throws` `executeQuery` overload: **cache portion synchronous on the caller's thread, network portion detached.**
+
+Previously the sync overload wrapped the entire pipeline (cache materialize + network) in a single `Task.detached`, so cache hits paid a thread hop and `onCacheData` fired on the cooperative pool. This broke the documented "SwiftUI tick-N" contract — `modifyOptimistic` followed by sync `executeQuery(.cacheFirst)` would *not* observe the optimistic patch before the caller's next line ran.
+
+### What changes
+
+- **`onCacheData` fires synchronously, on the calling thread, before `executeQuery` returns** (for cache hits).
+- **`.cacheFirst` with cache hit spawns zero `Task`s.** Zero context switches on the hot read path.
+- **`onNetworkData` and network-side `onError` still fire detached** on the cooperative pool — unchanged.
+- **`token.cancel()` only affects the network portion.** Cache delivery happens synchronously before `cancel()` can race the callback; the synchronous delivery cannot be un-done.
+- **Re-entrancy is safe.** `onCacheData` runs on the caller's stack; calling back into the cache (`readQuery`, `readFragment`, `modifyOptimistic`) from inside the callback works (Cachebay's locks are recursive).
+- **Async `executeQuery` overload is unchanged.** Its cache portion was already sync; the refactor only reorganises the cache logic into a shared helper.
+
+### Internal
+
+- `Operations.tryDeliverFromCacheSync(plan:options:) -> CacheDeliveryOutcome` — extracted from `executeQuery`. Pure-sync. No `await`.
+- `Operations.performNetworkOnly(plan:options:)` — async network portion, used by the sync overload from inside `Task.detached`.
+- The async `executeQuery(plan:options:)` now calls `tryDeliverFromCacheSync` then conditionally `performRequest`. Same behaviour, less duplication.
+
+### Tests
+
+Six new XCTest cases in `SyncExecuteOverloadsTests` pin the contract: cache delivery sync before return, same-thread callback, `modifyOptimistic → executeQuery(.cacheFirst)` sees the patch, `cancel()` after cache hit doesn't un-deliver, cache miss on `.cacheAndNetwork` does not fire `onCacheData`, and re-entrancy from inside `onCacheData` doesn't deadlock.
+
 ## [0.12.0] — Per-type entity reducers
 
 Adds an opt-in `typeReducers` hook fired at every wire-side entity write — query responses, mutation responses, subscription frames, fragment writes. Each reducer receives both sides of the merge (the currently-stored record and the field-wise merge candidate) and returns the dict that actually lands in the cache.

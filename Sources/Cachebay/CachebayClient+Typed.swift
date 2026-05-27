@@ -249,11 +249,32 @@ public extension CachebayClient {
         return token
     }
 
-    /// Sync query. Returns immediately; the network call (when the
-    /// cache policy requires one) runs on a detached task. `onCacheData`
-    /// fires when the cache satisfies; `onNetworkData` fires when the
-    /// network response arrives. Hold the returned token if you need
-    /// to cancel; discard it for fire-and-forget.
+    /// Sync query. The **cache portion runs synchronously on the
+    /// calling thread** — `onCacheData` fires before this function
+    /// returns (cache hit) or not at all (cache miss), and a
+    /// `modifyOptimistic` patch issued immediately before the call is
+    /// observable to the callback. Only the network portion (when the
+    /// cache policy requires one) runs on a detached `Task`.
+    ///
+    /// ## Threading contract
+    /// - `onCacheData` fires sync on the calling thread.
+    /// - `onNetworkData` fires on the cooperative pool when the network
+    ///   response lands.
+    /// - `onError` from plan-compile failures fires sync; from network
+    ///   failures fires on the cooperative pool.
+    /// - `.cacheFirst` with cache hit returns **without spawning any
+    ///   Task** — zero context-switches on the hot path.
+    ///
+    /// ## Cancellation
+    /// `token.cancel()` can only suppress callbacks that have not yet
+    /// fired. If the synchronous cache delivery already happened before
+    /// `cancel()` was invoked, that delivery is not un-done. Only the
+    /// network portion is meaningfully cancellable.
+    ///
+    /// ## Re-entrancy
+    /// `onCacheData` runs on the caller's stack — calling back into the
+    /// cache (`readQuery`, `readFragment`, `modifyOptimistic`) from
+    /// inside the callback is safe: Cachebay's locks are recursive.
     @discardableResult
     func executeQuery<Op: Operation>(
         query op: Op.Type,
@@ -264,6 +285,11 @@ public extension CachebayClient {
         onError: (@Sendable (CombinedError) -> Void)? = nil
     ) -> CachebayToken {
         let token = CachebayToken()
+
+        // Cancellation-suppression wrappers around the typed callbacks.
+        // After `token.cancel()` flips the flag, no further consumer
+        // callback can fire — true for both the sync cache delivery
+        // and the detached network delivery.
         var wrappedOnCache: (@Sendable (Op.Data, Bool) -> Void)? = nil
         if let cb = onCacheData {
             wrappedOnCache = { [token] data, willFetch in
@@ -285,20 +311,62 @@ public extension CachebayClient {
                 cb(err)
             }
         }
+
+        // Plan compile runs sync — failures surface via onError without
+        // ever spawning a Task.
+        let plan: CachePlan
+        do {
+            plan = try planner.getPlan(Op.document)
+        } catch {
+            wrappedOnError?(CombinedError(networkError: error))
+            return token
+        }
+
+        // JSON↔typed trampolines for the underlying operations layer.
+        // Decoding runs on whichever thread fires the underlying
+        // callback — caller's thread for cache, cooperative pool for
+        // network. Same as `watchQuery` and the async overload.
+        var cacheCb: (@Sendable (JSONValue, Bool) -> Void)? = nil
+        if let typed = wrappedOnCache {
+            cacheCb = { (json: JSONValue, willFetch: Bool) in
+                guard case .object(let obj) = json else { return }
+                typed(Op.Data(__data: obj), willFetch)
+            }
+        }
+        var netCb: (@Sendable (JSONValue) -> Void)? = nil
+        if let typed = wrappedOnNetwork {
+            netCb = { (json: JSONValue) in
+                guard case .object(let obj) = json else { return }
+                typed(Op.Data(__data: obj))
+            }
+        }
+
+        let opts = ExecuteQueryOptions(
+            variables: variables.__cachebay,
+            cachePolicy: cachePolicy,
+            onCacheData: cacheCb,
+            onNetworkData: netCb,
+            onError: wrappedOnError
+        )
+
+        // Sync cache portion — fires onCacheData on the calling thread.
+        let outcome = operations.tryDeliverFromCacheSync(plan: plan, options: opts)
+
+        if case .terminal = outcome {
+            // `.cacheFirst` hit, `.cacheOnly` hit, or `.cacheOnly` miss
+            // (error already fired sync). No network → no Task.
+            return token
+        }
+
+        // Network portion runs detached. `.networkOnly` skips the
+        // cache portion inside `performNetworkOnly` — the cache
+        // delivery (if any) already happened above.
+        var netOpts = opts
+        netOpts.cachePolicy = .networkOnly
+        netOpts.onCacheData = nil
         let task = Task.detached { [weak self] in
             guard let self else { return }
-            do {
-                _ = try await self.executeQuery(
-                    query: op,
-                    variables: variables,
-                    cachePolicy: cachePolicy,
-                    onCacheData: wrappedOnCache,
-                    onNetworkData: wrappedOnNetwork,
-                    onError: wrappedOnError
-                )
-            } catch {
-                wrappedOnError?(CombinedError(networkError: error))
-            }
+            _ = await self.operations.performNetworkOnly(plan: plan, options: netOpts)
         }
         token.attachTask(task)
         return token
