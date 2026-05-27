@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-## [2.1.0] — Per-type entity reducers
+## [0.12.0] — Per-type entity reducers
 
 Adds an opt-in `typeReducers` hook fired at every wire-side entity write — query responses, mutation responses, subscription frames, fragment writes. Each reducer receives both sides of the merge (the currently-stored record and the field-wise merge candidate) and returns the dict that actually lands in the cache.
 
@@ -44,6 +44,22 @@ let client = CachebayClient(options: CachebayOptions(
 - `struct EntityMergeContext { id, prev, next }` — what the reducer receives.
 - `typealias EntityReducer = @Sendable (EntityMergeContext) -> [String: JSONValue]` — the reducer signature.
 - `Docs/TYPE_REDUCERS.md` — full reference, use cases, when the hook fires.
+
+## [0.11.0] — Profiler closes dark time + auto-captures thread state
+
+Adds five new spans to surface previously-untimed work between materialize completion and the host `onData` callback fire — the "dark time" that showed up in profiling traces as gap between `cachebay.documents.materialize` and the consumer's perceived first emit. Plus two transport-side decode spans and automatic per-span thread-state capture.
+
+### Added spans
+
+- `cachebay.watchers.notify.signature` — umbrella over the initial-emit signature path (`Queries.notifyDataBySignature`), counterpart to `cachebay.watchers.fanout` on the dep-based path.
+- `cachebay.watchers.recycle` — per-watcher `recycleSnapshots` + `isDataDeepEqual` work, fired inside both notify paths. Lets consumers see "deciding whether to emit" cost separately from materialize and from host `onData` time.
+- `cachebay.watchers.emit.callbacks` — single span around the `for cb in emits { cb(v) }` loop, tagged with callback `count`. This is the host's `onData` time — consumers measuring their own perceived `firstEmit` can subtract this span to back out Cachebay's runtime contribution.
+- `cachebay.transport.http.decode` — JSON parse + extract step in `URLSessionHTTPTransport`, tagged with response `bytes`. Wire RTT remains excluded (server time isn't Cachebay's target).
+- `cachebay.transport.ws.decode` — same, for `WebSocketTransport` frames.
+
+### Auto thread-state capture
+
+Every span now records `thread.begin=main|bg` and `thread.end=main|bg` without any call-site instrumentation. `Thread.isMainThread` is a ~1-5 ns thread-local read captured inside `profiler.begin(_:)` and again at `span.end()`. When a span begins on background and ends on main (or vice-versa), the span automatically surfaces that the work crossed a queue boundary — useful for diagnosing async paths without code changes. `RecordingProfiler.SpanRecord` exposes `beganOnMain` / `endedOnMain` for tests.
 
 ## [0.10.0] — Built-in profiling protocol + `OSSignpostProfiler`
 
