@@ -30,6 +30,7 @@ Every operation is compiled to a **CachePlan** — a flat field tree with:
 - A **network query string** (`__typename` injected, `@connection` stripped).
 - Per-field **argument builders** (variable-aware) for cache-key construction.
 - **Connection metadata** (mode / filters / key) for canonicalisation.
+- **Field directives** — `@include(if: …)` and `@skip(if: …)` are evaluated at materialize and normalize time per [spec §3.13.1–2](https://spec.graphql.org/October2021/#sec--skip). A field gated out by the directive is treated as not-in-selection: no cache miss, no spurious refetch. See [QUERIES.md](./QUERIES.md#conditional-fields-with-include-and-skip).
 - Stable **fingerprint** + numeric **id** so signatures match whether the plan was built at runtime or pre-baked by `cachebay-cli`.
 - A **variable mask** (strict + canonical) for watcher-signature dedup.
 

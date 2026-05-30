@@ -138,6 +138,67 @@ Deep dive: [RELAY_CONNECTIONS.md](./RELAY_CONNECTIONS.md).
 
 ---
 
+## Conditional fields with `@include` and `@skip`
+
+GraphQL's two spec-mandated field directives ([§3.13.1–2](https://spec.graphql.org/October2021/#sec--skip)) work the way you'd expect: the directive is sent to the server **and** evaluated by the cache. A field excluded by `@include(if: false)` or `@skip(if: true)` is treated as not-in-selection — no cache miss, no spurious refetch.
+
+```graphql
+query GetCook($id: ID!, $withProject: Boolean!) {
+  cook(id: $id) {
+    id
+    title
+    project @include(if: $withProject) { id name }
+  }
+}
+```
+
+Call with `withProject: true` and the project comes through. Call with `withProject: false` and:
+
+- The wire payload omits `project` (the server obeys the directive).
+- Normalize doesn't write `project` (Cachebay drops it defensively if it appears).
+- A subsequent read with `withProject: false` is a **cache hit** with `project` absent from the result — same record, different shape, no network call.
+- A subsequent read with `withProject: true` on the same cook is a cache miss (the project genuinely isn't there) and triggers a network fetch.
+
+### Conflict rule
+
+When both directives apply to the same field, `@skip` wins — the field is excluded if either votes for exclusion:
+
+```graphql
+project @skip(if: $hide) @include(if: $show) { id name }
+```
+
+| `$hide` | `$show` | Result |
+|---|---|---|
+| `true` | `true` | excluded (`@skip` wins) |
+| `true` | `false` | excluded |
+| `false` | `true` | included |
+| `false` | `false` | excluded (`@include(false)`) |
+
+### Literal Boolean arguments
+
+Both `@include(if: $var)` and `@include(if: false)` are supported. The literal form is rare but spec-allowed; useful for codegen-driven scenarios.
+
+### What this lets you do
+
+The pattern works well for "lazy" sub-selections — e.g. a list query that pulls a cheap row shape by default and asks for an expensive nested object only for the entry the user opened:
+
+```graphql
+query Cooks($id: ID!, $withProject: Boolean!) {
+  cooks {
+    edges {
+      node {
+        id title
+        project @include(if: $withProject) { id name posterUrl }
+      }
+    }
+  }
+}
+```
+
+The list query (`withProject: false`) lands every cook without the project payload. The detail query (`withProject: true`) for one specific cook lands its project. Both share the same generated `Data` type and same plan; the cache distinguishes them by signature, the underlying entity records are unified.
+
+---
+
 ## SwiftUI integration
 
 Cachebay doesn't ship a SwiftUI wrapper, but the demo app shows the canonical pattern:
