@@ -66,6 +66,14 @@ pub struct PlanField {
     /// duplication that forced consumers to write a converter per
     /// query that spreads the same fragment.
     pub reuse_fragment: Option<String>,
+    /// `@skip(if: ...)` argument when present on this field. Evaluated
+    /// at runtime by `PlanField.shouldInclude(variables:)` — when the
+    /// condition resolves to `true`, the field is excluded from the
+    /// selection (no read, no write, no dep).
+    pub skip_if: Option<DirectiveCondition>,
+    /// `@include(if: ...)` argument when present. When the condition
+    /// resolves to `false`, the field is excluded.
+    pub include_if: Option<DirectiveCondition>,
 }
 
 #[derive(Debug, Clone)]
@@ -82,6 +90,16 @@ pub enum ArgPiece {
 pub enum ConnectionMode {
     Infinite,
     Page,
+}
+
+/// Argument to `@skip(if: ...)` / `@include(if: ...)`. Mirrors the
+/// Swift-side `DirectiveCondition` enum — either a literal Boolean
+/// (`@include(if: true)`) or a Boolean variable reference
+/// (`@include(if: $withProject)`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DirectiveCondition {
+    Variable(String),
+    Constant(bool),
 }
 
 #[derive(Debug, Clone)]
@@ -278,6 +296,10 @@ fn lower_field(f: &Field, parent_typename: &str, ctx: &CompilerContext, exec_doc
     let (is_connection, connection_key, connection_filters, connection_mode, page_args) =
         parse_connection_directive(&f.directives, &field_name, &expected_arg_names);
 
+    // @skip / @include — spec-mandated; honoured at runtime by the
+    // materializer (`PlanField.shouldInclude(variables:)`).
+    let (skip_if, include_if) = parse_skip_include_directives(&f.directives);
+
     // Pure-fragment-spread provenance MUST be detected against the AST
     // BEFORE lowering, since lowering inlines the fragment's selections
     // and the "exactly one spread" property is irrecoverable afterwards.
@@ -318,6 +340,8 @@ fn lower_field(f: &Field, parent_typename: &str, ctx: &CompilerContext, exec_doc
         sel_id,
         children,
         reuse_fragment,
+        skip_if,
+        include_if,
     }
 }
 
@@ -376,6 +400,44 @@ fn synthetic_typename_field() -> PlanField {
         sel_id: "__typename:__typename".into(),
         children: vec![],
         reuse_fragment: None,
+        skip_if: None,
+        include_if: None,
+    }
+}
+
+/// Parse `@skip(if: …)` and `@include(if: …)` from a field's directive
+/// list. Other directives are ignored at this layer (only `@connection`
+/// has dedicated handling).
+///
+/// Spec §3.13: the `if` argument is `Boolean!` — either a Boolean
+/// literal or a Boolean variable reference. Other shapes are
+/// validation errors server-side; we simply skip them (the emitter
+/// won't write a directive arg, and the runtime treats absent as
+/// "include").
+fn parse_skip_include_directives(
+    directives: &DirectiveList,
+) -> (Option<DirectiveCondition>, Option<DirectiveCondition>) {
+    let mut skip_if: Option<DirectiveCondition> = None;
+    let mut include_if: Option<DirectiveCondition> = None;
+    for dir in directives.iter() {
+        let cond = match dir.arguments.iter().find(|a| a.name.as_str() == "if") {
+            Some(a) => directive_condition_from_value(&a.value),
+            None => None,
+        };
+        match dir.name.as_str() {
+            "skip" => skip_if = cond,
+            "include" => include_if = cond,
+            _ => {}
+        }
+    }
+    (skip_if, include_if)
+}
+
+fn directive_condition_from_value(v: &Node<Value>) -> Option<DirectiveCondition> {
+    match v.as_ref() {
+        Value::Boolean(b) => Some(DirectiveCondition::Constant(*b)),
+        Value::Variable(name) => Some(DirectiveCondition::Variable(name.to_string())),
+        _ => None,
     }
 }
 

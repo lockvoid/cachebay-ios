@@ -26,6 +26,8 @@ public extension PlanField {
         connectionFilters: [String]? = nil,
         connectionMode: ConnectionMode? = nil,
         pageArgs: [String]? = nil,
+        skipIf: DirectiveCondition? = nil,
+        includeIf: DirectiveCondition? = nil,
         children: [PlanField] = []
     ) -> PlanField {
         let expectedArgNames = args.map(\.name)
@@ -65,8 +67,8 @@ public extension PlanField {
             connectionFilters: connectionFilters,
             connectionMode: connectionMode,
             pageArgs: pageArgs,
-            skipIf: nil,
-            includeIf: nil,
+            skipIf: skipIf,
+            includeIf: includeIf,
             selId: selId
         )
     }

@@ -461,6 +461,15 @@ fn render_plan_field_literal(f: &PlanField, indent: &str) -> String {
             s.push_str(&format!("{indent}    pageArgs: {},\n", render_string_list(&f.page_args)));
         }
     }
+    // @skip / @include — emitted as `skipIf: .variable("foo")` /
+    // `skipIf: .constant(true)` etc. The runtime evaluates these in
+    // `PlanField.shouldInclude(variables:)` to honour spec §3.13.
+    if let Some(cond) = &f.skip_if {
+        s.push_str(&format!("{indent}    skipIf: {},\n", render_directive_condition(cond)));
+    }
+    if let Some(cond) = &f.include_if {
+        s.push_str(&format!("{indent}    includeIf: {},\n", render_directive_condition(cond)));
+    }
     if !f.children.is_empty() {
         s.push_str(&format!("{indent}    children: [\n"));
         for child in &f.children {
@@ -471,6 +480,13 @@ fn render_plan_field_literal(f: &PlanField, indent: &str) -> String {
     s.push_str(indent);
     s.push_str("),\n");
     s
+}
+
+fn render_directive_condition(cond: &crate::plan::DirectiveCondition) -> String {
+    match cond {
+        crate::plan::DirectiveCondition::Variable(name) => format!(".variable(\"{name}\")"),
+        crate::plan::DirectiveCondition::Constant(b) => format!(".constant({b})"),
+    }
 }
 
 struct SplitArg { name: String, swift_value: String }
@@ -1211,6 +1227,8 @@ mod codegen_tests {
             sel_id: format!("leaf-{name}"),
             children: vec![],
             reuse_fragment: None,
+            skip_if: None,
+            include_if: None,
         }
     }
 
@@ -1235,6 +1253,8 @@ mod codegen_tests {
             sel_id: format!("obj-{name}"),
             children,
             reuse_fragment: None,
+            skip_if: None,
+            include_if: None,
         }
     }
 
@@ -1363,6 +1383,84 @@ mod codegen_tests {
         assert!(
             !output.contains("public mutating func patch"),
             "scalar-only fragment must not emit any patch<Field>; output:\n{output}"
+        );
+    }
+
+    // MARK: - @include / @skip on generated PlanField literal
+    //
+    // The runtime materializer already evaluates `PlanField.shouldInclude(vars:)`
+    // before the per-field read (Documents.swift:811). For that to fire on
+    // codegen-emitted plans, `render_plan_field_literal` must emit
+    // `includeIf:` / `skipIf:` arguments on `PlanField.make(...)`. Without
+    // these emissions, every generated field is unconditional and
+    // @include(if:$x) in the source query silently degrades to a runtime
+    // "field required" miss whenever $x = false.
+
+    use crate::plan::DirectiveCondition;
+
+    fn project_with_include_var() -> PlanField {
+        let mut f = object(
+            "project",
+            "Project",
+            vec![typename_field(), id_field(), scalar("name", "String")],
+        );
+        f.include_if = Some(DirectiveCondition::Variable("withProject".into()));
+        f
+    }
+
+    fn project_with_skip_const() -> PlanField {
+        let mut f = object(
+            "project",
+            "Project",
+            vec![typename_field(), id_field()],
+        );
+        f.skip_if = Some(DirectiveCondition::Constant(true));
+        f
+    }
+
+    #[test]
+    fn plan_literal_emits_includeIf_variable() {
+        let literal = render_plan_field_literal(&project_with_include_var(), "");
+        assert!(
+            literal.contains("includeIf: .variable(\"withProject\")"),
+            "render_plan_field_literal must emit includeIf for fields with @include directive; output:\n{literal}"
+        );
+    }
+
+    #[test]
+    fn plan_literal_emits_skipIf_constant() {
+        let literal = render_plan_field_literal(&project_with_skip_const(), "");
+        assert!(
+            literal.contains("skipIf: .constant(true)"),
+            "render_plan_field_literal must emit skipIf for fields with @skip(if: true); output:\n{literal}"
+        );
+    }
+
+    #[test]
+    fn plan_literal_omits_directive_keys_when_absent() {
+        // A field with no @include / @skip must NOT emit either key (so
+        // existing generated files stay byte-identical for fields that
+        // don't use the directives).
+        let plain = object("project", "Project", vec![typename_field(), id_field()]);
+        let literal = render_plan_field_literal(&plain, "");
+        assert!(
+            !literal.contains("includeIf"),
+            "directiveless field must not emit includeIf:; output:\n{literal}"
+        );
+        assert!(
+            !literal.contains("skipIf"),
+            "directiveless field must not emit skipIf:; output:\n{literal}"
+        );
+    }
+
+    #[test]
+    fn plan_literal_emits_includeIf_constant_false() {
+        let mut f = object("project", "Project", vec![typename_field(), id_field()]);
+        f.include_if = Some(DirectiveCondition::Constant(false));
+        let literal = render_plan_field_literal(&f, "");
+        assert!(
+            literal.contains("includeIf: .constant(false)"),
+            "render_plan_field_literal must support literal Boolean args; output:\n{literal}"
         );
     }
 }

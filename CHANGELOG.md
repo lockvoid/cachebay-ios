@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.15.1] — cli codegen emits `@include` / `@skip` (closes v0.15.0 codegen gap)
+
+v0.15.0 added runtime evaluation of `@include` / `@skip` in `Documents.materialize` and `Documents.normalize`, with tests for the runtime-lowering path (`Compiler.compilePlan(source:)`). But **`cachebay-cli` was never updated to propagate the directives into the emitted `PlanField` literals.** Production iOS apps use codegen-emitted plans where every field's `skipIf` / `includeIf` was `nil` — so the runtime gate was a no-op for the actual code path consumers use.
+
+Real-world repro: an `executeMutation` with a sub-selection `project @include(if: $includeProject)` would fail to materialize when `$includeProject = false`, surfacing as:
+
+```
+[Cachebay] materialize miss: record <id> has no field 'project' (selection set required)
+[Cachebay] Mutation materialization failed
+```
+
+### Fix
+
+- **`cli/src/plan.rs`**: new `DirectiveCondition` enum (`Variable(String)` | `Constant(bool)`). `PlanField` gets `skip_if` / `include_if: Option<DirectiveCondition>`, populated by `parse_skip_include_directives`.
+- **`cli/src/emit.rs`**: `render_plan_field_literal` emits `skipIf: .variable("…")` / `skipIf: .constant(true)` / `includeIf: …` arguments on the generated `PlanField.make(...)` call. Omitted when neither directive is present (no diff for fields that don't use them).
+- **`Sources/Cachebay/Compiler/CachePlanLiteral.swift`**: `PlanField.make(...)` accepts two new optional parameters `skipIf` / `includeIf` (default `nil`). Already-shipped generated files continue to compile and run unchanged.
+
+### Tests
+
+- **cli** (4 new in `codegen_tests`): `plan_literal_emits_includeIf_variable`, `plan_literal_emits_skipIf_constant`, `plan_literal_emits_includeIf_constant_false`, `plan_literal_omits_directive_keys_when_absent`.
+- **Swift** (4 new in `IncludeSkipDirectiveTests`): construct plans via the codegen-shaped `PlanField.make(...)` API (not `Compiler.compilePlan(source:)`) — covers `@include(if: var)` true/false, `@skip(if: const true)`, and back-compat (no-directive call still works).
+
+### What consumers need to do
+
+Re-run `cachebay-codegen` to regenerate `.cachebay.swift` files. Any `@include` / `@skip` directives in `.graphql` operations / fragments will now appear as `skipIf:` / `includeIf:` arguments on the emitted `PlanField.make(...)` calls and will be honoured at materialize / normalize time.
+
 ## [0.15.0] — Spec-conformant `@include` / `@skip` runtime evaluation
 
 GraphQL's two core field directives — `@include(if: ...)` and `@skip(if: ...)` ([spec §3.13.1–2](https://spec.graphql.org/October2021/#sec--skip)) — are now evaluated at runtime in both `materialize` and `normalize`, matching Apollo / Relay / urql behaviour.
