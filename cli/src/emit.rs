@@ -953,7 +953,6 @@ fn render_selection_struct(
     // server-authoritative fields.
     if !parent_named_type.is_empty() {
         s.push_str(&render_partial(
-            swift_name,
             parent_named_type,
             &format!("{indent}    "),
         ));
@@ -1042,10 +1041,16 @@ fn is_inline_container_object(f: &PlanField) -> bool {
 /// the property setters. Companion to `make(...)` — used for partial
 /// optimistic patches where forcing every non-optional field through
 /// `make(...)` would clobber the unedited fields with default values.
-fn render_partial(swift_name: &str, typename: &str, indent: &str) -> String {
+fn render_partial(typename: &str, indent: &str) -> String {
+    // Use `Self` for both return type AND constructor — when the
+    // struct is nested inside another struct of the same name (e.g.
+    // `CookFields.Data` containing an inner inline-container struct
+    // also named `Data`), Swift resolves the unqualified `Data` (in
+    // either position) to the nested type, not the enclosing struct.
+    // `Self` always refers to the struct the method belongs to.
     let mut s = String::new();
-    s.push_str(&format!("{indent}public static func partial() -> {swift_name} {{\n"));
-    s.push_str(&format!("{indent}    {swift_name}(__data: [\n"));
+    s.push_str(&format!("{indent}public static func partial() -> Self {{\n"));
+    s.push_str(&format!("{indent}    Self(__data: [\n"));
     s.push_str(&format!("{indent}        \"__typename\": Cachebay.JSONValue.string(\"{typename}\"),\n"));
     s.push_str(&format!("{indent}    ])\n"));
     s.push_str(&format!("{indent}}}\n"));
