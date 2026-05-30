@@ -891,7 +891,6 @@ fn render_selection_struct(
         let mut as_factory_fields: Vec<(&PlanField, bool)> = shared.iter().map(|f| (*f, false)).collect();
         as_factory_fields.extend(fields.iter().map(|f| (*f, true)));
         s.push_str(&render_factory(
-            &as_name,
             "make",
             tc,
             &as_factory_fields,
@@ -919,7 +918,6 @@ fn render_selection_struct(
             let mut all_fields: Vec<(&PlanField, bool)> = shared.iter().map(|f| (*f, false)).collect();
             all_fields.extend(fields.iter().map(|f| (*f, true)));
             s.push_str(&render_factory(
-                swift_name,
                 &factory_name,
                 tc,
                 &all_fields,
@@ -935,7 +933,6 @@ fn render_selection_struct(
         // a polymorphic sibling's branch.
         let factory_fields: Vec<(&PlanField, bool)> = shared.iter().map(|f| (*f, false)).collect();
         s.push_str(&render_factory(
-            swift_name,
             "make",
             parent_named_type,
             &factory_fields,
@@ -1088,7 +1085,6 @@ fn render_patch_field(f: &PlanField, indent: &str) -> String {
 }
 
 fn render_factory(
-    swift_name: &str,
     factory_name: &str,
     typename: &str,
     fields: &[(&PlanField, bool)],
@@ -1115,8 +1111,16 @@ fn render_factory(
         let comma = if i + 1 < non_typename.len() { "," } else { "" };
         s.push_str(&format!("{indent}    {name}: {ty}{default}{comma}\n"));
     }
-    s.push_str(&format!("{indent}) -> {swift_name} {{\n"));
-    s.push_str(&format!("{indent}    {swift_name}(__data: [\n"));
+    // Return type AND constructor use `Self`, never the struct's name
+    // literally. The factory is always emitted as a static method of
+    // some struct, so `Self` resolves to that struct — but when the
+    // enclosing struct contains a nested child of the same name (e.g.
+    // the outer `CookFields.Data` containing the inner payload `Data`),
+    // writing the unqualified name would shadow to the nested type and
+    // the factory would return / construct the wrong struct. Same fix
+    // and rationale as `render_partial`.
+    s.push_str(&format!("{indent}) -> Self {{\n"));
+    s.push_str(&format!("{indent}    Self(__data: [\n"));
     s.push_str(&format!("{indent}        \"__typename\": Cachebay.JSONValue.string(\"{typename}\"),\n"));
     for (f, _) in &non_typename {
         let name = swift_identifier(&f.response_key);
