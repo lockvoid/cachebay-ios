@@ -13,6 +13,19 @@ public enum ConnectionMode: String, Hashable, Sendable {
     case page
 }
 
+/// Argument value for `@skip(if:)` / `@include(if:)` — either a literal
+/// Boolean (`@include(if: true)`) or a Boolean variable reference
+/// (`@include(if: $withProject)`). Other directives are ignored at the
+/// runtime layer; only `@skip` and `@include` are spec-mandated to be
+/// honoured client-side.
+public enum DirectiveCondition: Hashable, Sendable {
+    /// `@include(if: $name)` / `@skip(if: $name)`.
+    case variable(String)
+    /// `@include(if: true)` / `@skip(if: false)` — a literal in the
+    /// document. Rare but spec-allowed.
+    case constant(Bool)
+}
+
 /// One lowered field in a selection set.
 ///
 /// Mirrors cachebay-web `PlanField` with Swift-idiomatic adjustments:
@@ -37,6 +50,14 @@ public struct PlanField: Hashable, Sendable {
     public let connectionMode: ConnectionMode?
     public let pageArgs: [String]?
 
+    // `@skip(if: ...)` — when this evaluates to `true`, the field is
+    // excluded from the selection set (no read, no write, no dep). Nil
+    // when the field carries no `@skip` directive. Spec: §3.13.1.
+    public let skipIf: DirectiveCondition?
+    // `@include(if: ...)` — when this evaluates to `false`, the field
+    // is excluded. Nil when no `@include` directive. Spec: §3.13.2.
+    public let includeIf: DirectiveCondition?
+
     /// Stable fingerprint for the subtree; used for plan.id and watcher dedup.
     public let selId: String
 
@@ -48,6 +69,36 @@ public struct PlanField: Hashable, Sendable {
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(selId)
+    }
+
+    /// Whether this field is part of the active selection given the
+    /// caller's variables. Returns `false` when:
+    /// - `@skip(if: ...)` evaluates to `true`, OR
+    /// - `@include(if: ...)` evaluates to `false`.
+    ///
+    /// Per GraphQL spec, `@skip` wins on conflict (the field is
+    /// excluded if either directive votes for exclusion).
+    ///
+    /// A missing variable or non-Boolean value is treated as `false` —
+    /// lenient interpretation that defaults to "include" (matches Apollo).
+    public func shouldInclude(variables: [String: JSONValue]) -> Bool {
+        if let skip = skipIf {
+            if evaluateBool(skip, variables: variables) == true { return false }
+        }
+        if let inc = includeIf {
+            if evaluateBool(inc, variables: variables) == false { return false }
+        }
+        return true
+    }
+
+    private func evaluateBool(_ cond: DirectiveCondition, variables: [String: JSONValue]) -> Bool {
+        switch cond {
+        case .constant(let b):
+            return b
+        case .variable(let name):
+            if case .bool(let b) = variables[name] { return b }
+            return false
+        }
     }
 }
 

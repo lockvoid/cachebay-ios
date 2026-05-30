@@ -912,7 +912,8 @@ public final class Optimistic: @unchecked Sendable {
             buildArgs: { _ in filters },
             stringifyArgs: stringify,
             isConnection: true, connectionKey: selector.key, connectionFilters: filtersList,
-            connectionMode: nil, pageArgs: nil, selId: ""
+            connectionMode: nil, pageArgs: nil,
+            skipIf: nil, includeIf: nil, selId: ""
         )
         return Keys.buildConnectionCanonicalKey(field: field, parentId: parentId, variables: filters)
     }

@@ -99,6 +99,25 @@ enum Lowering {
             pageArgs = node.arguments.map(\.name).filter { CachebayConstants.paginationArgs.contains($0) }
         }
 
+        // Parse @skip / @include directives. Spec-mandated; honoured at
+        // runtime in materialize + normalize via `shouldInclude(variables:)`.
+        var skipIf: DirectiveCondition? = nil
+        var includeIf: DirectiveCondition? = nil
+        for dir in node.directives {
+            switch dir.name {
+            case "skip":
+                if let arg = dir.arguments.first(where: { $0.name == "if" }) {
+                    skipIf = directiveCondition(from: arg.value)
+                }
+            case "include":
+                if let arg = dir.arguments.first(where: { $0.name == "if" }) {
+                    includeIf = directiveCondition(from: arg.value)
+                }
+            default:
+                break
+            }
+        }
+
         // Build partial PlanField (with placeholder selId so we can compute fingerprint)
         let selId = Fingerprint.fieldSelId(
             responseKey: responseKey,
@@ -123,8 +142,21 @@ enum Lowering {
             connectionFilters: connectionFilters,
             connectionMode: connectionMode,
             pageArgs: pageArgs,
+            skipIf: skipIf,
+            includeIf: includeIf,
             selId: selId
         )
+    }
+
+    /// Lift a directive `if:` argument into a `DirectiveCondition`.
+    /// Returns `nil` for shapes the spec doesn't define (e.g. `if: $foo.bar`,
+    /// `if: 1`) — those would have failed validation server-side anyway.
+    private static func directiveCondition(from value: Value) -> DirectiveCondition? {
+        switch value {
+        case .boolean(let b): return .constant(b)
+        case .variable(let name): return .variable(name)
+        default: return nil
+        }
     }
 
     private static func inferChildParent(

@@ -229,6 +229,13 @@ public final class Documents: @unchecked Sendable {
     ) {
         for (responseKey, value) in obj {
             let field = frame.fieldsMap[responseKey]
+            // Spec-mandated: drop fields the directive excludes from
+            // the selection. Mostly defensive — a compliant server
+            // already omits these; matters for `writeFragment` /
+            // `writeQuery` paths where the consumer constructs the
+            // response shape themselves and may include a field that
+            // their variables vote to skip.
+            if let f = field, !f.shouldInclude(variables: variables) { continue }
             normalizeValue(value, responseKey: responseKey, field: field, frame: frame, plan: plan, variables: variables, shouldLink: shouldLink, pendingPages: &pendingPages, touchedEntities: &touchedEntities)
         }
     }
@@ -628,13 +635,17 @@ public final class Documents: @unchecked Sendable {
                 typeCondition: nil, expectedArgNames: [],
                 buildArgs: { _ in [:] }, stringifyArgs: { _ in "" },
                 isConnection: false, connectionKey: nil, connectionFilters: nil,
-                connectionMode: nil, pageArgs: nil, selId: ""
+                connectionMode: nil, pageArgs: nil,
+                skipIf: nil, includeIf: nil, selId: ""
             )
             context.readEntity(rootId, field: synthetic, into: &data, fingerprint: &fingerprints, path: rootId)
         } else {
             let rootKey = options.rootId ?? CachebayConstants.rootID
             let rootRecord = graph.getRecord(rootKey) ?? [:]
             for field in plan.root {
+                // Spec-mandated: skip fields gated out by @include / @skip
+                // before any read, dep insertion, or strictOK accounting.
+                if !field.shouldInclude(variables: variables) { continue }
                 let path = "\(rootKey).\(field.responseKey)"
                 if field.isConnection {
                     var childFp: [String: JSONValue] = [:]
@@ -795,6 +806,9 @@ struct MaterializeContext {
 
         for child in children {
             let outKey = child.responseKey
+            // Spec-mandated: skip fields gated out by @include / @skip
+            // before any read, dep insertion, or strictOK accounting.
+            if !child.shouldInclude(variables: variables) { continue }
             if !selectionApplies(child, runtimeType: runtimeType) { continue }
 
             if child.isConnection {

@@ -6,6 +6,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.14.0] — Spec-conformant `@include` / `@skip` runtime evaluation
+
+GraphQL's two core field directives — `@include(if: ...)` and `@skip(if: ...)` ([spec §3.13.1–2](https://spec.graphql.org/October2021/#sec--skip)) — are now evaluated at runtime in both `materialize` and `normalize`, matching Apollo / Relay / urql behaviour.
+
+### What changes
+
+Previously, Cachebay passed `@include` / `@skip` through to the server but ignored them client-side. The materialize step always walked the plan's static selection set, so a query with `$withProject: false` would still try to read `project` from the cache, find it absent, and flip `canonicalOK = false` → cache miss → unnecessary refetch.
+
+Now:
+
+- **Materialize evaluates the directive.** A field gated out by `@include(if: false)` or `@skip(if: true)` is skipped entirely — no read, no dep, no contribution to `strictOK` / `canonicalOK`. The cache hits and the field is simply absent from the output.
+- **Normalize evaluates the directive.** Defensive — a compliant server already omits skipped fields, but `writeFragment` / `writeQuery` callers might construct response shapes whose variables vote to exclude a field. Such fields are now dropped on write rather than silently persisted.
+- **Both literal (`@include(if: false)`) and variable (`@include(if: $foo)`) forms supported.**
+- **Conflict rule per spec:** when both `@skip` and `@include` apply to the same field, `@skip` wins — the field is excluded if either votes for exclusion.
+
+### Behaviour change (intentional)
+
+Queries that previously cache-missed because of an unread `@include(if: false)` field will now cache-hit. This is a correctness fix, not a regression — those refetches were never necessary.
+
+### Performance
+
+The directive check is two `Optional` nil checks per field (the vast majority of fields have neither `@skip` nor `@include`). Release-mode benchmarks on no-directive queries are within run-to-run noise — no measurable overhead.
+
+### Added
+
+- `enum DirectiveCondition { case variable(String), constant(Bool) }` — what `@include(if:)` / `@skip(if:)` was given.
+- `PlanField.skipIf` / `PlanField.includeIf` — populated by the compiler when the directives are present.
+- `PlanField.shouldInclude(variables:) -> Bool` — the gate. Returns `false` when `@skip` resolves true OR `@include` resolves false.
+
+### Tests
+
+12 new cases in `IncludeSkipDirectiveTests` cover: include true/false, skip true/false, conflict (`@skip` wins), constant directive args, normalize-respects-directive, and cross-flow (write-false-read-true → miss; write-false-read-false → hit).
+
 ## [0.13.0] — Sync `executeQuery` runs cache portion on caller's thread
 
 Brings the token-returning `executeQuery` overload's threading model into alignment with `watchQuery(immediate: true)` and the `async`/`throws` `executeQuery` overload: **cache portion synchronous on the caller's thread, network portion detached.**
