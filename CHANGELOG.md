@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-## [0.14.0] — Spec-conformant `@include` / `@skip` runtime evaluation
+## [0.15.0] — Spec-conformant `@include` / `@skip` runtime evaluation
 
 GraphQL's two core field directives — `@include(if: ...)` and `@skip(if: ...)` ([spec §3.13.1–2](https://spec.graphql.org/October2021/#sec--skip)) — are now evaluated at runtime in both `materialize` and `normalize`, matching Apollo / Relay / urql behaviour.
 
@@ -39,7 +39,7 @@ The directive check is two `Optional` nil checks per field (the vast majority of
 
 12 new cases in `IncludeSkipDirectiveTests` cover: include true/false, skip true/false, conflict (`@skip` wins), constant directive args, normalize-respects-directive, and cross-flow (write-false-read-true → miss; write-false-read-false → hit).
 
-## [0.13.0] — Sync `executeQuery` runs cache portion on caller's thread
+## [0.14.0] — Sync `executeQuery` runs cache portion on caller's thread
 
 Brings the token-returning `executeQuery` overload's threading model into alignment with `watchQuery(immediate: true)` and the `async`/`throws` `executeQuery` overload: **cache portion synchronous on the caller's thread, network portion detached.**
 
@@ -64,7 +64,7 @@ Previously the sync overload wrapped the entire pipeline (cache materialize + ne
 
 Six new XCTest cases in `SyncExecuteOverloadsTests` pin the contract: cache delivery sync before return, same-thread callback, `modifyOptimistic → executeQuery(.cacheFirst)` sees the patch, `cancel()` after cache hit doesn't un-deliver, cache miss on `.cacheAndNetwork` does not fire `onCacheData`, and re-entrancy from inside `onCacheData` doesn't deadlock.
 
-## [0.12.0] — Per-type entity reducers
+## [0.13.0] — Per-type entity reducers
 
 Adds an opt-in `typeReducers` hook fired at every wire-side entity write — query responses, mutation responses, subscription frames, fragment writes. Each reducer receives both sides of the merge (the currently-stored record and the field-wise merge candidate) and returns the dict that actually lands in the cache.
 
@@ -103,7 +103,7 @@ let client = CachebayClient(options: CachebayOptions(
 - `typealias EntityReducer = @Sendable (EntityMergeContext) -> [String: JSONValue]` — the reducer signature.
 - `Docs/TYPE_REDUCERS.md` — full reference, use cases, when the hook fires.
 
-## [0.11.0] — Profiler closes dark time + auto-captures thread state
+## [0.12.0] — Profiler closes dark time + auto-captures thread state
 
 Adds five new spans to surface previously-untimed work between materialize completion and the host `onData` callback fire — the "dark time" that showed up in profiling traces as gap between `cachebay.documents.materialize` and the consumer's perceived first emit. Plus two transport-side decode spans and automatic per-span thread-state capture.
 
