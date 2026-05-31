@@ -79,8 +79,8 @@ Wire data has no defaults, so drafts need per-field defaults (§6). Add them via
 directive `field: String! @cachebay(default: "a0")` (or the codegen config) so the generator
 emits `@CachebayDefault("a0") let rank: String`. One-time, per type.
 
-> Status: the `@CachebayDefault` **macro** is implemented (defaults flow into the memberwise
-> init). Wiring the schema directive → emitted annotation is the remaining codegen step.
+> Construction-only (decision D6): a `@CachebayDefault` does **not** soften decode — a record
+> missing a required field is still a miss (§7). Use `field: T?` for genuinely-optional wire data.
 
 ## 5. Failure semantics (§7) — usually a no-op for you
 
@@ -102,16 +102,32 @@ blame v1.0 for churn that was already there; audit the selection set.
 debug tooling or an opposite (wide-but-narrow-read) workload. Gate with
 `@_spi(Cachebay) import Cachebay`.
 
+## Codegen options (typed mode)
+
+```sh
+cachebay-cli codegen --schema schema.graphql --operations ./GraphQL --output ./Generated \
+  --typed --namespace API
+```
+
+- **`--typed`** — emit the v1.0 typed structs.
+- **`--namespace API`** — wrap models in `extension API { … }` (→ `API.GetCook`) so they don't
+  collide with `Image`/`Video`/`Color`/etc. Empty (default) = top level. **Recommended on.**
+- **`@cachebay(default: …)`** schema directive → `@CachebayDefault(…)` (construction defaults, §6).
+- **`scalar Date @cachebay(swiftType: "Foundation.Date")`** → maps the custom scalar's fields to
+  that Swift type (must conform to `CachebayValue`; Cachebay ships `URL`/`Date`). Unconfigured custom
+  scalars stay `Cachebay.JSONValue` (raw passthrough). Declare the directive once in your schema:
+  `directive @cachebay(default: CachebayDefaultValue, swiftType: String) on FIELD_DEFINITION | SCALAR`.
+
 ## Internal migration checklist (this repo)
 
 - [x] Macros, typed runtime path (`read`/`watch`/`execute`), KeyPath patch builder.
-- [x] CLI `--typed` emission (validated: demo regen compiles + decodes — see
-  `Tests/CachebayMacrosTests/GeneratedSmoke/`).
+- [x] CLI `--typed` emission: structs + sum-type enums + envelope + `--namespace` +
+  `@CachebayDefault` from schema + custom-scalar config. Validated: regen compiles + decodes
+  (`Tests/CachebayMacrosTests/GeneratedSmoke/`).
+- [x] `@CachebayQuery` SwiftUI wrapper (`CachebayUI` target).
 - [ ] Switch the CLI default to `--typed` once consumers are migrated.
-- [ ] Regenerate `demo/ios/HarryPotterDemo/Generated/*` with `--typed` and migrate the demo
-  app's view code to the typed API (needs Xcode to compile-verify).
+- [ ] Regenerate `demo/ios/HarryPotterDemo/Generated/*` (`--typed --namespace …`) and migrate the
+  demo app's view code to the typed API (needs Xcode to compile-verify).
 - [ ] Migrate internal test fixtures that assert via `__data` to the typed shape (the untyped
   runtime tests are unaffected — they exercise `JSONValue` directly).
-- [ ] `@CachebayQuery` SwiftUI wrapper (a `CachebaySwiftUI` target).
-- [ ] `@CachebayDefault` from schema directive; namespace wrapper for shared model types;
-  custom-scalar config (`scalar Date @cachebay(swiftType:)`).
+- [ ] SwiftUI host-app validation of `@CachebayQuery`'s appear/disappear lifecycle.
