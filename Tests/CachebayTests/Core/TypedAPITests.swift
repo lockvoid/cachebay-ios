@@ -1,232 +1,136 @@
 import XCTest
 @testable import Cachebay
 
-/// Coverage for the typed surface layered on top of the JSON-shaped
-/// runtime: `Operation` / `Fragment` protocols, `OperationData` accessor
-/// setters (get + set on every field), typed read/write/watch/execute
-/// overloads for queries/mutations/subscriptions/fragments, and the
-/// typed optimistic helpers (`b.patch(fragment:target:_:)`,
-/// `b.connection(...).linkNode(node:options:)` /
-/// `linkNode(fragment:options:_:)`).
+/// Coverage for the v1.0 **typed-struct** surface layered on top of the
+/// JSON-shaped runtime: the `CachebayOperation` / `CachebayFragment`
+/// protocols, the typed read/write/execute overloads for queries,
+/// mutations and fragments, and the typed optimistic helpers
+/// (`b.patch(fragment:id:) { $0.set(\.field, value) }`,
+/// `b.connection(...).linkNode(node:)` / `linkNode(fragment:id:)` /
+/// `unlinkNode(fragment:id:)`).
 ///
 /// The fixtures below are hand-rolled to mirror what `cachebay-cli`
-/// emits — same shape, same accessor pattern — so the tests assert
-/// against the *runtime contract* the codegen relies on rather than
-/// against an actual generated file. That keeps the suite independent
-/// of the codegen build step.
+/// emits — `@CachebayData` structs (real `let`-only fields, eager decode
+/// via `CachebayValue`) wrapped by `CachebayOperation` / `CachebayFragment`
+/// — so the tests assert against the runtime contract the codegen relies
+/// on rather than an actual generated file.
+///
+/// ## Retired dict-wrapper tests
+/// The legacy (0.x) version of this file also covered mechanics that the
+/// typed surface removes *by construction*; those tests were dropped here,
+/// their coverage having moved to a typed home:
+///   • `objectAccessorSetter_*` (mutable `var field { get set }` on the
+///     dict wrapper) → typed structs are `let`-only; mutation goes through
+///     the KeyPath patch builder, covered by the `test_typedPatch_*` cases
+///     below.
+///   • `operationData_as_fragment` / `sequenceNodes(as:)` / `nodes()` sugar
+///     (`.as(F.self)` dict reinterpretation + `compactMap` over `__data`) →
+///     typed nodes are concrete decoded values; consumers read
+///     `edges.map(\.node)` directly, no projection seam to paper over.
+///   • `fragmentDataFactory_*` (hand-rolled `Data.textNote(…)` dict
+///     factories) → the `@CachebayData` memberwise init *is* the
+///     compiler-enforced factory, and polymorphic subtype construction +
+///     `.unknown` dispatch is covered by `CachebayInterfaceBehaviourTests`.
+
+// MARK: - Fixtures (mirror cachebay-cli typed output)
+
+/// Single-entity query with one required variable and an object-typed root
+/// selection.
+@CachebayData(typename: "")
+private struct TestPostData: Sendable, Hashable, CachebayValue {
+    let post: Post?
+    @CachebayData(typename: "Post")
+    struct Post: Identifiable, Sendable, Hashable, CachebayValue {
+        let __typename: String
+        let id: String
+        let title: String
+    }
+}
+private struct TestPost: CachebayOperation {
+    struct Variables: OperationVariables {
+        let id: String
+        var __cachebay: [String: JSONValue] { ["id": .string(id)] }
+    }
+    typealias Data = TestPostData
+    static let document: QueryDocument = .source(
+        "query TestPost($id: ID!) { post(id: $id) { __typename id title } }"
+    )
+}
+
+/// Variable-less query — `Variables` aliases to `EmptyVariables`.
+@CachebayData(typename: "")
+private struct TestMeData: Sendable, Hashable, CachebayValue {
+    let me: Me?
+    @CachebayData(typename: "User")
+    struct Me: Identifiable, Sendable, Hashable, CachebayValue {
+        let __typename: String
+        let id: String
+        let name: String
+    }
+}
+private struct TestMe: CachebayOperation {
+    typealias Variables = EmptyVariables
+    typealias Data = TestMeData
+    static let document: QueryDocument = .source("query TestMe { me { __typename id name } }")
+}
+
+/// Mutation fixture — same protocol, different cache-plan kind.
+@CachebayData(typename: "")
+private struct TestUpdatePostData: Sendable, Hashable, CachebayValue {
+    let updatePost: UpdatePost?
+    @CachebayData(typename: "Post")
+    struct UpdatePost: Identifiable, Sendable, Hashable, CachebayValue {
+        let __typename: String
+        let id: String
+        let title: String
+    }
+}
+private struct TestUpdatePost: CachebayOperation {
+    struct Variables: OperationVariables {
+        let id: String
+        let title: String
+        var __cachebay: [String: JSONValue] { ["id": .string(id), "title": .string(title)] }
+    }
+    typealias Data = TestUpdatePostData
+    static let document: QueryDocument = .source(
+        "mutation TestUpdatePost($id: ID!, $title: String!) { updatePost(id: $id, title: $title) { __typename id title } }"
+    )
+}
+
+/// Fragment fixture — `onTypename` keys typed id-based reads/writes,
+/// `fragmentName` disambiguates the plan, `Data` is a `@CachebayData`
+/// struct so `__cachebayFieldNames` powers the KeyPath patch builder.
+@CachebayData(typename: "Post")
+private struct TestPostFieldsData: Identifiable, Sendable, Hashable, CachebayValue {
+    let __typename: String
+    let id: String
+    let title: String
+}
+private enum TestPostFields: CachebayFragment {
+    typealias Data = TestPostFieldsData
+    static let fragmentName = "TestPostFields"
+    static let onTypename = "Post"
+    static let document: QueryDocument = .source("fragment TestPostFields on Post { __typename id title }")
+    static var __cachebayFieldNames: [AnyKeyPath: String] { TestPostFieldsData.__cachebayFieldNames }
+}
+
+/// Variant fragment rooted on a concrete impl (`SpeechClip`) of an
+/// interface (`TimelineClip`). Patching it must route through the
+/// interface canonical key. Only the mutable fields are selected.
+@CachebayData(typename: "SpeechClip")
+private struct SpeechClipMutablesData: Sendable, Hashable, CachebayValue {
+    let muted: Bool
+    let volume: Double
+}
+private enum SpeechClipMutables: CachebayFragment {
+    typealias Data = SpeechClipMutablesData
+    static let fragmentName = "SpeechClipMutables"
+    static let onTypename = "SpeechClip"
+    static let document: QueryDocument = .source("fragment SpeechClipMutables on SpeechClip { id muted volume }")
+    static var __cachebayFieldNames: [AnyKeyPath: String] { SpeechClipMutablesData.__cachebayFieldNames }
+}
+
 final class TypedAPITests: XCTestCase {
-
-    // MARK: - Fixtures
-
-    /// Single-entity query. Mirrors the codegen pattern for ops with one
-    /// required variable and an object-typed root selection.
-    struct TestPost: Cachebay.Operation {
-        static let networkQuery = """
-        query TestPost($id: ID!) {
-          post(id: $id) { __typename id title }
-        }
-        """
-        static let document: QueryDocument = .source(networkQuery)
-
-        struct Variables: Cachebay.OperationVariables {
-            var id: String
-            init(id: String) { self.id = id }
-            var __cachebay: [String: JSONValue] { ["id": .string(id)] }
-        }
-
-        struct Data: Sendable, Cachebay.OperationData {
-            var __data: [String: JSONValue]
-            init(__data: [String: JSONValue]) { self.__data = __data }
-            var post: Post? {
-                get { (__data["post"]?.object).map { Post(__data: $0) } }
-                set { __data["post"] = newValue.map { .object($0.__data) } ?? .null }
-            }
-            struct Post: Sendable, Cachebay.OperationData {
-                var __data: [String: JSONValue]
-                init(__data: [String: JSONValue]) { self.__data = __data }
-                var id: String { (__data["id"]?.string) ?? "" }
-                var title: String {
-                    get { (__data["title"]?.string) ?? "" }
-                    set { __data["title"] = .string(newValue) }
-                }
-                var __typename: String { (__data["__typename"]?.string) ?? "" }
-            }
-        }
-    }
-
-    /// Variable-less query — `Variables` aliases to `EmptyVariables`,
-    /// callers pass `.init()`.
-    struct TestMe: Cachebay.Operation {
-        static let networkQuery = "query TestMe { me { __typename id name } }"
-        static let document: QueryDocument = .source(networkQuery)
-        typealias Variables = Cachebay.EmptyVariables
-        struct Data: Sendable, Cachebay.OperationData {
-            var __data: [String: JSONValue]
-            init(__data: [String: JSONValue]) { self.__data = __data }
-            var me: Me? {
-                get { (__data["me"]?.object).map { Me(__data: $0) } }
-                set { __data["me"] = newValue.map { .object($0.__data) } ?? .null }
-            }
-            struct Me: Sendable, Cachebay.OperationData {
-                var __data: [String: JSONValue]
-                init(__data: [String: JSONValue]) { self.__data = __data }
-                var id: String { (__data["id"]?.string) ?? "" }
-                var name: String { (__data["name"]?.string) ?? "" }
-            }
-        }
-    }
-
-    /// Mutation fixture — same protocol, different cache plan kind.
-    struct TestUpdatePost: Cachebay.Operation {
-        static let networkQuery = """
-        mutation TestUpdatePost($id: ID!, $title: String!) {
-          updatePost(id: $id, title: $title) { __typename id title }
-        }
-        """
-        static let document: QueryDocument = .source(networkQuery)
-        struct Variables: Cachebay.OperationVariables {
-            var id: String
-            var title: String
-            init(id: String, title: String) { self.id = id; self.title = title }
-            var __cachebay: [String: JSONValue] {
-                ["id": .string(id), "title": .string(title)]
-            }
-        }
-        struct Data: Sendable, Cachebay.OperationData {
-            var __data: [String: JSONValue]
-            init(__data: [String: JSONValue]) { self.__data = __data }
-            var updatePost: UpdatePost? {
-                get { (__data["updatePost"]?.object).map { UpdatePost(__data: $0) } }
-                set { __data["updatePost"] = newValue.map { .object($0.__data) } ?? .null }
-            }
-            struct UpdatePost: Sendable, Cachebay.OperationData {
-                var __data: [String: JSONValue]
-                init(__data: [String: JSONValue]) { self.__data = __data }
-                var id: String { (__data["id"]?.string) ?? "" }
-                var title: String { (__data["title"]?.string) ?? "" }
-            }
-        }
-    }
-
-    /// Subscription fixture.
-    struct TestPostUpdated: Cachebay.Operation {
-        static let networkQuery = """
-        subscription TestPostUpdated($id: ID!) {
-          postUpdated(id: $id) { __typename id title }
-        }
-        """
-        static let document: QueryDocument = .source(networkQuery)
-        struct Variables: Cachebay.OperationVariables {
-            var id: String
-            init(id: String) { self.id = id }
-            var __cachebay: [String: JSONValue] { ["id": .string(id)] }
-        }
-        struct Data: Sendable, Cachebay.OperationData {
-            var __data: [String: JSONValue]
-            init(__data: [String: JSONValue]) { self.__data = __data }
-            var postUpdated: PostUpdated? {
-                get { (__data["postUpdated"]?.object).map { PostUpdated(__data: $0) } }
-                set { __data["postUpdated"] = newValue.map { .object($0.__data) } ?? .null }
-            }
-            struct PostUpdated: Sendable, Cachebay.OperationData {
-                var __data: [String: JSONValue]
-                init(__data: [String: JSONValue]) { self.__data = __data }
-                var id: String { (__data["id"]?.string) ?? "" }
-                var title: String { (__data["title"]?.string) ?? "" }
-            }
-        }
-    }
-
-    /// Connection-shaped query — used to assert the layered optimistic
-    /// `linkNode<N: OperationData>` / `unlinkNode` flow on a Relay-style
-    /// canonical record. The `@connection` directive registers the
-    /// canonical so `b.connection(ConnectionSelector(key: "posts"))`
-    /// resolves it. No pagination args so the read materialises the
-    /// full canonical (no window slicing on cursors that optimistic
-    /// edges don't carry).
-    struct TestPosts: Cachebay.Operation {
-        static let networkQuery = """
-        query TestPosts {
-          posts @connection(mode: "infinite") {
-            __typename
-            pageInfo { __typename hasNextPage }
-            edges { __typename cursor node { __typename id title } }
-          }
-        }
-        """
-        static let document: QueryDocument = .source(networkQuery)
-        typealias Variables = Cachebay.EmptyVariables
-        struct Data: Sendable, Cachebay.OperationData {
-            var __data: [String: JSONValue]
-            init(__data: [String: JSONValue]) { self.__data = __data }
-            var posts: Posts? {
-                get { (__data["posts"]?.object).map { Posts(__data: $0) } }
-                set { __data["posts"] = newValue.map { .object($0.__data) } ?? .null }
-            }
-            struct Posts: Sendable, Cachebay.OperationData {
-                var __data: [String: JSONValue]
-                init(__data: [String: JSONValue]) { self.__data = __data }
-                var pageInfo: PageInfo {
-                    get { ((__data["pageInfo"]?.object).map { PageInfo(__data: $0) })! }
-                    set { __data["pageInfo"] = .object(newValue.__data) }
-                }
-                var edges: [Edges]? {
-                    get { (__data["edges"]?.array)?.compactMap {
-                        if case .object(let o) = $0 { return Edges(__data: o) } else { return nil }
-                    } }
-                    set { __data["edges"] = newValue.map { .array($0.map { .object($0.__data) }) } ?? .null }
-                }
-                struct PageInfo: Sendable, Cachebay.OperationData {
-                    var __data: [String: JSONValue]
-                    init(__data: [String: JSONValue]) { self.__data = __data }
-                    var hasNextPage: Bool { (__data["hasNextPage"]?.bool) ?? false }
-                }
-                struct Edges: Sendable, Cachebay.OperationData, Cachebay.ConnectionEdge {
-                    var __data: [String: JSONValue]
-                    init(__data: [String: JSONValue]) { self.__data = __data }
-                    var cursor: String { (__data["cursor"]?.string) ?? "" }
-                    var node: Node? {
-                        get { (__data["node"]?.object).map { Node(__data: $0) } }
-                        set { __data["node"] = newValue.map { .object($0.__data) } ?? .null }
-                    }
-                    struct Node: Sendable, Cachebay.OperationData {
-                        var __data: [String: JSONValue]
-                        init(__data: [String: JSONValue]) { self.__data = __data }
-                        var id: String { (__data["id"]?.string) ?? "" }
-                        var title: String { (__data["title"]?.string) ?? "" }
-                    }
-                }
-            }
-        }
-    }
-
-    /// Fragment fixture. Mirrors codegen output: `onTypename` for typed
-    /// id-keyed reads/writes, `fragmentName` for plan disambiguation, all
-    /// scalar accessors emit `get`/`set` so a closure-built draft can
-    /// write through.
-    struct TestPostFields: Cachebay.Fragment {
-        static let networkQuery = "fragment TestPostFields on Post { __typename id title }"
-        static let document: QueryDocument = .source(networkQuery)
-        static let fragmentName = "TestPostFields"
-        static let onTypename = "Post"
-        typealias Variables = Cachebay.EmptyVariables
-        struct Data: Sendable, Cachebay.OperationData {
-            var __data: [String: JSONValue]
-            init(__data: [String: JSONValue]) { self.__data = __data }
-            var __typename: String {
-                get { (__data["__typename"]?.string) ?? "" }
-                set { __data["__typename"] = .string(newValue) }
-            }
-            var id: String {
-                get { (__data["id"]?.string) ?? "" }
-                set { __data["id"] = .string(newValue) }
-            }
-            var title: String {
-                get { (__data["title"]?.string) ?? "" }
-                set { __data["title"] = .string(newValue) }
-            }
-        }
-    }
 
     // MARK: - Helpers
 
@@ -241,20 +145,14 @@ final class TypedAPITests: XCTestCase {
         return (client, httpT, wsT)
     }
 
-    // MARK: - readQuery / writeQuery typed
+    // MARK: - read / write (typed)
 
     func test_typedReadQuery_writeQuery_roundtrip() throws {
         let (client, _, _) = makeClient()
-        let payload = TestPost.Data(__data: [
-            "post": .object([
-                "__typename": .string("Post"),
-                "id": .string("p1"),
-                "title": .string("Hello typed"),
-            ])
-        ])
-        try client.writeQuery(query: TestPost.self, variables: .init(id: "p1"), data: payload)
+        let payload = TestPost.Data(post: .init(id: "p1", title: "Hello typed"))
+        try client.write(query: TestPost.self, variables: .init(id: "p1"), data: payload)
 
-        let read = client.readQuery(query: TestPost.self, variables: .init(id: "p1"))
+        let read = client.read(TestPost.self, variables: .init(id: "p1"))
         XCTAssertNotNil(read)
         XCTAssertEqual(read?.post?.id, "p1")
         XCTAssertEqual(read?.post?.title, "Hello typed")
@@ -263,75 +161,15 @@ final class TypedAPITests: XCTestCase {
 
     func test_typedReadQuery_returnsNil_onCacheMiss() {
         let (client, _, _) = makeClient()
-        XCTAssertNil(client.readQuery(query: TestPost.self, variables: .init(id: "missing")))
+        XCTAssertNil(client.read(TestPost.self, variables: .init(id: "missing")))
     }
 
     func test_typedReadQuery_emptyVariables_compiles() throws {
         let (client, _, _) = makeClient()
-        let payload = TestMe.Data(__data: [
-            "me": .object([
-                "__typename": .string("User"),
-                "id": .string("u1"),
-                "name": .string("Alice"),
-            ])
-        ])
-        try client.writeQuery(query: TestMe.self, variables: .init(), data: payload)
-        let read = client.readQuery(query: TestMe.self, variables: .init())
+        let payload = TestMe.Data(me: .init(id: "u1", name: "Alice"))
+        try client.write(query: TestMe.self, variables: .init(), data: payload)
+        let read = client.read(TestMe.self, variables: .init())
         XCTAssertEqual(read?.me?.name, "Alice")
-    }
-
-    // MARK: - Object accessor setters
-
-    func test_objectAccessorSetter_writesBackToData() {
-        var data = TestPost.Data(__data: [
-            "post": .object([
-                "__typename": .string("Post"),
-                "id": .string("p1"),
-                "title": .string("old"),
-            ])
-        ])
-        XCTAssertEqual(data.post?.title, "old")
-
-        // Optional-chained mutation through computed property — only
-        // works when the accessor exposes a setter.
-        data.post?.title = "new"
-        XCTAssertEqual(data.post?.title, "new")
-
-        // Underlying __data dict reflects the write.
-        XCTAssertEqual(data.__data["post"]?["title"]?.string, "new")
-    }
-
-    func test_objectAccessorSetter_assignNil_setsNullJson() {
-        var data = TestPost.Data(__data: [
-            "post": .object([
-                "__typename": .string("Post"),
-                "id": .string("p1"),
-                "title": .string("hi"),
-            ])
-        ])
-        data.post = nil
-        XCTAssertNil(data.post)
-        XCTAssertEqual(data.__data["post"], .null)
-    }
-
-    func test_objectListAccessorSetter_roundTrips() {
-        var posts = TestPosts.Data.Posts(__data: [
-            "__typename": .string("PostConnection"),
-            "pageInfo": .object(["__typename": .string("PageInfo"), "hasNextPage": .bool(false)]),
-            "edges": .array([]),
-        ])
-        let edge = TestPosts.Data.Posts.Edges(__data: [
-            "__typename": .string("PostEdge"),
-            "cursor": .string("c1"),
-            "node": .object([
-                "__typename": .string("Post"),
-                "id": .string("p1"),
-                "title": .string("first"),
-            ]),
-        ])
-        posts.edges = [edge]
-        XCTAssertEqual(posts.edges?.count, 1)
-        XCTAssertEqual(posts.edges?.first?.node?.id, "p1")
     }
 
     // MARK: - Typed optimistic patch (b.patch<F>)
@@ -339,84 +177,48 @@ final class TypedAPITests: XCTestCase {
     func test_typedPatch_writesOnlyTouchedFields() throws {
         let (client, _, _) = makeClient()
         // Seed the entity record with a known baseline.
-        try client.writeFragment(
-            fragment: TestPostFields.self,
-            id: "p1",
-            variables: .init(),
-            data: TestPostFields.Data(__data: [
-                "__typename": .string("Post"),
-                "id": .string("p1"),
-                "title": .string("v1"),
-            ])
-        )
+        try client.writeFragment(fragment: TestPostFields.self, id: "p1", data: .init(id: "p1", title: "v1"))
 
         let tx = client.modifyOptimistic { b in
-            b.patch(fragment: TestPostFields.self, id: "p1") { draft in
-                draft.title = "v2"
-            }
+            b.patch(fragment: TestPostFields.self, id: "p1") { $0.set(\.title, "v2") }
         }
-        let after = client.readFragment(fragment: TestPostFields.self, id: "p1", variables: .init())
+        let after = client.readFragment(fragment: TestPostFields.self, id: "p1")
         XCTAssertEqual(after?.title, "v2")
 
         // Revert restores the baseline.
         tx.revert()
-        let reverted = client.readFragment(fragment: TestPostFields.self, id: "p1", variables: .init())
+        let reverted = client.readFragment(fragment: TestPostFields.self, id: "p1")
         XCTAssertEqual(reverted?.title, "v1")
     }
 
     func test_typedPatch_commit_replaysWithServerData() throws {
         let (client, _, _) = makeClient()
-        try client.writeFragment(
-            fragment: TestPostFields.self,
-            id: "p1",
-            variables: .init(),
-            data: TestPostFields.Data(__data: [
-                "__typename": .string("Post"),
-                "id": .string("p1"),
-                "title": .string("v1"),
-            ])
-        )
+        try client.writeFragment(fragment: TestPostFields.self, id: "p1", data: .init(id: "p1", title: "v1"))
 
         // Split-closure pattern: optimistic closure patches "Drafting…",
-        // commit closure captures the (simulated) server-confirmed
-        // title from outer scope and writes it.
+        // commit closure writes the (simulated) server-confirmed title.
         let tx = client.modifyOptimistic { b in
-            b.patch(fragment: TestPostFields.self, id: "p1") { draft in
-                draft.title = "Drafting…"
-            }
+            b.patch(fragment: TestPostFields.self, id: "p1") { $0.set(\.title, "Drafting…") }
         }
-        XCTAssertEqual(client.readFragment(fragment: TestPostFields.self, id: "p1", variables: .init())?.title, "Drafting…")
+        XCTAssertEqual(client.readFragment(fragment: TestPostFields.self, id: "p1")?.title, "Drafting…")
 
         let serverTitle = "Server confirmed"
         tx.commit { b in
-            b.patch(fragment: TestPostFields.self, id: "p1") { draft in
-                draft.title = serverTitle
-            }
+            b.patch(fragment: TestPostFields.self, id: "p1") { $0.set(\.title, serverTitle) }
         }
-        XCTAssertEqual(client.readFragment(fragment: TestPostFields.self, id: "p1", variables: .init())?.title, "Server confirmed")
+        XCTAssertEqual(client.readFragment(fragment: TestPostFields.self, id: "p1")?.title, "Server confirmed")
     }
 
     func test_typedPatch_acceptsIntId() throws {
         // `LosslessStringConvertible` accepts both String and Int for id —
         // the cache key is built as `"\(onTypename):\(id)"`.
         let (client, _, _) = makeClient()
-        try client.writeFragment(
-            fragment: TestPostFields.self,
-            id: 42,
-            variables: .init(),
-            data: TestPostFields.Data(__data: [
-                "__typename": .string("Post"),
-                "id": .string("42"),
-                "title": .string("v1"),
-            ])
-        )
+        try client.writeFragment(fragment: TestPostFields.self, id: 42, data: .init(id: "42", title: "v1"))
 
         client.modifyOptimistic { b in
-            b.patch(fragment: TestPostFields.self, id: 42) { draft in
-                draft.title = "via int id"
-            }
+            b.patch(fragment: TestPostFields.self, id: 42) { $0.set(\.title, "via int id") }
         }
-        XCTAssertEqual(client.readFragment(fragment: TestPostFields.self, id: 42, variables: .init())?.title, "via int id")
+        XCTAssertEqual(client.readFragment(fragment: TestPostFields.self, id: 42)?.title, "via int id")
     }
 
     func test_typedPatch_variantFragment_routesViaInterfaceCanonicalKey() throws {
@@ -429,27 +231,6 @@ final class TypedAPITests: XCTestCase {
             suspensionTimeout: 0
         ))
 
-        // Define a variant fragment rooted on the concrete impl.
-        struct SpeechClipMutables: Cachebay.Fragment {
-            static let networkQuery = "fragment SpeechClipMutables on SpeechClip { id muted volume }"
-            static let document: QueryDocument = .source(networkQuery)
-            static let fragmentName = "SpeechClipMutables"
-            static let onTypename = "SpeechClip"
-            typealias Variables = Cachebay.EmptyVariables
-            struct Data: Sendable, Cachebay.OperationData {
-                var __data: [String: JSONValue]
-                init(__data: [String: JSONValue]) { self.__data = __data }
-                var muted: Bool {
-                    get { (__data["muted"]?.bool) ?? false }
-                    set { __data["muted"] = .bool(newValue) }
-                }
-                var volume: Double {
-                    get { (__data["volume"]?.double) ?? 0.0 }
-                    set { __data["volume"] = .double(newValue) }
-                }
-            }
-        }
-
         // Seed the canonical record under the interface key.
         let seed: [String: JSONValue] = [
             "__typename": .string("SpeechClip"),
@@ -460,40 +241,32 @@ final class TypedAPITests: XCTestCase {
         client.graph.putRecord("TimelineClip:c1", seed)
 
         let tx = client.modifyOptimistic { b in
-            b.patch(fragment: SpeechClipMutables.self, id: "c1") { d in
-                d.muted = true
-                d.volume = 0.5
+            b.patch(fragment: SpeechClipMutables.self, id: "c1") {
+                $0.set(\.muted, true)
+                $0.set(\.volume, 0.5)
             }
         }
         _ = tx
 
-        // Patch must have landed on the canonical interface key, not on
-        // a separate `SpeechClip:c1` record.
+        // Patch must have landed on the canonical interface key, not on a
+        // separate `SpeechClip:c1` record.
         let canonical = client.graph.getRecord("TimelineClip:c1")
         XCTAssertEqual(canonical?["muted"]?.bool, true)
         XCTAssertEqual(canonical?["volume"]?.double, 0.5)
-        XCTAssertNil(client.graph.getRecord("SpeechClip:c1"), "variant fragment must NOT create a parallel record at the concrete typename key")
+        XCTAssertNil(client.graph.getRecord("SpeechClip:c1"),
+            "variant fragment must NOT create a parallel record at the concrete typename key")
     }
 
     func test_typedDelete_removesEntity() throws {
         let (client, _, _) = makeClient()
-        try client.writeFragment(
-            fragment: TestPostFields.self,
-            id: "p1",
-            variables: .init(),
-            data: TestPostFields.Data(__data: [
-                "__typename": .string("Post"),
-                "id": .string("p1"),
-                "title": .string("v1"),
-            ])
-        )
-        XCTAssertNotNil(client.readFragment(fragment: TestPostFields.self, id: "p1", variables: .init()))
+        try client.writeFragment(fragment: TestPostFields.self, id: "p1", data: .init(id: "p1", title: "v1"))
+        XCTAssertNotNil(client.readFragment(fragment: TestPostFields.self, id: "p1"))
 
         let tx = client.modifyOptimistic { b in
             b.delete(fragment: TestPostFields.self, id: "p1")
         }
         tx.dispose()
-        XCTAssertNil(client.readFragment(fragment: TestPostFields.self, id: "p1", variables: .init()))
+        XCTAssertNil(client.readFragment(fragment: TestPostFields.self, id: "p1"))
     }
 
     // MARK: - Typed connection linkNode / unlinkNode
@@ -501,17 +274,11 @@ final class TypedAPITests: XCTestCase {
     func test_typedConnectionAddNode_typedNode_insertsAtHead() throws {
         let (client, _, _) = makeClient()
 
-        // Two typed nodes — same shape that comes back from a mutation.
-        let p2 = TestPosts.Data.Posts.Edges.Node(__data: [
-            "__typename": .string("Post"),
-            "id": .string("p2"),
-            "title": .string("second"),
-        ])
-        let p1 = TestPosts.Data.Posts.Edges.Node(__data: [
-            "__typename": .string("Post"),
-            "id": .string("p1"),
-            "title": .string("first"),
-        ])
+        // Two typed node payloads — same shape a mutation response carries.
+        // `linkNode(node:)` extracts `__typename` + `id` from the typed
+        // value; it is purely structural and writes no entity scalars.
+        let p2 = TestPostFields.Data(id: "p2", title: "second")
+        let p1 = TestPostFields.Data(id: "p1", title: "first")
 
         let tx = client.modifyOptimistic { b in
             let c = b.connection(ConnectionSelector(key: "posts"))
@@ -520,10 +287,8 @@ final class TypedAPITests: XCTestCase {
         }
         tx.dispose()
 
-        // Verify the canonical's ordered edge list directly — linkNode is
-        // purely structural in v0.7.0, so we read the edge node refs (the
-        // entity cache keys) instead of reading scalars from the entity
-        // record (which linkNode doesn't write).
+        // Read the canonical's ordered edge list directly — linkNode keys
+        // the edge node refs (the entity cache keys) without writing scalars.
         let canonicalKey: CacheKey = "@connection.posts({})"
         let edges = client.graph.getField(canonicalKey, CachebayConstants.connectionEdgesField)?.refList ?? []
         let nodeRefs: [String] = edges.compactMap { client.graph.getField($0, "node")?.ref }
@@ -534,20 +299,11 @@ final class TypedAPITests: XCTestCase {
         let (client, _, _) = makeClient()
 
         // Optimistic write of the entity scalars via `b.writeFragment`,
-        // then a structural `linkNode(fragment:id:)` keys the new edge
-        // at the just-seeded entity. With v0.7.0, linkNode is purely
-        // structural and does NOT write entity scalars on its own — the
-        // typed closure form was retired in favour of this two-step.
+        // then a structural `linkNode(fragment:id:)` keys the new edge at
+        // the just-seeded entity. linkNode itself is purely structural —
+        // the entity scalars come from the writeFragment.
         let tx = client.modifyOptimistic { b in
-            b.writeFragment(
-                fragment: TestPostFields.self,
-                id: "tmp:1",
-                data: TestPostFields.Data(__data: [
-                    CachebayConstants.typenameField: .string("Post"),
-                    "id": .string("tmp:1"),
-                    "title": .string("Drafting…"),
-                ])
-            )
+            b.writeFragment(fragment: TestPostFields.self, id: "tmp:1", data: .init(id: "tmp:1", title: "Drafting…"))
             b.connection(ConnectionSelector(key: "posts"))
              .linkNode(fragment: TestPostFields.self, id: "tmp:1", options: LinkNodeOptions(position: .start))
         }
@@ -565,7 +321,7 @@ final class TypedAPITests: XCTestCase {
     func test_typedConnectionRemoveNode_byBareId() throws {
         let (client, _, _) = makeClient()
 
-        // Seed two optimistic nodes, then drop one by typed bare id.
+        // Seed two structural nodes, then drop one by typed bare id.
         let tx = client.modifyOptimistic { b in
             let c = b.connection(ConnectionSelector(key: "posts"))
             c.linkNode(.object(["__typename": "Post", "id": "p1"]), options: LinkNodeOptions(position: .end))
@@ -583,9 +339,7 @@ final class TypedAPITests: XCTestCase {
     func test_typedAddNode_revert_restoresBaseline() throws {
         let (client, _, _) = makeClient()
 
-        // Baseline: one committed node already in the canonical (added
-        // via a previous, committed layer — same path the runtime would
-        // build during a network response normalisation).
+        // Baseline: one committed node already in the canonical.
         let baseline = client.modifyOptimistic { b in
             b.connection(ConnectionSelector(key: "posts"))
              .linkNode(.object(["__typename": "Post", "id": "p2"]), options: LinkNodeOptions(position: .end))
@@ -595,19 +349,10 @@ final class TypedAPITests: XCTestCase {
         let canonicalKey: CacheKey = "@connection.posts({})"
         XCTAssertEqual(client.graph.getField(canonicalKey, CachebayConstants.connectionEdgesField)?.refList?.count, 1)
 
-        // Optimistic add via writeFragment + typed linkNode — the
-        // entity is seeded into the optimistic layer, then linked
-        // structurally into the connection.
+        // Optimistic add via writeFragment + typed linkNode — the entity is
+        // seeded into the optimistic layer, then linked into the connection.
         let tx = client.modifyOptimistic { b in
-            b.writeFragment(
-                fragment: TestPostFields.self,
-                id: "tmp:rollback",
-                data: TestPostFields.Data(__data: [
-                    CachebayConstants.typenameField: .string("Post"),
-                    "id": .string("tmp:rollback"),
-                    "title": .string("won't survive"),
-                ])
-            )
+            b.writeFragment(fragment: TestPostFields.self, id: "tmp:rollback", data: .init(id: "tmp:rollback", title: "won't survive"))
             b.connection(ConnectionSelector(key: "posts"))
              .linkNode(fragment: TestPostFields.self, id: "tmp:rollback", options: LinkNodeOptions(position: .start))
         }
@@ -620,7 +365,7 @@ final class TypedAPITests: XCTestCase {
         XCTAssertEqual(nodeRefs, ["Post:p2"], "revert must restore the pre-layer edge list exactly")
     }
 
-    // MARK: - executeQuery / executeMutation typed
+    // MARK: - execute query / mutation (async, typed)
 
     func test_typedExecuteQuery_decodesNetworkResponse() async throws {
         let http = MockHTTPTransport()
@@ -633,7 +378,7 @@ final class TypedAPITests: XCTestCase {
         ]))
         let (client, _, _) = makeClient(http: http)
 
-        let result = try await client.executeQuery(query: TestPost.self, variables: .init(id: "p1"))
+        let result = try await client.execute(TestPost.self, variables: .init(id: "p1"))
         XCTAssertEqual(result.data?.post?.title, "from network")
         XCTAssertEqual(result.meta?.source, .network)
     }
@@ -649,10 +394,7 @@ final class TypedAPITests: XCTestCase {
         ]))
         let (client, _, _) = makeClient(http: http)
 
-        let result = try await client.executeMutation(
-            mutation: TestUpdatePost.self,
-            variables: .init(id: "p1", title: "renamed")
-        )
+        let result = try await client.execute(mutation: TestUpdatePost.self, variables: .init(id: "p1", title: "renamed"))
         XCTAssertEqual(result.data?.updatePost?.title, "renamed")
         XCTAssertEqual(result.data?.updatePost?.id, "p1")
     }
@@ -661,82 +403,28 @@ final class TypedAPITests: XCTestCase {
 
     func test_typedWriteFragment_then_readFragment_byBareId() throws {
         let (client, _, _) = makeClient()
-        let payload = TestPostFields.Data(__data: [
-            "__typename": .string("Post"),
-            "id": .string("p1"),
-            "title": .string("via fragment"),
-        ])
-        // Bare id — typed API constructs cache key as "Post:p1" via
-        // `F.onTypename`. No `Post:` prefix in the call.
-        try client.writeFragment(
-            fragment: TestPostFields.self,
-            id: "p1",
-            variables: .init(),
-            data: payload
-        )
-        let read = client.readFragment(fragment: TestPostFields.self, id: "p1", variables: .init())
+        // Bare id — typed API constructs the cache key as "Post:p1" via
+        // `F.onTypename`. No `Post:` prefix at the call site.
+        try client.writeFragment(fragment: TestPostFields.self, id: "p1", data: .init(id: "p1", title: "via fragment"))
+        let read = client.readFragment(fragment: TestPostFields.self, id: "p1")
         XCTAssertEqual(read?.id, "p1")
         XCTAssertEqual(read?.title, "via fragment")
     }
 
     func test_typedReadFragment_returnsNil_onCacheMiss() {
         let (client, _, _) = makeClient()
-        XCTAssertNil(client.readFragment(
-            fragment: TestPostFields.self,
-            id: "missing",
-            variables: .init()
-        ))
-    }
-
-    func test_operationData_as_fragment_reinterpretsViaSharedData() {
-        // A subscription's typed nested struct shares its selection with
-        // a fragment's `Data` shape — `.as(F.self)` lifts the underlying
-        // `__data` into the fragment without any callsite-level
-        // dictionary access.
-        struct MockSubscriptionRow: Cachebay.OperationData {
-            var __data: [String: JSONValue]
-            init(__data: [String: JSONValue]) { self.__data = __data }
-        }
-        let row = MockSubscriptionRow(__data: [
-            "__typename": .string("Post"),
-            "id": .string("p1"),
-            "title": .string("via .as()"),
-        ])
-        let fragment = row.as(TestPostFields.self)
-        XCTAssertEqual(fragment.id, "p1")
-        XCTAssertEqual(fragment.title, "via .as()")
+        XCTAssertNil(client.readFragment(fragment: TestPostFields.self, id: "missing"))
     }
 
     func test_typedFragment_acceptsIntId() throws {
         let (client, _, _) = makeClient()
-        try client.writeFragment(
-            fragment: TestPostFields.self,
-            id: 99,
-            variables: .init(),
-            data: TestPostFields.Data(__data: [
-                "__typename": .string("Post"),
-                "id": .string("99"),
-                "title": .string("int-keyed"),
-            ])
-        )
-        XCTAssertEqual(
-            client.readFragment(fragment: TestPostFields.self, id: 99, variables: .init())?.title,
-            "int-keyed"
-        )
+        try client.writeFragment(fragment: TestPostFields.self, id: 99, data: .init(id: "99", title: "int-keyed"))
+        XCTAssertEqual(client.readFragment(fragment: TestPostFields.self, id: 99)?.title, "int-keyed")
     }
 
     func test_typedWatchFragment_emitsInitial_andUpdates() throws {
         let (client, _, _) = makeClient()
-        try client.writeFragment(
-            fragment: TestPostFields.self,
-            id: "p1",
-            variables: .init(),
-            data: TestPostFields.Data(__data: [
-                "__typename": .string("Post"),
-                "id": .string("p1"),
-                "title": .string("initial"),
-            ])
-        )
+        try client.writeFragment(fragment: TestPostFields.self, id: "p1", data: .init(id: "p1", title: "initial"))
 
         let received = ReceivedTitles()
         let exp = expectation(description: "fragment update fires")
@@ -744,7 +432,6 @@ final class TypedAPITests: XCTestCase {
         let handle = try client.watchFragment(
             fragment: TestPostFields.self,
             id: "p1",
-            variables: .init(),
             immediate: true,
             onData: { data in
                 received.append(data.title)
@@ -753,261 +440,11 @@ final class TypedAPITests: XCTestCase {
         )
 
         // Mutate via fragment write — should re-fire the watcher.
-        try client.writeFragment(
-            fragment: TestPostFields.self,
-            id: "p1",
-            variables: .init(),
-            data: TestPostFields.Data(__data: [
-                "__typename": .string("Post"),
-                "id": .string("p1"),
-                "title": .string("updated"),
-            ])
-        )
+        try client.writeFragment(fragment: TestPostFields.self, id: "p1", data: .init(id: "p1", title: "updated"))
 
         wait(for: [exp], timeout: 1.0)
         XCTAssertEqual(received.snapshot(), ["initial", "updated"])
         handle.unsubscribe()
-    }
-
-    // MARK: - ConnectionEdge sugar
-    //
-    // Generated edge structs always have the same shape: `node: Node?`
-    // where `Node: OperationData`. The `ConnectionEdge` protocol surfaces
-    // that shape so consumers can replace the rote
-    //
-    //     edges.compactMap { $0.node?.as(F.self) }
-    //
-    // with `edges.nodes(as: F.self)`. The cast stays explicit (`as: F.self`),
-    // only the compactMap boilerplate disappears.
-
-    func test_sequenceNodesAs_returnsFragmentDataAcrossEdges() {
-        // Build two edges, both pointing at Post-shaped nodes.
-        let edges: [TestPosts.Data.Posts.Edges] = [
-            .init(__data: [
-                "cursor": .string("c1"),
-                "node": .object([
-                    "__typename": .string("Post"),
-                    "id": .string("p1"),
-                    "title": .string("First"),
-                ])
-            ]),
-            .init(__data: [
-                "cursor": .string("c2"),
-                "node": .object([
-                    "__typename": .string("Post"),
-                    "id": .string("p2"),
-                    "title": .string("Second"),
-                ])
-            ]),
-        ]
-
-        let posts = edges.nodes(as: TestPostFields.self)
-        XCTAssertEqual(posts.map { $0.id }, ["p1", "p2"])
-        XCTAssertEqual(posts.map { $0.title }, ["First", "Second"])
-    }
-
-    /// Counterpart to `nodes(as:)` — when the consumer wants the
-    /// operation-projection node type (e.g. `Projects.Data.Projects.Edges.Node`)
-    /// rather than a fragment cast, `.nodes()` unwraps the optional `node`
-    /// without crossing the projection seam. Useful when the call site
-    /// keeps operation-typed helpers downstream.
-    func test_sequenceNodes_unwrapsOperationNodeWithoutFragmentCast() {
-        let edges: [TestPosts.Data.Posts.Edges] = [
-            .init(__data: ["cursor": .string("c1")]),  // missing node
-            .init(__data: [
-                "cursor": .string("c2"),
-                "node": .object([
-                    "__typename": .string("Post"),
-                    "id": .string("p2"),
-                    "title": .string("Has node"),
-                ])
-            ]),
-        ]
-        let nodes = edges.nodes()
-        XCTAssertEqual(nodes.count, 1, "missing-node edges must be skipped")
-        XCTAssertEqual(nodes[0].id, "p2")
-        // Type-check at compile: nodes is `[Edges.Node]`, not a fragment shape.
-        let _: TestPosts.Data.Posts.Edges.Node = nodes[0]
-    }
-
-    // MARK: - Compile-time fragment data factories
-    //
-    // The bug we're solving: `F.Data(__data: [...])` accepts any dict —
-    // miss a field and the materializer silently silences a watching
-    // query at runtime. The fix: codegen-emitted static factories on
-    // `F.Data` (and on each `AsX` subtype) that take every selected
-    // non-optional field as a named parameter. The compiler enforces
-    // coverage; nullable selections get `= nil` defaults.
-    //
-    // These tests pin the *API shape* with a hand-rolled fixture that
-    // mirrors what `cachebay-cli` will emit. The codegen change lands
-    // in a follow-up — tests here document the contract the emitter
-    // must satisfy.
-
-    /// Polymorphic fragment fixture: `Note` (parent) with two
-    /// `... on X` branches (`TextNote`, `ImageNote`). Mirrors the
-    /// `ProjectMessageFields` / `ElementFields` shape from FermentCuts
-    /// — shared scalars on the parent, subtype-specific fields under
-    /// `AsX` accessors. The *desired* additions are static factories
-    /// per subtype on `Data` itself.
-    struct TestNoteFields: Cachebay.Fragment {
-        static let networkQuery = """
-        fragment TestNoteFields on Note {
-          __typename
-          id
-          author
-          ... on TextNote { body wordCount summary }
-          ... on ImageNote { url width height caption }
-        }
-        """
-        static let document: QueryDocument = .source(networkQuery)
-        static let fragmentName = "TestNoteFields"
-        static let onTypename = "Note"
-        typealias Variables = Cachebay.EmptyVariables
-
-        struct Data: Sendable, Cachebay.OperationData {
-            var __data: [String: JSONValue]
-            init(__data: [String: JSONValue]) { self.__data = __data }
-            // Factories — what codegen will emit. Hand-rolled to pin
-            // the contract.
-            //
-            // Required (non-null) fields are positional-named params;
-            // nullable selections get `= nil` defaults. The factory
-            // stamps `__typename` from the type-condition the call
-            // selected — caller never threads a typename string.
-            static func textNote(
-                id: String,
-                author: String,
-                body: String,
-                wordCount: Int,
-                summary: String? = nil
-            ) -> Data {
-                Data(__data: [
-                    "__typename": .string("TextNote"),
-                    "id": .string(id),
-                    "author": .string(author),
-                    "body": .string(body),
-                    "wordCount": .int(Int64(wordCount)),
-                    "summary": summary.map { .string($0) } ?? .null,
-                ])
-            }
-            static func imageNote(
-                id: String,
-                author: String,
-                url: String,
-                width: Int,
-                height: Int,
-                caption: String? = nil
-            ) -> Data {
-                Data(__data: [
-                    "__typename": .string("ImageNote"),
-                    "id": .string(id),
-                    "author": .string(author),
-                    "url": .string(url),
-                    "width": .int(Int64(width)),
-                    "height": .int(Int64(height)),
-                    "caption": caption.map { .string($0) } ?? .null,
-                ])
-            }
-        }
-    }
-
-    /// Each subtype factory must produce a `__data` dict with every
-    /// shared + subtype-specific field, `__typename` stamped, and
-    /// nullable selections present as `.null` (not absent). The
-    /// `.null` is critical: the materializer treats `.none` as "no
-    /// field" (warning) and `.null` as "explicit absent" (allowed).
-    func test_fragmentDataFactory_textNoteSubtype_buildsFullDict() {
-        let data = TestNoteFields.Data.textNote(
-            id: "n1", author: "alice",
-            body: "hello world", wordCount: 2
-        )
-        XCTAssertEqual(data.__data["__typename"], .string("TextNote"),
-            "factory stamps __typename from the subtype it represents")
-        XCTAssertEqual(data.__data["id"], .string("n1"))
-        XCTAssertEqual(data.__data["author"], .string("alice"),
-            "shared (parent-level) fields land alongside subtype-specific")
-        XCTAssertEqual(data.__data["body"], .string("hello world"))
-        XCTAssertEqual(data.__data["wordCount"], .int(2))
-        XCTAssertEqual(data.__data["summary"], .null,
-            "nullable fields the caller omitted must be present as .null — materializer treats .none as 'no field' and warns")
-    }
-
-    func test_fragmentDataFactory_imageNoteSubtype_buildsFullDict() {
-        let data = TestNoteFields.Data.imageNote(
-            id: "n2", author: "bob",
-            url: "https://x", width: 800, height: 600,
-            caption: "hi"
-        )
-        XCTAssertEqual(data.__data["__typename"], .string("ImageNote"))
-        XCTAssertEqual(data.__data["author"], .string("bob"))
-        XCTAssertEqual(data.__data["width"], .int(800))
-        XCTAssertEqual(data.__data["caption"], .string("hi"),
-            "nullable fields the caller passed must round-trip")
-    }
-
-    /// The factory's typed output must round-trip through
-    /// `b.writeFragment` cleanly — that's the entire point of compile-
-    /// time enforcement: building the data correctly is enough.
-    func test_fragmentDataFactory_writeFragment_roundtrip() {
-        let (client, _, _) = makeClient()
-        let data = TestNoteFields.Data.textNote(
-            id: "n1", author: "alice",
-            body: "round trip", wordCount: 2,
-            summary: "S"
-        )
-        client.modifyOptimistic { b in
-            b.writeFragment(fragment: TestNoteFields.self, id: "n1", data: data)
-        }
-        // Cache record matches the factory dict — proves writeFragment
-        // accepts the factory's wire shape with no transformations.
-        let record = client.graph.getRecord("Note:n1")
-        XCTAssertEqual(record?["__typename"], .string("TextNote"))
-        XCTAssertEqual(record?["body"], .string("round trip"))
-        XCTAssertEqual(record?["wordCount"], .int(2))
-        XCTAssertEqual(record?["summary"], .string("S"))
-    }
-
-    /// `Optional<[Edge]>.nodes()` mirrors `nodes(as:)` — nil → `[]`.
-    func test_optionalSequenceNodes_handlesNilAsEmpty() {
-        let nilEdges: [TestPosts.Data.Posts.Edges]? = nil
-        XCTAssertEqual(nilEdges.nodes().count, 0)
-
-        let some: [TestPosts.Data.Posts.Edges]? = [
-            .init(__data: [
-                "cursor": .string("c1"),
-                "node": .object([
-                    "__typename": .string("Post"),
-                    "id": .string("p1"),
-                    "title": .string("First"),
-                ])
-            ]),
-        ]
-        XCTAssertEqual(some.nodes().map { $0.id }, ["p1"])
-    }
-
-    func test_optionalSequenceNodesAs_handlesNilAsEmpty_andSkipsMissingNodes() {
-        // The `data.jobs?.edges` shape: `[Edges]?` — should support
-        // `nodes(as:)` directly without unwrapping.
-        let nilEdges: [TestPosts.Data.Posts.Edges]? = nil
-        XCTAssertEqual(nilEdges.nodes(as: TestPostFields.self).count, 0,
-            ".nodes(as:) on nil sequence must return []")
-
-        // Edge with missing `node` field is skipped (matches the
-        // compactMap semantics of the underlying call).
-        let mixed: [TestPosts.Data.Posts.Edges]? = [
-            .init(__data: ["cursor": .string("c1")]),  // no node
-            .init(__data: [
-                "cursor": .string("c2"),
-                "node": .object([
-                    "__typename": .string("Post"),
-                    "id": .string("p2"),
-                    "title": .string("Has node"),
-                ])
-            ]),
-        ]
-        let posts = mixed.nodes(as: TestPostFields.self)
-        XCTAssertEqual(posts.map { $0.id }, ["p2"])
     }
 }
 

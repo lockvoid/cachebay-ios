@@ -2,12 +2,12 @@ import Foundation
 
 /// A v1.0 typed-struct GraphQL operation.
 ///
-/// Unlike the legacy `Operation` (whose `Data: OperationData` wraps a
-/// `[String: JSONValue]` dict and reads fields lazily), `Data` here is a real
-/// struct/enum that decodes **eagerly** from a materialized record via
-/// `CachebayValue` — produced by the `@CachebayData` / `@CachebayInterface`
-/// macros (CLI-emitted in production). Reads are direct field loads (~1 ns)
-/// and value-diffing is the synthesized `Equatable`.
+/// `Data` is a real struct/enum that decodes **eagerly** from a materialized
+/// record via `CachebayValue` — produced by the `@CachebayData` /
+/// `@CachebayInterface` macros (CLI-emitted in production). Reads are direct
+/// field loads (~1 ns) and value-diffing is the synthesized `Equatable`. (The
+/// pre-1.0 dict-wrapper `Operation`/`OperationData` protocols — whose `Data`
+/// lazily read fields out of a `[String: JSONValue]` dict — have been removed.)
 ///
 /// The decode boundary is the only difference from the JSON-shaped runtime:
 /// `materialize` is unchanged; the typed entry points below decode its result
@@ -17,7 +17,8 @@ import Foundation
 public protocol CachebayOperation: Sendable {
     associatedtype Variables: OperationVariables
     associatedtype Data: CachebayValue & Sendable
-    /// Pre-compiled `CachePlan` (or fall-back source), same as `Operation`.
+    /// Pre-compiled `CachePlan` (or a `.source` fall-back) describing the
+    /// operation's selection set + `@connection` metadata.
     static var document: QueryDocument { get }
 }
 
