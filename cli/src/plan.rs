@@ -78,6 +78,10 @@ pub struct PlanField {
     /// the schema field's `@cachebay(default: …)` directive. Emitted as
     /// `@CachebayDefault(<literal>)` in the typed struct (proposal §6).
     pub default_value: Option<String>,
+    /// Swift type for a custom-scalar leaf, from the scalar's
+    /// `@cachebay(swiftType: "…")` directive (e.g. `Foundation.Date`). When unset,
+    /// custom scalars fall back to `Cachebay.JSONValue` (raw passthrough).
+    pub swift_scalar_type: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -322,6 +326,8 @@ fn lower_field(f: &Field, parent_typename: &str, ctx: &CompilerContext, exec_doc
     // `@cachebay(default: …)` lives on the SCHEMA field definition (not the
     // selection), so read it off the resolved field definition.
     let default_value = parse_cachebay_default(&f.definition.directives);
+    // `@cachebay(swiftType: …)` lives on the SCALAR type definition.
+    let swift_scalar_type = lookup_scalar_swift_type(&ctx.schema, &named_type);
 
     let sel_id = fingerprint_field(
         &response_key,
@@ -351,7 +357,30 @@ fn lower_field(f: &Field, parent_typename: &str, ctx: &CompilerContext, exec_doc
         skip_if,
         include_if,
         default_value,
+        swift_scalar_type,
     }
+}
+
+/// Reads `@cachebay(swiftType: "…")` off a scalar type definition, mapping a
+/// custom scalar (e.g. `Date`) to a Swift type (e.g. `Foundation.Date`). The
+/// consumer is responsible for conforming that type to `CachebayValue`
+/// (Cachebay ships conformances for `URL`/`Date`).
+fn lookup_scalar_swift_type(schema: &apollo_compiler::Schema, named_type: &str) -> Option<String> {
+    use apollo_compiler::schema::ExtendedType;
+    let ExtendedType::Scalar(scalar) = schema.types.get(named_type)? else {
+        return None;
+    };
+    let dir = scalar.directives.iter().find(|d| d.name.as_str() == "cachebay")?;
+    for arg in dir.arguments.iter() {
+        if arg.name.as_str() == "swiftType" {
+            if let Value::String(s) = &*arg.value {
+                if !s.is_empty() {
+                    return Some(s.to_string());
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Reads a `@cachebay(default: …)` construction default off a schema field's
@@ -435,6 +464,7 @@ fn synthetic_typename_field() -> PlanField {
         skip_if: None,
         include_if: None,
         default_value: None,
+        swift_scalar_type: None,
     }
 }
 

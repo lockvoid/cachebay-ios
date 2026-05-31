@@ -808,6 +808,17 @@ fn render_typed_selection(
     }
 }
 
+/// Like `swift_type_for_field` but honours a custom scalar's configured Swift
+/// type (`@cachebay(swiftType:)`). Used only by the typed emitter — the legacy
+/// dict-wrapper accessors still read custom scalars as `JSONValue`.
+fn typed_swift_type_for_field(f: &PlanField) -> String {
+    if let (Some(ty), OutputShape::Leaf { nullable, list }) = (&f.swift_scalar_type, &f.output_shape) {
+        let list_ty = if *list { format!("[{ty}]") } else { ty.clone() };
+        return if *nullable { format!("{list_ty}?") } else { list_ty };
+    }
+    swift_type_for_field(f)
+}
+
 /// `@CachebayData` struct shell for a concrete selection.
 fn render_typed_struct(
     swift_name: &str,
@@ -835,7 +846,7 @@ fn render_typed_struct(
     s.push_str(&format!("{indent}@CachebayData(typename: \"{typename}\")\n"));
     s.push_str(&format!("{indent}public struct {swift_name}: {conf} {{\n"));
     for child in &shared {
-        let ty = swift_type_for_field(child);
+        let ty = typed_swift_type_for_field(child);
         let default_attr = match &child.default_value {
             Some(lit) => format!("@CachebayDefault({lit}) "),
             None => String::new(),
@@ -1471,6 +1482,7 @@ mod codegen_tests {
             skip_if: None,
             include_if: None,
             default_value: None,
+            swift_scalar_type: None,
         }
     }
 
@@ -1498,6 +1510,7 @@ mod codegen_tests {
             skip_if: None,
             include_if: None,
             default_value: None,
+            swift_scalar_type: None,
         }
     }
 
@@ -1660,6 +1673,23 @@ mod codegen_tests {
         assert!(out.contains("@CachebayDefault(0.0) public let speech: Double"), "{out}");
         // Fields without a schema default get no annotation.
         assert!(out.contains("    public let id: String\n"), "{out}");
+    }
+
+    #[test]
+    fn typed_struct_custom_scalar_uses_configured_type() {
+        let mut created = scalar("createdAt", "Date");
+        created.swift_scalar_type = Some("Foundation.Date".into());
+        let mut deleted = scalar("deletedAt", "Date");
+        deleted.swift_scalar_type = Some("Foundation.Date".into());
+        deleted.output_shape = OutputShape::Leaf { nullable: true, list: false };
+        let out = render_typed_struct("Doc", "Doc", &[typename_field(), id_field(), created, deleted], "");
+        assert!(out.contains("public let createdAt: Foundation.Date"), "{out}");
+        assert!(out.contains("public let deletedAt: Foundation.Date?"), "{out}");
+
+        // An unconfigured custom scalar still falls back to JSONValue passthrough.
+        let raw = scalar("blob", "JSON");
+        let out2 = render_typed_struct("D2", "D2", &[typename_field(), id_field(), raw], "");
+        assert!(out2.contains("public let blob: Cachebay.JSONValue"), "{out2}");
     }
 
     // MARK: - partial()
