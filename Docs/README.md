@@ -38,6 +38,7 @@ let result = try await client.executeQuery(
 - **[Operations](./OPERATIONS.md)** — `executeQuery` / `executeMutation` / `executeSubscription`
 - **[Queries](./QUERIES.md)** — `readQuery` / `writeQuery` / `watchQuery`
 - **[Fragments](./FRAGMENTS.md)** — `readFragment` / `writeFragment` / `watchFragment`
+- **[SwiftUI](./SWIFTUI.md)** — `@CachebayQuery` declarative wrapper (`CachebayUI`)
 - **[Mutations](./MUTATIONS.md)** — write merging, optimistic patterns
 - **[Subscriptions](./SUBSCRIPTIONS.md)** — `graphql-transport-ws` over `URLSessionWebSocketTask`
 - **[Relay Connections](./RELAY_CONNECTIONS.md)** — `@connection` directive
