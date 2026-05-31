@@ -73,7 +73,7 @@ let package = Package(
         ),
         .testTarget(
             name: "CachebayTests",
-            dependencies: ["Cachebay", "CachebayGraphQL"],
+            dependencies: ["Cachebay", "CachebayGraphQL", "CachebayMacros"],
             path: "Tests/CachebayTests",
             swiftSettings: strictSettings
         ),
