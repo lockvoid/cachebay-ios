@@ -37,24 +37,22 @@ struct CreateSpellView: View {
         defer { submitting = false }
 
         let tempId = "temp:\(UUID().uuidString)"
-        let optimisticNode: [String: JSONValue] = [
-            "__typename": .string("Spell"),
-            "id": .string(tempId),
-            "name": .string(name),
-            "category": .string(category),
-            "creator": creator.isEmpty ? .null : .string(creator),
-            "effect": .string(effect),
-            "light": light.isEmpty ? .null : .string(light),
-            "imageUrl": .null,
-            "wikiUrl": .null,
-        ]
+        let optimisticSpell = SpellFields.Data(
+            id: tempId,
+            name: name,
+            category: category,
+            creator: creator.isEmpty ? nil : creator,
+            effect: effect,
+            light: light.isEmpty ? nil : light
+        )
 
-        // Optimistic create: write the entity record FIRST, THEN link it into every
-        // matching `Query.spells(...)` canonical (connection writes are structural-only).
+        // Optimistic create: write the entity record FIRST (the typed fragment write
+        // normalizes it into the optimistic layer), THEN link it into every matching
+        // `Query.spells(...)` canonical (connection writes are structural-only).
         let tx = store.client.modifyOptimistic { b in
-            b.patch(.key("Spell:\(tempId)"), optimisticNode, mode: .merge)
+            b.writeFragment(fragment: SpellFields.self, id: tempId, data: optimisticSpell)
             for key in store.client.inspect.getConnectionKeys(parent: .root, key: "spells") {
-                b.connection(key: key).linkNode(.key("Spell:\(tempId)"), options: LinkNodeOptions(position: .start))
+                b.connection(key: key).linkNode(fragment: SpellFields.self, id: tempId, options: LinkNodeOptions(position: .start))
             }
         }
 
@@ -74,7 +72,7 @@ struct CreateSpellView: View {
                 let realId = spell.id
                 tx.commit { b in
                     for key in store.client.inspect.getConnectionKeys(parent: .root, key: "spells") {
-                        b.connection(key: key).linkNode(.key("Spell:\(realId)"), options: LinkNodeOptions(position: .start))
+                        b.connection(key: key).linkNode(fragment: SpellFields.self, id: realId, options: LinkNodeOptions(position: .start))
                     }
                 }
                 dismiss()

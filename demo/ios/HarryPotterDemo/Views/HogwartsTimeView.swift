@@ -32,10 +32,10 @@ struct HogwartsTimeView: View {
         let client = store.client
         subscriptionTask = Task { @Sendable in
             do {
-                let stream = try client.executeSubscription(query: HogwartsTime.networkQuery)
+                let stream = try client.executeSubscription(HogwartsTime.self, variables: .init())
                 for try await event in stream {
                     if Task.isCancelled { break }
-                    if let t = event.data?["hogwartsTimeUpdated"]?["time"]?.string {
+                    if let t = event.data?.hogwartsTimeUpdated.time {
                         await MainActor.run { time = t }
                     }
                 }
