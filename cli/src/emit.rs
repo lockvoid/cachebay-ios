@@ -836,7 +836,11 @@ fn render_typed_struct(
     s.push_str(&format!("{indent}public struct {swift_name}: {conf} {{\n"));
     for child in &shared {
         let ty = swift_type_for_field(child);
-        s.push_str(&format!("{indent}    public let {}: {ty}\n", child.response_key));
+        let default_attr = match &child.default_value {
+            Some(lit) => format!("@CachebayDefault({lit}) "),
+            None => String::new(),
+        };
+        s.push_str(&format!("{indent}    {default_attr}public let {}: {ty}\n", child.response_key));
     }
     // Nested object types become nested `@CachebayData`/`@CachebayInterface`.
     for child in &shared {
@@ -1466,6 +1470,7 @@ mod codegen_tests {
             reuse_fragment: None,
             skip_if: None,
             include_if: None,
+            default_value: None,
         }
     }
 
@@ -1492,6 +1497,7 @@ mod codegen_tests {
             reuse_fragment: None,
             skip_if: None,
             include_if: None,
+            default_value: None,
         }
     }
 
@@ -1636,6 +1642,24 @@ mod codegen_tests {
         assert!(out.contains("public static let onTypename: String = \"Cook\""), "{out}");
         assert!(out.contains("Data.__cachebayFieldNames"), "{out}");
         assert!(out.contains("@CachebayData(typename: \"Cook\")"), "fragment Data guards Cook; {out}");
+    }
+
+    #[test]
+    fn typed_struct_emits_cachebay_default() {
+        let mut rank = scalar("rank", "String");
+        rank.default_value = Some("\"a0\"".into());
+        let mut speech = scalar("speech", "Float");
+        speech.default_value = Some("0.0".into());
+        let out = render_typed_struct(
+            "Video",
+            "VideoElement",
+            &[typename_field(), id_field(), rank, speech],
+            "",
+        );
+        assert!(out.contains("@CachebayDefault(\"a0\") public let rank: String"), "{out}");
+        assert!(out.contains("@CachebayDefault(0.0) public let speech: Double"), "{out}");
+        // Fields without a schema default get no annotation.
+        assert!(out.contains("    public let id: String\n"), "{out}");
     }
 
     // MARK: - partial()

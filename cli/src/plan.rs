@@ -74,6 +74,10 @@ pub struct PlanField {
     /// `@include(if: ...)` argument when present. When the condition
     /// resolves to `false`, the field is excluded.
     pub include_if: Option<DirectiveCondition>,
+    /// Construction default (a Swift literal like `"a0"` / `0.0` / `true`) from
+    /// the schema field's `@cachebay(default: …)` directive. Emitted as
+    /// `@CachebayDefault(<literal>)` in the typed struct (proposal §6).
+    pub default_value: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -315,6 +319,10 @@ fn lower_field(f: &Field, parent_typename: &str, ctx: &CompilerContext, exec_doc
     let output_shape = shape_for_type(&f.ty(), !children.is_empty());
     let named_type = f.ty().inner_named_type().to_string();
 
+    // `@cachebay(default: …)` lives on the SCHEMA field definition (not the
+    // selection), so read it off the resolved field definition.
+    let default_value = parse_cachebay_default(&f.definition.directives);
+
     let sel_id = fingerprint_field(
         &response_key,
         &field_name,
@@ -342,6 +350,30 @@ fn lower_field(f: &Field, parent_typename: &str, ctx: &CompilerContext, exec_doc
         reuse_fragment,
         skip_if,
         include_if,
+        default_value,
+    }
+}
+
+/// Reads a `@cachebay(default: …)` construction default off a schema field's
+/// directive list and renders it as a Swift literal (`"a0"` / `0.0` / `true`).
+fn parse_cachebay_default(directives: &DirectiveList) -> Option<String> {
+    let dir = directives.iter().find(|d| d.name.as_str() == "cachebay")?;
+    for arg in dir.arguments.iter() {
+        if arg.name.as_str() == "default" {
+            return value_to_swift_literal(&arg.value);
+        }
+    }
+    None
+}
+
+fn value_to_swift_literal(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => Some(format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))),
+        Value::Boolean(b) => Some(b.to_string()),
+        Value::Int(i) => Some(i.to_string()),
+        Value::Float(f) => Some(f.to_string()),
+        Value::Enum(name) => Some(format!(".{name}")),
+        _ => None,
     }
 }
 
@@ -402,6 +434,7 @@ fn synthetic_typename_field() -> PlanField {
         reuse_fragment: None,
         skip_if: None,
         include_if: None,
+        default_value: None,
     }
 }
 
