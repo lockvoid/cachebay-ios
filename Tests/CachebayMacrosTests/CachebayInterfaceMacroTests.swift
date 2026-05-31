@@ -1,7 +1,7 @@
 import XCTest
 import SwiftSyntaxMacros
 import SwiftSyntaxMacrosTestSupport
-import CachebayMacrosImpl
+import CachebayMacros
 
 final class CachebayInterfaceMacroTests: XCTestCase {
     // Only the interface macro, so the golden shows just its own output (lifted shared

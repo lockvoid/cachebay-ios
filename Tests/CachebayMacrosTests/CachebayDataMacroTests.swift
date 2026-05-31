@@ -1,7 +1,7 @@
 import XCTest
 import SwiftSyntaxMacros
 import SwiftSyntaxMacrosTestSupport
-import CachebayMacrosImpl
+import CachebayMacros
 
 final class CachebayDataMacroTests: XCTestCase {
     let macros: [String: any Macro.Type] = [

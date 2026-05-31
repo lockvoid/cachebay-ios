@@ -44,7 +44,7 @@ let package = Package(
         // `.macro` plugin below — required to be its own compiler-plugin target.
         .target(
             name: "Cachebay",
-            dependencies: ["CachebayGraphQL", "CachebayMacrosImpl"],
+            dependencies: ["CachebayGraphQL", "CachebayMacros"],
             path: "Sources/Cachebay",
             swiftSettings: strictSettings
         ),
@@ -52,7 +52,7 @@ let package = Package(
         // no deployment target, default language mode to avoid SwiftSyntax
         // strict-concurrency noise.
         .macro(
-            name: "CachebayMacrosImpl",
+            name: "CachebayMacros",
             dependencies: [
                 .product(name: "SwiftSyntax", package: "swift-syntax"),
                 .product(name: "SwiftSyntaxMacros", package: "swift-syntax"),
@@ -60,7 +60,7 @@ let package = Package(
                 .product(name: "SwiftDiagnostics", package: "swift-syntax"),
                 .product(name: "SwiftCompilerPlugin", package: "swift-syntax"),
             ],
-            path: "Sources/CachebayMacrosImpl"
+            path: "Sources/CachebayMacros"
         ),
         .testTarget(
             name: "CachebayGraphQLTests",
@@ -89,7 +89,7 @@ let package = Package(
         .testTarget(
             name: "CachebayMacrosTests",
             dependencies: [
-                "CachebayMacrosImpl",
+                "CachebayMacros",
                 "Cachebay",
                 .product(name: "SwiftSyntaxMacrosTestSupport", package: "swift-syntax"),
             ],
