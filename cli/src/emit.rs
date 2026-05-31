@@ -777,6 +777,126 @@ fn render_nested_type(
     render_selection_struct(&name, &f.named_type, &f.children, indent, &nested_path, extensions)
 }
 
+// =====================================================================
+// v1.0 typed-struct emission (WS6). Emits real `@CachebayData` struct
+// shells + `@CachebayInterface` enums; the macros generate the memberwise
+// init, eager `init?(_dataDict:)`, `__dataDict()`, `CachebayValue`, and the
+// KeyPath field-name table. The CLI only emits the shell + field `let`s +
+// conformances + the typename, so this is far smaller than the dict-wrapper
+// emitter above.
+// =====================================================================
+
+/// Emit a typed selection type. A polymorphic selection (inline fragments that
+/// narrow the parent) becomes a `@CachebayInterface` enum; everything else is a
+/// `@CachebayData` struct.
+fn render_typed_selection(
+    swift_name: &str,
+    parent_named_type: &str,
+    children: &[PlanField],
+    indent: &str,
+) -> String {
+    let (_shared, by_condition) = partition_children(parent_named_type, children);
+    if by_condition.is_empty() {
+        render_typed_struct(swift_name, parent_named_type, children, indent)
+    } else {
+        render_typed_enum(swift_name, parent_named_type, children, indent)
+    }
+}
+
+/// `@CachebayData` struct shell for a concrete selection.
+fn render_typed_struct(
+    swift_name: &str,
+    parent_named_type: &str,
+    children: &[PlanField],
+    indent: &str,
+) -> String {
+    let (shared, _by_condition) = partition_children(parent_named_type, children);
+    let has_typename = shared.iter().any(|c| c.response_key == "__typename");
+    let has_id = shared.iter().any(|c| c.response_key == "id");
+    // Guard on `__typename` only when it is selected (so a concrete record is
+    // validated). Root/inline selections without `__typename` use "" (no guard).
+    let typename = if has_typename { parent_named_type } else { "" };
+
+    let mut conformances: Vec<&str> = Vec::new();
+    if has_id {
+        conformances.push("Identifiable");
+    }
+    conformances.push("Sendable");
+    conformances.push("Hashable");
+    conformances.push("Cachebay.CachebayValue");
+    let conf = conformances.join(", ");
+
+    let mut s = String::new();
+    s.push_str(&format!("{indent}@CachebayData(typename: \"{typename}\")\n"));
+    s.push_str(&format!("{indent}public struct {swift_name}: {conf} {{\n"));
+    for child in &shared {
+        let ty = swift_type_for_field(child);
+        s.push_str(&format!("{indent}    public let {}: {ty}\n", child.response_key));
+    }
+    // Nested object types become nested `@CachebayData`/`@CachebayInterface`.
+    for child in &shared {
+        if !child.children.is_empty() && child.reuse_fragment.is_none() {
+            let name = title_case(&child.response_key);
+            s.push('\n');
+            s.push_str(&render_typed_selection(
+                &name,
+                &child.named_type,
+                &child.children,
+                &format!("{indent}    "),
+            ));
+        }
+    }
+    s.push_str(&format!("{indent}}}\n"));
+    s
+}
+
+/// `@CachebayInterface` enum shell for a polymorphic selection: one case per
+/// narrowed variant + `.unknown(Shared)`, plus the nested variant/Shared structs.
+fn render_typed_enum(
+    swift_name: &str,
+    parent_named_type: &str,
+    children: &[PlanField],
+    indent: &str,
+) -> String {
+    let (shared, by_condition) = partition_children(parent_named_type, children);
+
+    let mut s = String::new();
+    s.push_str(&format!("{indent}@CachebayInterface\n"));
+    s.push_str(&format!(
+        "{indent}public enum {swift_name}: Identifiable, Sendable, Hashable, Cachebay.CachebayValue {{\n"
+    ));
+    // One case per narrowed concrete type, payload = the variant struct.
+    for tc in by_condition.keys() {
+        s.push_str(&format!("{indent}    case {}({tc})\n", lower_first(tc)));
+    }
+    s.push_str(&format!("{indent}    case unknown(Shared)\n"));
+
+    // Shared struct carries the interface-level fields (§3.1).
+    let shared_owned: Vec<PlanField> = shared.iter().map(|f| (*f).clone()).collect();
+    s.push('\n');
+    s.push_str(&render_typed_struct("Shared", "", &shared_owned, &format!("{indent}    ")));
+
+    // One @CachebayData struct per variant = shared fields + the variant's own fields.
+    for (tc, fields) in &by_condition {
+        let mut variant_children: Vec<PlanField> = shared.iter().map(|f| (*f).clone()).collect();
+        variant_children.extend(fields.iter().map(|f| (*f).clone()));
+        s.push('\n');
+        s.push_str(&render_typed_struct(tc, tc, &variant_children, &format!("{indent}    ")));
+    }
+
+    s.push_str(&format!("{indent}}}\n"));
+    s
+}
+
+/// Lowercase the first character (e.g. `VideoElement` -> `videoElement`) for case names.
+fn lower_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) => c.to_lowercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
 /// Partition children into "shared" (no type condition, or condition equal to
 /// the parent selection type) and "per-type-case" groups (each condition that
 /// narrows the parent). Used for both interface/union polymorphism and for
@@ -1267,6 +1387,98 @@ mod codegen_tests {
     fn emit(parent_named_type: &str, children: Vec<PlanField>) -> String {
         let mut extensions: Vec<String> = vec![];
         render_selection_struct("Data", parent_named_type, &children, "", "Data", &mut extensions)
+    }
+
+    fn scalar_on(name: &str, named_type: &str, tc: &str) -> PlanField {
+        let mut f = scalar(name, named_type);
+        f.type_condition = Some(tc.into());
+        f
+    }
+
+    // MARK: - v1.0 typed emission (WS6)
+
+    #[test]
+    fn typed_struct_emits_cachebay_data_shell() {
+        let out = render_typed_struct(
+            "Spell",
+            "Spell",
+            &[typename_field(), id_field(), scalar("name", "String")],
+            "",
+        );
+        assert!(out.contains("@CachebayData(typename: \"Spell\")"), "{out}");
+        assert!(
+            out.contains("public struct Spell: Identifiable, Sendable, Hashable, Cachebay.CachebayValue {"),
+            "{out}"
+        );
+        assert!(out.contains("public let __typename: String"), "{out}");
+        assert!(out.contains("public let id: String"), "{out}");
+        assert!(out.contains("public let name: String"), "{out}");
+        // No dict wrapper in the typed shape.
+        assert!(!out.contains("__data"), "should not emit dict wrapper; {out}");
+    }
+
+    #[test]
+    fn typed_struct_no_id_no_typename_uses_empty_typename() {
+        // An operation-root-like selection with neither id nor __typename.
+        let out = render_typed_struct("Data", "Query", &[scalar("name", "String")], "");
+        assert!(out.contains("@CachebayData(typename: \"\")"), "{out}");
+        assert!(out.contains("public struct Data: Sendable, Hashable, Cachebay.CachebayValue {"), "{out}");
+        assert!(!out.contains("Identifiable"), "{out}");
+    }
+
+    #[test]
+    fn typed_struct_nested_object() {
+        let project = object("project", "Project", vec![typename_field(), id_field(), scalar("name", "String")]);
+        let out = render_typed_struct(
+            "Cook",
+            "Cook",
+            &[typename_field(), id_field(), title_scalar(), project],
+            "",
+        );
+        assert!(out.contains("public let project: Project"), "{out}");
+        assert!(
+            out.contains("public struct Project: Identifiable, Sendable, Hashable, Cachebay.CachebayValue {"),
+            "nested struct emitted; {out}"
+        );
+    }
+
+    #[test]
+    fn typed_interface_emits_enum_with_unknown_and_variants() {
+        let children = vec![
+            typename_field(),
+            id_field(),
+            scalar_on("url", "String", "VideoElement"),
+            scalar_on("waveformURL", "String", "AudioElement"),
+        ];
+        let out = render_typed_enum("Element", "Element", &children, "");
+        assert!(out.contains("@CachebayInterface"), "{out}");
+        assert!(
+            out.contains("public enum Element: Identifiable, Sendable, Hashable, Cachebay.CachebayValue {"),
+            "{out}"
+        );
+        assert!(out.contains("case videoElement(VideoElement)"), "{out}");
+        assert!(out.contains("case audioElement(AudioElement)"), "{out}");
+        assert!(out.contains("case unknown(Shared)"), "{out}");
+        // Shared carries interface-level fields with empty typename.
+        assert!(out.contains("@CachebayData(typename: \"\")"), "shared struct; {out}");
+        // Each variant is a @CachebayData struct = shared + own fields.
+        assert!(out.contains("@CachebayData(typename: \"VideoElement\")"), "{out}");
+        assert!(out.contains("public let url: String"), "{out}");
+    }
+
+    #[test]
+    fn typed_selection_dispatches_struct_vs_enum() {
+        // No type conditions -> struct.
+        let s = render_typed_selection("Spell", "Spell", &[typename_field(), id_field()], "");
+        assert!(s.contains("public struct Spell"), "{s}");
+        // Type conditions -> enum.
+        let e = render_typed_selection(
+            "Element",
+            "Element",
+            &[typename_field(), id_field(), scalar_on("url", "String", "VideoElement")],
+            "",
+        );
+        assert!(e.contains("public enum Element"), "{e}");
     }
 
     // MARK: - partial()

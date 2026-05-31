@@ -73,6 +73,14 @@ extension Float: CachebayValue {
     public var cachebayJSON: JSONValue { .double(Double(self)) }
 }
 
+// Identity: an unmapped custom scalar field is emitted as `JSONValue`, so the raw
+// value round-trips untyped (the escape hatch). Also lets `JSONValue` be used
+// directly as a field type in generated structs.
+extension JSONValue: CachebayValue {
+    public init?(cachebayJSON json: JSONValue) { self = json }
+    public var cachebayJSON: JSONValue { self }
+}
+
 // MARK: - Common custom scalars
 
 extension URL: CachebayValue {
