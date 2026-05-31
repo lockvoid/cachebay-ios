@@ -69,3 +69,43 @@ public extension OptimisticBuilder {
         )
     }
 }
+
+public extension CachebayClient {
+    /// Synchronous typed fragment read from the cache, keyed by bare entity id.
+    /// `nil` on miss or if a required field fails to decode (§7).
+    func readFragment<F: CachebayFragment, ID: LosslessStringConvertible>(
+        fragment frag: F.Type,
+        id: ID
+    ) -> F.Data? {
+        let cacheKey = "\(graph.canonicalTypename(F.onTypename)):\(id)"
+        guard let plan = try? planner.getPlan(F.document, fragmentName: F.fragmentName) else { return nil }
+        guard let raw = fragments.readFragment(plan: plan, rootId: cacheKey, variables: [:]) else { return nil }
+        return F.Data(cachebayJSON: raw)
+    }
+
+    /// Subscribe to a typed fragment view of an entity, keyed by bare id. Fires
+    /// `onData` with a typed `F.Data` whenever the entity's relevant fields change.
+    @discardableResult
+    func watchFragment<F: CachebayFragment, ID: LosslessStringConvertible>(
+        fragment frag: F.Type,
+        id: ID,
+        immediate: Bool = true,
+        onData: @escaping @Sendable (F.Data) -> Void,
+        onError: (@Sendable (CombinedError) -> Void)? = nil
+    ) throws -> WatchFragmentHandle {
+        let cacheKey = "\(graph.canonicalTypename(F.onTypename)):\(id)"
+        let plan = try planner.getPlan(F.document, fragmentName: F.fragmentName)
+        return fragments.watchFragment(
+            plan: plan,
+            document: F.document,
+            fragmentName: F.fragmentName,
+            rootId: cacheKey,
+            options: WatchFragmentOptions(
+                variables: [:],
+                immediate: immediate,
+                onData: { json in if let d = F.Data(cachebayJSON: json) { onData(d) } },
+                onError: onError
+            )
+        )
+    }
+}

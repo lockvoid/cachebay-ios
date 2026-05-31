@@ -91,4 +91,24 @@ public extension CachebayClient {
         let result = await operations.executeQuery(plan: plan, options: opts)
         return result.mapData { (json: JSONValue) -> Op.Data? in Op.Data(cachebayJSON: json) }
     }
+
+    /// Run a mutation. Returns `OperationResult<Op.Data>` with the typed,
+    /// eagerly-decoded response. `try` is only for plan-compile failures;
+    /// GraphQL/network errors propagate via `result.error`.
+    @discardableResult
+    func execute<Op: CachebayOperation>(
+        mutation op: Op.Type,
+        variables: Op.Variables,
+        onData: (@Sendable (_ data: Op.Data) -> Void)? = nil,
+        onError: (@Sendable (CombinedError) -> Void)? = nil
+    ) async throws -> OperationResult<Op.Data> {
+        var dataCb: (@Sendable (JSONValue) -> Void)?
+        if let typed = onData {
+            dataCb = { json in if let d = Op.Data(cachebayJSON: json) { typed(d) } }
+        }
+        let plan = try planner.getPlan(Op.document)
+        let opts = ExecuteMutationOptions(variables: variables.__cachebay, onData: dataCb, onError: onError)
+        let result = await operations.executeMutation(plan: plan, options: opts)
+        return result.mapData { (json: JSONValue) -> Op.Data? in Op.Data(cachebayJSON: json) }
+    }
 }

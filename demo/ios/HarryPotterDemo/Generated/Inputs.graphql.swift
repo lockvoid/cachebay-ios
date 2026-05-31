@@ -19,8 +19,8 @@ public struct CreateSpellInput: Sendable {
         self.imageUrl = imageUrl
         self.wikiUrl = wikiUrl
     }
-    public var __cachebay: JSONValue {
-        var out: [String: JSONValue] = [:]
+    public var __cachebay: Cachebay.JSONValue {
+        var out: [String: Cachebay.JSONValue] = [:]
         out["name"] = .string(name)
         out["category"] = .string(category)
         out["creator"] = (creator).map { .string($0) } ?? .null
@@ -37,8 +37,8 @@ public struct DeleteSpellInput: Sendable {
     public init(id: String) {
         self.id = id
     }
-    public var __cachebay: JSONValue {
-        var out: [String: JSONValue] = [:]
+    public var __cachebay: Cachebay.JSONValue {
+        var out: [String: Cachebay.JSONValue] = [:]
         out["id"] = .string(id)
         return .object(out)
     }
@@ -51,8 +51,8 @@ public struct SpellFilter: Sendable {
         self.query = query
         self.sort = sort
     }
-    public var __cachebay: JSONValue {
-        var out: [String: JSONValue] = [:]
+    public var __cachebay: Cachebay.JSONValue {
+        var out: [String: Cachebay.JSONValue] = [:]
         out["query"] = (query).map { .string($0) } ?? .null
         out["sort"] = (sort).map { .string($0.rawValue) } ?? .null
         return .object(out)

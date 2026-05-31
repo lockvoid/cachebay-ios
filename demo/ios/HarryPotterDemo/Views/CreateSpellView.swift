@@ -1,9 +1,9 @@
 import SwiftUI
 import Cachebay
 
-/// Optimistic-add flow: we prepend an entry to every matching
-/// `Query.spells` connection, then run the mutation and either commit with
-/// the server-assigned id or revert on failure.
+/// Optimistic-add flow. The mutation is typed (`execute(mutation:)`); the
+/// optimistic/connection writes use the imperative builder — mutations and
+/// optimistic layering are inherently imperative (no declarative equivalent).
 struct CreateSpellView: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
@@ -49,47 +49,32 @@ struct CreateSpellView: View {
             "wikiUrl": .null,
         ]
 
-        // Optimistic create: write the entity record FIRST (so watchers can
-        // materialize it), THEN link it into every matching `Query.spells(...)`
-        // canonical. Connection mutations (`linkNode`/`unlinkNode`) are
-        // structural-only — they manage edge refs but never write entity
-        // scalars. Entity records are owned by `documents.normalize` (auto
-        // from server responses) or explicit `b.patch`/`b.writeFragment`.
+        // Optimistic create: write the entity record FIRST, THEN link it into every
+        // matching `Query.spells(...)` canonical (connection writes are structural-only).
         let tx = store.client.modifyOptimistic { b in
             b.patch(.key("Spell:\(tempId)"), optimisticNode, mode: .merge)
             for key in store.client.inspect.getConnectionKeys(parent: .root, key: "spells") {
-                let c = b.connection(key: key)
-                c.linkNode(.key("Spell:\(tempId)"), options: LinkNodeOptions(position: .start))
+                b.connection(key: key).linkNode(.key("Spell:\(tempId)"), options: LinkNodeOptions(position: .start))
             }
         }
 
         do {
-            let input: [String: JSONValue] = [
-                "name": .string(name),
-                "category": .string(category),
-                "creator": creator.isEmpty ? .null : .string(creator),
-                "effect": .string(effect),
-                "light": light.isEmpty ? .null : .string(light),
-                "imageUrl": .null,
-                "wikiUrl": .null,
-            ]
-            let result = try await store.client.executeMutation(
-                query: CreateSpell.networkQuery,
-                variables: ["input": .object(input)]
+            let input = CreateSpellInput(
+                name: name,
+                category: category,
+                creator: creator.isEmpty ? nil : creator,
+                effect: effect,
+                light: light.isEmpty ? nil : light
             )
-            if let spell = result.data?["createSpell"]?["spell"]?.object,
-               let realId = spell["id"]?.string {
-                // Commit closure captures `spell` (the server-authored
-                // Spell record) and `realId` from outer scope. Baseline
-                // restore drops Post:tempId AND its edges; the commit
-                // closure writes the real entity + links it.
+            let result = try await store.client.execute(mutation: CreateSpell.self, variables: .init(input: input))
+            if let spell = result.data?.createSpell.spell {
+                // The mutation response was normalized into the cache (Spell:realId is
+                // already written). The commit just links the real id into the connections;
+                // baseline restore drops the temp entity + its edges.
+                let realId = spell.id
                 tx.commit { b in
-                    b.patch(.key("Spell:\(realId)"), spell, mode: .merge)
                     for key in store.client.inspect.getConnectionKeys(parent: .root, key: "spells") {
-                        b.connection(key: key).linkNode(
-                            .key("Spell:\(realId)"),
-                            options: LinkNodeOptions(position: .start)
-                        )
+                        b.connection(key: key).linkNode(.key("Spell:\(realId)"), options: LinkNodeOptions(position: .start))
                     }
                 }
                 dismiss()

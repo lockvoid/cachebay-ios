@@ -2,7 +2,7 @@ name: HarryPotterDemo
 options:
   bundleIdPrefix: com.lockvoid.cachebay
   deploymentTarget:
-    iOS: "16.0"
+    iOS: "18.0"
   createIntermediateGroups: true
   defaultConfig: Debug
 
@@ -20,7 +20,7 @@ targets:
   HarryPotterDemo:
     type: application
     platform: iOS
-    deploymentTarget: "16.0"
+    deploymentTarget: "18.0"
     sources:
       - path: HarryPotterDemo
         excludes:
@@ -28,6 +28,10 @@ targets:
     dependencies:
       - package: Cachebay
         product: Cachebay
+      - package: Cachebay
+        product: CachebayUI
+      - package: Cachebay
+        product: CachebayMacros
     info:
       path: HarryPotterDemo/Info.plist
       properties:

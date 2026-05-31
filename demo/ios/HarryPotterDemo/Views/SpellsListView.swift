@@ -1,137 +1,153 @@
 import SwiftUI
 import Cachebay
+import CachebayUI
 
-/// Infinite-scrolling Relay connection with live search. Each keystroke bumps
-/// variables (new canonical key → fresh results); scrolling to the bottom
-/// appends the next page via `after` cursor.
+// The list, two ways — same query, same live cache. Flip the segment and the data
+// is identical; an optimistic create in another screen updates BOTH instantly.
+// Declarative = @CachebayQuery; Imperative = client.watch. Both render the generated
+// typed structs (ListSpells.Data) — no hand-written shadow rows, no JSONValue prodding.
+
+private typealias SpellsConnection = ListSpells.Data.Spells
+private typealias SpellNode = ListSpells.Data.Spells.Edges.Node
+
+private enum ListStyle: String, CaseIterable {
+    case declarative = "Declarative"
+    case imperative = "Imperative"
+}
+
 struct SpellsListView: View {
-    @EnvironmentObject private var store: AppStore
     @State private var search: String = ""
-    @State private var rows: [SpellRow] = []
-    @State private var endCursor: String? = nil
-    @State private var hasNext: Bool = true
-    @State private var totalCount: Int = 0
-    @State private var isLoading = false
-    @State private var watcher: WatchQueryHandle? = nil
-
-    private var query: String { ListSpells.networkQuery }
+    @State private var style: ListStyle = .declarative
 
     var body: some View {
-        List {
-            Section(header: Text(totalCount > 0 ? "\(totalCount) spells" : "Loading…")) {
-                ForEach(rows) { row in
-                    NavigationLink(destination: SpellDetailView(id: row.id)) {
-                        SpellRowView(row: row)
-                    }
-                }
-                if hasNext {
-                    ProgressView().frame(maxWidth: .infinity, alignment: .center)
-                        .onAppear { Task { await loadMore() } }
-                }
+        VStack(spacing: 0) {
+            Picker("Style", selection: $style) {
+                ForEach(ListStyle.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .padding([.horizontal, .top], 12)
+
+            switch style {
+            case .declarative: DeclarativeSpellsList(search: search)
+            case .imperative:  ImperativeSpellsList(search: search)
             }
         }
         .searchable(text: $search, prompt: "Search spells")
-        .onChange(of: search) { newValue in
-            restart(searchText: newValue)
-        }
-        .task { restart(searchText: "") }
-        .refreshable { restart(searchText: search) }
+    }
+}
+
+// MARK: - Declarative (@CachebayQuery)
+
+private struct DeclarativeSpellsList: View {
+    @EnvironmentObject private var store: AppStore
+    let search: String
+
+    // Variables are dynamic (the search filter), so override the wrapper in init —
+    // the @FetchRequest pattern. @CachebayQuery watches; the .task fires the fetch.
+    @CachebayQuery(ListSpells.self, variables: .init(first: 20)) private var query
+
+    init(search: String) {
+        self.search = search
+        let filter = search.isEmpty ? nil : SpellFilter(query: search)
+        _query = CachebayQuery(ListSpells.self, variables: .init(first: 20, after: nil, filter: filter))
     }
 
-    private func restart(searchText: String) {
-        watcher?.unsubscribe()
-        rows = []
-        endCursor = nil
-        hasNext = true
-        totalCount = 0
-        Task { await loadMore() }
-        watcher = try? store.client.watchQuery(
-            query: query,
-            options: WatchQueryOptions(
-                variables: makeVars(first: 20, after: nil, search: searchText),
-                immediate: false,
-                onData: { data in
-                    Task { @MainActor in applyData(data) }
-                }
-            )
+    var body: some View {
+        SpellsListContent(spells: query.data?.spells) { after in
+            Task { await fetch(after: after) }
+        }
+        .task(id: search) { await fetch(after: nil) }
+    }
+
+    private func fetch(after: String?) async {
+        let filter = search.isEmpty ? nil : SpellFilter(query: search)
+        _ = try? await store.client.execute(
+            ListSpells.self,
+            variables: .init(first: 20, after: after, filter: filter),
+            cachePolicy: after == nil ? .cacheAndNetwork : .networkOnly
         )
     }
+}
 
-    private func loadMore() async {
-        if isLoading || !hasNext { return }
-        isLoading = true
-        defer { isLoading = false }
+// MARK: - Imperative (client.watch)
 
-        let vars = makeVars(first: 20, after: endCursor, search: search)
-        do {
-            let result = try await store.client.executeQuery(
-                query: query,
-                variables: vars,
-                cachePolicy: endCursor == nil ? .cacheAndNetwork : .networkOnly
-            )
-            if let data = result.data {
-                await MainActor.run { applyData(data) }
+private struct ImperativeSpellsList: View {
+    @EnvironmentObject private var store: AppStore
+    let search: String
+
+    @State private var data: ListSpells.Data? = nil
+    @State private var watcher: WatchQueryHandle? = nil
+
+    private var filter: SpellFilter? { search.isEmpty ? nil : SpellFilter(query: search) }
+
+    var body: some View {
+        SpellsListContent(spells: data?.spells) { after in
+            Task { await fetch(after: after) }
+        }
+        .task(id: search) { restart() }
+        .onDisappear { watcher?.unsubscribe(); watcher = nil }
+    }
+
+    private func restart() {
+        watcher?.unsubscribe()
+        data = nil
+        watcher = try? store.client.watch(
+            ListSpells.self,
+            variables: .init(first: 20, after: nil, filter: filter),
+            immediate: true
+        ) { d in
+            Task { @MainActor in data = d }
+        }
+        Task { await fetch(after: nil) }
+    }
+
+    private func fetch(after: String?) async {
+        _ = try? await store.client.execute(
+            ListSpells.self,
+            variables: .init(first: 20, after: after, filter: filter),
+            cachePolicy: after == nil ? .cacheAndNetwork : .networkOnly
+        )
+    }
+}
+
+// MARK: - Shared content
+
+private struct SpellsListContent: View {
+    let spells: SpellsConnection?
+    let onLoadMore: (_ after: String?) -> Void
+
+    var body: some View {
+        if let spells {
+            List {
+                Section(header: Text("\(spells.totalCount) spells")) {
+                    ForEach(spells.edges, id: \.node.id) { edge in
+                        NavigationLink(destination: SpellDetailView(id: edge.node.id)) {
+                            SpellRowView(node: edge.node)
+                        }
+                    }
+                    if spells.pageInfo.hasNextPage {
+                        ProgressView()
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .onAppear { onLoadMore(spells.pageInfo.endCursor) }
+                    }
+                }
             }
-        } catch {
-            // surfaced via the watcher's onError in a richer demo; keeping quiet here.
+        } else {
+            ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-    }
-
-    private func makeVars(first: Int, after: String?, search: String) -> [String: JSONValue] {
-        var filter: [String: JSONValue] = [:]
-        if !search.isEmpty { filter["query"] = .string(search) }
-        var vars: [String: JSONValue] = [
-            "first": .int(Int64(first)),
-            "after": after.map(JSONValue.string) ?? .null,
-        ]
-        vars["filter"] = filter.isEmpty ? .null : .object(filter)
-        return vars
-    }
-
-    private func applyData(_ data: JSONValue) {
-        guard let posts = data["spells"]?.object else { return }
-        totalCount = Int(posts["totalCount"]?.int ?? 0)
-        let edges = posts["edges"]?.array ?? []
-        let parsed: [SpellRow] = edges.compactMap { edge in
-            guard let node = edge["node"]?.object,
-                  let id = node["id"]?.string else { return nil }
-            return SpellRow(
-                id: id,
-                name: node["name"]?.string ?? "",
-                category: node["category"]?.string ?? "",
-                creator: node["creator"]?.string,
-                effect: node["effect"]?.string ?? "",
-                light: node["light"]?.string,
-                imageUrl: node["imageUrl"]?.string
-            )
-        }
-        rows = parsed
-        let pageInfo = posts["pageInfo"]?.object ?? [:]
-        endCursor = pageInfo["endCursor"]?.string
-        hasNext = pageInfo["hasNextPage"]?.bool ?? false
     }
 }
 
-struct SpellRow: Identifiable, Hashable {
-    let id: String
-    let name: String
-    let category: String
-    let creator: String?
-    let effect: String
-    let light: String?
-    let imageUrl: String?
-}
-
-struct SpellRowView: View {
-    let row: SpellRow
+private struct SpellRowView: View {
+    let node: SpellNode
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
-                Text(row.name).font(.headline)
+                Text(node.name).font(.headline)
                 Spacer()
-                Text(row.category).font(.caption).foregroundStyle(.secondary)
+                Text(node.category).font(.caption).foregroundStyle(.secondary)
             }
-            Text(row.effect).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
+            Text(node.effect).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
         }
     }
 }
