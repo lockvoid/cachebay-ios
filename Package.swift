@@ -28,6 +28,9 @@ let package = Package(
         // Macro declarations (v1.0 typed structs). Consumers get these
         // re-exported from `Cachebay`; exposed as a product for codegen output.
         .library(name: "CachebayMacros", targets: ["CachebayMacros"]),
+        // SwiftUI integration: the @CachebayQuery property wrapper. Optional —
+        // import only in SwiftUI targets so the core stays framework-agnostic.
+        .library(name: "CachebayUI", targets: ["CachebayUI"]),
     ],
     dependencies: [
         // Swift macro support. 602.x matches the Swift 6.2 toolchain.
@@ -77,6 +80,18 @@ let package = Package(
             name: "CachebayTests",
             dependencies: ["Cachebay", "CachebayGraphQL", "CachebayMacros"],
             path: "Tests/CachebayTests",
+            swiftSettings: strictSettings
+        ),
+        .target(
+            name: "CachebayUI",
+            dependencies: ["Cachebay"],
+            path: "Sources/CachebayUI",
+            swiftSettings: strictSettings
+        ),
+        .testTarget(
+            name: "CachebayUITests",
+            dependencies: ["CachebayUI", "Cachebay", "CachebayMacros"],
+            path: "Tests/CachebayUITests",
             swiftSettings: strictSettings
         ),
         .testTarget(
