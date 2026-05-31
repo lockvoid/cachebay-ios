@@ -946,7 +946,7 @@ mod codegen_tests {
     fn typed_plan_operation_envelope() {
         let cook = object("cook", "Cook", vec![typename_field(), id_field(), title_scalar()]);
         let out = render_typed_plan(&plan_fixture("GetCook", OpKind::Query, "Query", vec![cook]));
-        assert!(out.contains("import CachebayMacros"), "{out}");
+        assert!(out.contains("import Cachebay"), "{out}");
         assert!(out.contains("public struct GetCook: Cachebay.CachebayOperation {"), "{out}");
         assert!(out.contains("public typealias Variables = Cachebay.EmptyVariables"), "{out}");
         assert!(out.contains("@CachebayData(typename: \"\")"), "root Data empty typename; {out}");
@@ -1015,7 +1015,7 @@ mod codegen_tests {
         assert!(out.contains("public struct GetCook: Cachebay.CachebayOperation {"), "{out}");
         // Imports stay at file scope (before the extension).
         assert!(
-            out.find("import CachebayMacros").unwrap() < out.find("extension API {").unwrap(),
+            out.find("import Cachebay").unwrap() < out.find("extension API {").unwrap(),
             "{out}"
         );
 
