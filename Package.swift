@@ -1,4 +1,4 @@
-// swift-tools-version:6.0
+// swift-tools-version:6.2
 import PackageDescription
 import CompilerPluginSupport
 
@@ -10,11 +10,13 @@ let strictSettings: [SwiftSetting] = [
 let package = Package(
     name: "Cachebay",
     platforms: [
-        .iOS(.v16),
-        .macOS(.v13),
-        .tvOS(.v16),
-        .watchOS(.v9),
-        .visionOS(.v1),
+        // v1.0 minimums (proposal §10): iOS 18+. Macros require the Swift 6.2
+        // toolchain (swift-syntax 602 / Xcode 26).
+        .iOS(.v18),
+        .macOS(.v15),
+        .tvOS(.v18),
+        .watchOS(.v11),
+        .visionOS(.v2),
     ],
     products: [
         // Runtime client. The library every consumer imports.
