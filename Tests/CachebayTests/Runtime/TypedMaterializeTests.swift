@@ -193,4 +193,38 @@ final class TypedMaterializeTests: XCTestCase {
         // Cache miss -> nil (no record for c2).
         XCTAssertNil(client.read(GetCook.self, variables: .init(id: "c2"))?.cook)
     }
+
+    // The typed network path: client.execute(...) fetches, normalizes, and returns
+    // eagerly-decoded typed data.
+    func test_client_execute_network_typed() async throws {
+        let http = MockHTTPTransport()
+        http.whenQueryContains("cook", respondWith: .object([
+            "cook": .object([
+                "__typename": .string("Cook"), "id": .string("c1"), "title": .string("Pasta"),
+                "elements": .array([
+                    .object(["__typename": .string("VideoElement"), "id": .string("v1"),
+                             "url": .string("https://x.com/v1.mp4"), "duration": .double(12.5)]),
+                    .object(["__typename": .string("AudioElement"), "id": .string("a1"),
+                             "waveformURL": .string("https://x.com/a1.wav")]),
+                    .object(["__typename": .string("PdfElement"), "id": .string("p1")]),
+                ]),
+            ]),
+        ]))
+        let client = CachebayClient(options: CachebayOptions(
+            transport: Transport(http: http),
+            interfaces: ["Element": ["VideoElement", "AudioElement", "ImageElement"]]
+        ))
+
+        let result = try await client.execute(GetCook.self, variables: .init(id: "c1"))
+        XCTAssertNil(result.error)
+        XCTAssertEqual(result.data?.cook?.title, "Pasta")
+        XCTAssertEqual(result.data?.cook?.elements.count, 3)
+        XCTAssertEqual(result.data?.cook?.elements.map(\.id), ["v1", "a1", "p1"])
+        // Decoded into the sum type, incl. the un-narrowed Pdf -> .unknown.
+        if case .unknown(let s)? = result.data?.cook?.elements.last {
+            XCTAssertEqual(s.__typename, "PdfElement")
+        } else {
+            XCTFail("expected last element to be .unknown")
+        }
+    }
 }

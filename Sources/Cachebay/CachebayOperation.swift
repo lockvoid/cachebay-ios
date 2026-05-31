@@ -58,4 +58,37 @@ public extension CachebayClient {
             )
         )
     }
+
+    /// Run a query (cache + network per `cachePolicy`). Returns
+    /// `OperationResult<Op.Data>`; the `onCacheData` / `onNetworkData` callbacks
+    /// fire with typed, eagerly-decoded data. Network errors propagate via
+    /// `result.error` — `try` is only for plan-compile failures.
+    @discardableResult
+    func execute<Op: CachebayOperation>(
+        _ op: Op.Type,
+        variables: Op.Variables,
+        cachePolicy: CachePolicy? = nil,
+        onCacheData: (@Sendable (_ data: Op.Data, _ willFetchFromNetwork: Bool) -> Void)? = nil,
+        onNetworkData: (@Sendable (_ data: Op.Data) -> Void)? = nil,
+        onError: (@Sendable (CombinedError) -> Void)? = nil
+    ) async throws -> OperationResult<Op.Data> {
+        var cacheCb: (@Sendable (JSONValue, Bool) -> Void)?
+        if let typed = onCacheData {
+            cacheCb = { json, willFetch in if let d = Op.Data(cachebayJSON: json) { typed(d, willFetch) } }
+        }
+        var netCb: (@Sendable (JSONValue) -> Void)?
+        if let typed = onNetworkData {
+            netCb = { json in if let d = Op.Data(cachebayJSON: json) { typed(d) } }
+        }
+        let plan = try planner.getPlan(Op.document)
+        let opts = ExecuteQueryOptions(
+            variables: variables.__cachebay,
+            cachePolicy: cachePolicy,
+            onCacheData: cacheCb,
+            onNetworkData: netCb,
+            onError: onError
+        )
+        let result = await operations.executeQuery(plan: plan, options: opts)
+        return result.mapData { (json: JSONValue) -> Op.Data? in Op.Data(cachebayJSON: json) }
+    }
 }
