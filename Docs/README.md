@@ -44,6 +44,7 @@ let result = try await client.executeQuery(
 - **[Optimistic Updates](./OPTIMISTIC_UPDATES.md)** — layering, commit, revert
 - **[Storage](./STORAGE.md)** — SQLite, cross-process sync, dispose
 - **[Architecture](./ARCHITECTURE.md)** — module map, lock discipline, perf characteristics
+- **[Recipes](./RECIPES.md)** — patterns you'll likely want (combining watchers, etc.)
 
 ## Demo
 
