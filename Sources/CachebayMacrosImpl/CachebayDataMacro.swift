@@ -37,6 +37,7 @@ public struct CachebayDataMacro: MemberMacro {
         members.append(Self.makeDictInit(props: props, typename: typename))
         members.append(Self.makeDataDict(props: props))
         members.append(contentsOf: Self.makeCachebayValueConformance())
+        members.append(Self.makeFieldNamesMap(props: props))
         return members
     }
 }
@@ -166,6 +167,18 @@ extension CachebayDataMacro {
         \(raw: body)
         }
         """
+    }
+
+    /// KeyPath -> GraphQL field-name table for this type's own fields, used by the
+    /// KeyPath patch builder (`patch.set(\.title, ...)`). Top-level fields only.
+    static func makeFieldNamesMap(props: [CachebayProperty]) -> DeclSyntax {
+        // `nonisolated(unsafe)`: an immutable table of literal KeyPaths; AnyKeyPath
+        // isn't Sendable, but the value is constructed once and never mutated.
+        if props.isEmpty {
+            return "nonisolated(unsafe) public static let __cachebayFieldNames: [AnyKeyPath: String] = [:]"
+        }
+        let entries = props.map { "\\Self.\($0.name): \"\($0.name)\"" }.joined(separator: ", ")
+        return "nonisolated(unsafe) public static let __cachebayFieldNames: [AnyKeyPath: String] = [\(raw: entries)]"
     }
 
     /// `CachebayValue` requirements so nested structs decode uniformly. The
