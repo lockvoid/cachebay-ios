@@ -1,7 +1,6 @@
 import XCTest
 import Foundation
 import Cachebay
-@testable import CachebayMacros
 
 /// WS2 — `@CachebayUnion`: same mechanics as interface, but the only lifted shared
 /// field is `__typename` (unions have no other schema-level shared fields).

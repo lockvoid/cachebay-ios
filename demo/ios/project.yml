@@ -30,8 +30,6 @@ targets:
         product: Cachebay
       - package: Cachebay
         product: CachebayUI
-      - package: Cachebay
-        product: CachebayMacros
     info:
       path: HarryPotterDemo/Info.plist
       properties:

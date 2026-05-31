@@ -1,6 +1,5 @@
 import XCTest
 import Foundation
-import CachebayMacros
 @testable import Cachebay
 
 // WS5 / Gate wk9 — KeyPath patch builder over the existing patchFragment path.

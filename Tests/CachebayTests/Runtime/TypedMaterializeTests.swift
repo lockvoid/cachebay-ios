@@ -1,6 +1,5 @@
 import XCTest
 import Foundation
-import CachebayMacros
 @testable import Cachebay
 
 // WS4 — eager typed decode against the REAL `Documents.materialize`, end-to-end:

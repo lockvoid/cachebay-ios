@@ -25,9 +25,6 @@ let package = Package(
         // compile GraphQL strings at runtime; codegen handles every
         // operation by default.
         .library(name: "CachebayGraphQL", targets: ["CachebayGraphQL"]),
-        // Macro declarations (v1.0 typed structs). Consumers get these
-        // re-exported from `Cachebay`; exposed as a product for codegen output.
-        .library(name: "CachebayMacros", targets: ["CachebayMacros"]),
         // SwiftUI integration: the @CachebayQuery property wrapper. Optional —
         // import only in SwiftUI targets so the core stays framework-agnostic.
         .library(name: "CachebayUI", targets: ["CachebayUI"]),
@@ -42,9 +39,12 @@ let package = Package(
             path: "Sources/CachebayGraphQL",
             swiftSettings: strictSettings
         ),
+        // Runtime client + the v1.0 macro declarations (re-exported to consumers
+        // via `import Cachebay`). The macro *implementation* is the separate
+        // `.macro` plugin below — required to be its own compiler-plugin target.
         .target(
             name: "Cachebay",
-            dependencies: ["CachebayGraphQL"],
+            dependencies: ["CachebayGraphQL", "CachebayMacrosImpl"],
             path: "Sources/Cachebay",
             swiftSettings: strictSettings
         ),
@@ -62,14 +62,6 @@ let package = Package(
             ],
             path: "Sources/CachebayMacrosImpl"
         ),
-        // Public macro declarations. Emits the fully-qualified `Cachebay.JSONValue`
-        // so this module needs no runtime dependency (no Cachebay <-> Macros cycle).
-        .target(
-            name: "CachebayMacros",
-            dependencies: ["CachebayMacrosImpl"],
-            path: "Sources/CachebayMacros",
-            swiftSettings: strictSettings
-        ),
         .testTarget(
             name: "CachebayGraphQLTests",
             dependencies: ["CachebayGraphQL"],
@@ -78,7 +70,7 @@ let package = Package(
         ),
         .testTarget(
             name: "CachebayTests",
-            dependencies: ["Cachebay", "CachebayGraphQL", "CachebayMacros"],
+            dependencies: ["Cachebay", "CachebayGraphQL"],
             path: "Tests/CachebayTests",
             swiftSettings: strictSettings
         ),
@@ -90,14 +82,13 @@ let package = Package(
         ),
         .testTarget(
             name: "CachebayUITests",
-            dependencies: ["CachebayUI", "Cachebay", "CachebayMacros"],
+            dependencies: ["CachebayUI", "Cachebay"],
             path: "Tests/CachebayUITests",
             swiftSettings: strictSettings
         ),
         .testTarget(
             name: "CachebayMacrosTests",
             dependencies: [
-                "CachebayMacros",
                 "CachebayMacrosImpl",
                 "Cachebay",
                 .product(name: "SwiftSyntaxMacrosTestSupport", package: "swift-syntax"),

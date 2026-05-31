@@ -7,7 +7,6 @@
 
 import Foundation
 import Cachebay
-import CachebayMacros
 
 @CachebayData(typename: "Tag")
 struct Tag: Identifiable, Sendable, Hashable, CachebayValue {

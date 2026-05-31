@@ -1,6 +1,5 @@
 import XCTest
 import Foundation
-import CachebayMacros
 import CachebayUI
 @testable import Cachebay
 

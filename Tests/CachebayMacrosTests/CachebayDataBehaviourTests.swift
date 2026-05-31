@@ -1,7 +1,6 @@
 import XCTest
 import Foundation
 import Cachebay
-@testable import CachebayMacros
 
 /// Behavioural layer: compile the macro expansion and exercise it.
 final class CachebayDataBehaviourTests: XCTestCase {

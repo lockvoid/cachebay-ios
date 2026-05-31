@@ -1,7 +1,6 @@
 import XCTest
 import Foundation
 import Cachebay
-@testable import CachebayMacros
 
 /// WS2 / Gate wk2 — the sum-type interface enum and §3.1 `.unknown` correctness.
 final class CachebayInterfaceBehaviourTests: XCTestCase {

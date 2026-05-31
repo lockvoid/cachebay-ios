@@ -3,7 +3,6 @@
 
 import Foundation
 import Cachebay
-import CachebayMacros
 
 @CachebayInterface
 enum Element: Identifiable, Sendable, Hashable, CachebayValue {

@@ -3,7 +3,6 @@
 
 import Foundation
 import Cachebay
-import CachebayMacros
 
 /// Fragment SpellFields: SpellDetail.graphql
 public struct SpellFields: Cachebay.CachebayFragment {

@@ -3,7 +3,6 @@
 
 import Foundation
 import Cachebay
-import CachebayMacros
 
 /// Query ListSpells: ListSpells.graphql
 public struct ListSpells: Cachebay.CachebayOperation {

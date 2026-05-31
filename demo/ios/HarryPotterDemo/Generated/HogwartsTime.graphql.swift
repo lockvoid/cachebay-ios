@@ -3,7 +3,6 @@
 
 import Foundation
 import Cachebay
-import CachebayMacros
 
 /// Subscription HogwartsTime: HogwartsTime.graphql
 public struct HogwartsTime: Cachebay.CachebayOperation {

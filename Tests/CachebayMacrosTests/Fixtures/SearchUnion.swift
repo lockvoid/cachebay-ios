@@ -3,7 +3,6 @@
 
 import Foundation
 import Cachebay
-import CachebayMacros
 
 @CachebayUnion
 enum SearchResult: Sendable, Hashable, CachebayValue {

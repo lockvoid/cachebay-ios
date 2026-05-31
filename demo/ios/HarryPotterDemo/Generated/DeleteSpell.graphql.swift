@@ -3,7 +3,6 @@
 
 import Foundation
 import Cachebay
-import CachebayMacros
 
 /// Mutation DeleteSpell: DeleteSpell.graphql
 public struct DeleteSpell: Cachebay.CachebayOperation {

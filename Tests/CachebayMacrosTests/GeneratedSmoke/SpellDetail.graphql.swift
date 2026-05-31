@@ -2,7 +2,6 @@
 // Source: SpellDetail.graphql
 
 import Cachebay
-import CachebayMacros
 
 /// Query SpellDetail: SpellDetail.graphql
 public struct SpellDetail: Cachebay.CachebayOperation {

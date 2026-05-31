@@ -1,6 +1,5 @@
 import XCTest
 import Foundation
-import CachebayMacros
 @testable import Cachebay
 
 // WS4 / Gate wk6 — validate the §5 cost-model bet: eager decode pays once at
