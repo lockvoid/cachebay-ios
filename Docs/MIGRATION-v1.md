@@ -25,14 +25,15 @@ This is a **breaking** change for codegen consumers. The v0.15.x line keeps ship
 The cache (`[String: JSONValue]`, normalized, optimistic layers, type reducers, SQLite) is
 **unchanged** — only the boundary at `materialize` and the generated type shape change.
 
-## 1. Regenerate with `--typed`
+## 1. Regenerate
 
 ```sh
-cachebay-cli codegen --schema schema.graphql --operations ./GraphQL --output ./Generated --typed
+cachebay-cli codegen --schema schema.graphql --operations ./GraphQL --output ./Generated
 ```
 
-`--typed` emits the v1.0 shapes; without it you get the legacy dict wrappers (still the
-default until your project is fully migrated). Generated files now `import CachebayMacros`.
+On the 1.x line the CLI emits the typed v1.0 shapes — there is no dict-wrapper option
+(use the 0.x CLI/branch if you need the old shape). Generated files now
+`import Foundation`, `import Cachebay`, `import CachebayMacros`.
 
 ## 2. Mechanical search-replaces (per call site)
 
@@ -106,10 +107,9 @@ debug tooling or an opposite (wide-but-narrow-read) workload. Gate with
 
 ```sh
 cachebay-cli codegen --schema schema.graphql --operations ./GraphQL --output ./Generated \
-  --typed --namespace API
+  --namespace API
 ```
 
-- **`--typed`** — emit the v1.0 typed structs.
 - **`--namespace API`** — wrap models in `extension API { … }` (→ `API.GetCook`) so they don't
   collide with `Image`/`Video`/`Color`/etc. Empty (default) = top level. **Recommended on.**
 - **`@cachebay(default: …)`** schema directive → `@CachebayDefault(…)` (construction defaults, §6).
@@ -121,13 +121,13 @@ cachebay-cli codegen --schema schema.graphql --operations ./GraphQL --output ./G
 ## Internal migration checklist (this repo)
 
 - [x] Macros, typed runtime path (`read`/`watch`/`execute`), KeyPath patch builder.
-- [x] CLI `--typed` emission: structs + sum-type enums + envelope + `--namespace` +
+- [x] CLI emits typed by default (no flag); dict-wrapper emitter removed (1.x is typed-only).
+- [x] CLI typed emission: structs + sum-type enums + envelope + `--namespace` +
   `@CachebayDefault` from schema + custom-scalar config. Validated: regen compiles + decodes
   (`Tests/CachebayMacrosTests/GeneratedSmoke/`).
 - [x] `@CachebayQuery` SwiftUI wrapper (`CachebayUI` target).
-- [ ] Switch the CLI default to `--typed` once consumers are migrated.
-- [ ] Regenerate `demo/ios/HarryPotterDemo/Generated/*` (`--typed --namespace …`) and migrate the
-  demo app's view code to the typed API (needs Xcode to compile-verify).
+- [x] Demo app migrated to the typed API (drops the `SpellRow`/`SpellData` shadow structs;
+  segmented Declarative|Imperative list). `xcodebuild` BUILD SUCCEEDED; app launches + renders
+  on the iOS 18 simulator (`@CachebayQuery` lifecycle validated).
 - [ ] Migrate internal test fixtures that assert via `__data` to the typed shape (the untyped
-  runtime tests are unaffected — they exercise `JSONValue` directly).
-- [ ] SwiftUI host-app validation of `@CachebayQuery`'s appear/disappear lifecycle.
+  runtime tests are unaffected — they exercise `JSONValue` directly). *Optional cleanup.*

@@ -66,18 +66,9 @@ struct CodegenArgs {
     #[arg(long, short = 'o', default_value = "Generated")]
     output: PathBuf,
 
-    /// Module namespace for generated code (Swift enum). Default: `CachebayGenerated`.
-    #[arg(long, default_value = "CachebayGenerated")]
-    module: String,
-
-    /// Emit v1.0 typed structs (@CachebayData/@CachebayInterface) instead of the
-    /// legacy dict-wrapper types.
-    #[arg(long)]
-    typed: bool,
-
-    /// Wrap typed models in `extension <namespace> { … }` (e.g. `--namespace API`
+    /// Wrap generated models in `extension <namespace> { … }` (e.g. `--namespace API`
     /// → `API.GetCook`) so they don't collide with consumer/SDK types. Empty =
-    /// emit at top level. Only applies with --typed.
+    /// emit at top level.
     #[arg(long, default_value = "")]
     namespace: String,
 }
@@ -128,7 +119,7 @@ fn run_codegen(args: CodegenArgs) -> anyhow::Result<()> {
 
     // Emit Swift.
     std::fs::create_dir_all(&args.output)?;
-    emit::write_all(&plans, &inputs, &enums, &interfaces, &args.output, &args.module, args.typed, &args.namespace)?;
+    emit::write_all(&plans, &inputs, &enums, &interfaces, &args.output, &args.namespace)?;
 
     println!(
         "cachebay-cli: wrote {} operation(s) + {} input type(s) + {} enum(s) + {} interface(s) to {}",
