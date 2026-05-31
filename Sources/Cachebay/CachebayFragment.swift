@@ -108,4 +108,64 @@ public extension CachebayClient {
             )
         )
     }
+
+    /// Typed fragment write keyed by bare entity id. Round-trips `data` through the
+    /// JSON-shaped runtime so the writer normalises like a network response.
+    func writeFragment<F: CachebayFragment, ID: LosslessStringConvertible>(
+        fragment frag: F.Type,
+        id: ID,
+        data: F.Data
+    ) throws {
+        let cacheKey = "\(graph.canonicalTypename(F.onTypename)):\(id)"
+        let plan = try planner.getPlan(F.document, fragmentName: F.fragmentName)
+        fragments.writeFragment(plan: plan, rootId: cacheKey, variables: [:], data: data.cachebayJSON)
+        graph.flush()
+    }
+}
+
+public extension OptimisticBuilder {
+    /// Typed plan-aware optimistic write — normalises a typed `F.Data` entity tree
+    /// into the optimistic layer (nested entities become their own records).
+    func writeFragment<F: CachebayFragment, ID: LosslessStringConvertible>(
+        fragment: F.Type,
+        id: ID,
+        data: F.Data
+    ) {
+        guard case .object(let dict) = data.cachebayJSON else { return }
+        writeFragment(
+            document: F.document,
+            fragmentName: F.fragmentName,
+            rootId: "\(canonicalTypename(F.onTypename)):\(id)",
+            variables: [:],
+            data: dict
+        )
+    }
+
+    /// Typed optimistic delete keyed by bare id — fragment supplies the typename.
+    func delete<F: CachebayFragment, ID: LosslessStringConvertible>(fragment: F.Type, id: ID) {
+        delete(.key("\(canonicalTypename(F.onTypename)):\(id)"))
+    }
+}
+
+public extension ConnectionAPI {
+    /// Typed link — pass a typed node payload (e.g. a server response's node);
+    /// Cachebay extracts `__typename` + `id`. The entity record is NOT written here.
+    func linkNode<N: CachebayValue>(node: N, options: LinkNodeOptions = .init()) {
+        guard case .object(let dict) = node.cachebayJSON else { return }
+        linkNode(.object(dict), options: options)
+    }
+
+    /// Typed link keyed by bare id — fragment supplies the (canonicalised) typename.
+    func linkNode<F: CachebayFragment, ID: LosslessStringConvertible>(
+        fragment: F.Type,
+        id: ID,
+        options: LinkNodeOptions = .init()
+    ) {
+        linkNode(.key("\(canonicalTypename(F.onTypename)):\(id)"), options: options)
+    }
+
+    /// Typed unlink keyed by bare id.
+    func unlinkNode<F: CachebayFragment, ID: LosslessStringConvertible>(fragment: F.Type, id: ID) {
+        unlinkNode(.key("\(canonicalTypename(F.onTypename)):\(id)"))
+    }
 }
