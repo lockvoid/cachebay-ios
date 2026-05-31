@@ -69,6 +69,11 @@ struct CodegenArgs {
     /// Module namespace for generated code (Swift enum). Default: `CachebayGenerated`.
     #[arg(long, default_value = "CachebayGenerated")]
     module: String,
+
+    /// Emit v1.0 typed structs (@CachebayData/@CachebayInterface) instead of the
+    /// legacy dict-wrapper types.
+    #[arg(long)]
+    typed: bool,
 }
 
 fn main() -> ExitCode {
@@ -117,7 +122,7 @@ fn run_codegen(args: CodegenArgs) -> anyhow::Result<()> {
 
     // Emit Swift.
     std::fs::create_dir_all(&args.output)?;
-    emit::write_all(&plans, &inputs, &enums, &interfaces, &args.output, &args.module)?;
+    emit::write_all(&plans, &inputs, &enums, &interfaces, &args.output, &args.module, args.typed)?;
 
     println!(
         "cachebay-cli: wrote {} operation(s) + {} input type(s) + {} enum(s) + {} interface(s) to {}",
