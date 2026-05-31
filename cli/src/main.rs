@@ -74,6 +74,12 @@ struct CodegenArgs {
     /// legacy dict-wrapper types.
     #[arg(long)]
     typed: bool,
+
+    /// Wrap typed models in `extension <namespace> { … }` (e.g. `--namespace API`
+    /// → `API.GetCook`) so they don't collide with consumer/SDK types. Empty =
+    /// emit at top level. Only applies with --typed.
+    #[arg(long, default_value = "")]
+    namespace: String,
 }
 
 fn main() -> ExitCode {
@@ -122,7 +128,7 @@ fn run_codegen(args: CodegenArgs) -> anyhow::Result<()> {
 
     // Emit Swift.
     std::fs::create_dir_all(&args.output)?;
-    emit::write_all(&plans, &inputs, &enums, &interfaces, &args.output, &args.module, args.typed)?;
+    emit::write_all(&plans, &inputs, &enums, &interfaces, &args.output, &args.module, args.typed, &args.namespace)?;
 
     println!(
         "cachebay-cli: wrote {} operation(s) + {} input type(s) + {} enum(s) + {} interface(s) to {}",
