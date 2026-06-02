@@ -57,33 +57,68 @@ public func isEmptyObject(_ v: JSONValue) -> Bool {
 }
 
 /// Stable JSON.stringify with sorted keys — used by connection canonical keys.
+/// Appends into a single buffer (no per-node intermediate `String`s from
+/// `.map`/`.joined`/`+`); byte-for-byte identical to the prior formulation.
 public func stableStringify(_ v: JSONValue) -> String {
+    var out = ""
+    out.reserveCapacity(32)
+    appendStable(v, into: &out)
+    return out
+}
+
+func appendStable(_ v: JSONValue, into out: inout String) {
     switch v {
-    case .null, .undefined: return "null"
-    case .bool(let b): return b ? "true" : "false"
-    case .int(let i): return String(i)
+    case .null, .undefined: out += "null"
+    case .bool(let b): out += b ? "true" : "false"
+    case .int(let i): out += String(i)
     case .double(let d):
-        if d.rounded() == d && abs(d) < 1e18 { return String(Int64(d)) }
-        return String(d)
-    case .string(let s):
-        return encodeJSONString(s)
+        if d.rounded() == d && abs(d) < 1e18 { out += String(Int64(d)) } else { out += String(d) }
+    case .string(let s): appendJSONString(s, into: &out)
     case .array(let xs):
-        return "[" + xs.map(stableStringify).joined(separator: ",") + "]"
-    case .object(let o):
-        let sorted = o.keys.sorted()
-        let parts = sorted.map { k -> String in
-            return encodeJSONString(k) + ":" + stableStringify(o[k]!)
+        out += "["
+        var first = true
+        for x in xs {
+            if !first { out += "," }
+            first = false
+            appendStable(x, into: &out)
         }
-        return "{" + parts.joined(separator: ",") + "}"
-    case .ref(let r): return encodeJSONString(r)
-    case .refList(let rs): return "[" + rs.map { encodeJSONString($0) }.joined(separator: ",") + "]"
+        out += "]"
+    case .object(let o):
+        out += "{"
+        var first = true
+        for k in o.keys.sorted() {
+            if !first { out += "," }
+            first = false
+            appendJSONString(k, into: &out)
+            out += ":"
+            appendStable(o[k]!, into: &out)
+        }
+        out += "}"
+    case .ref(let r): appendJSONString(r, into: &out)
+    case .refList(let rs):
+        out += "["
+        var first = true
+        for r in rs {
+            if !first { out += "," }
+            first = false
+            appendJSONString(r, into: &out)
+        }
+        out += "]"
     }
 }
 
 @inlinable
 public func encodeJSONString(_ s: String) -> String {
-    var out = "\""
+    var out = ""
     out.reserveCapacity(s.count + 2)
+    appendJSONString(s, into: &out)
+    return out
+}
+
+/// Appends the JSON-escaped, double-quoted form of `s` into `out`.
+@usableFromInline
+func appendJSONString(_ s: String, into out: inout String) {
+    out += "\""
     for scalar in s.unicodeScalars {
         switch scalar.value {
         case 0x22: out += "\\\""
@@ -102,7 +137,6 @@ public func encodeJSONString(_ s: String) -> String {
         }
     }
     out += "\""
-    return out
 }
 
 /// Recycle unchanged subtrees from `prev` into `next` using fingerprints.

@@ -501,4 +501,98 @@ final class UtilsTests: XCTestCase {
             XCTAssertEqual(got, want, "iter \(iter): pn=\(pn) nn=\(nn) prevFp=\(prevFp) nextFp=\(nextFp)")
         }
     }
+
+    // MARK: - stableStringify byte-identical characterization + differential fuzz
+    //         (the in-place-append rewrite must not change a single byte — it's a
+    //          cache/canonical-key generator).
+
+    func test_stableStringify_sortedKeys_noSpaces() {
+        XCTAssertEqual(stableStringify(.object(["b": .int(2), "a": .int(1)])), "{\"a\":1,\"b\":2}")
+    }
+
+    func test_stableStringify_arrayAndScalars() {
+        XCTAssertEqual(stableStringify(.array([.int(1), .string("x"), .bool(true), .null])), "[1,\"x\",true,null]")
+    }
+
+    func test_stableStringify_doubleWholeRendersAsInt() {
+        XCTAssertEqual(stableStringify(.double(100.0)), "100")
+        XCTAssertEqual(stableStringify(.double(1.5)), "1.5")
+        XCTAssertEqual(stableStringify(.int(-7)), "-7")
+    }
+
+    func test_stableStringify_refAndRefList() {
+        XCTAssertEqual(stableStringify(.ref("User:1")), "\"User:1\"")
+        XCTAssertEqual(stableStringify(.refList(["A", "B"])), "[\"A\",\"B\"]")
+    }
+
+    func test_stableStringify_empty() {
+        XCTAssertEqual(stableStringify(.object([:])), "{}")
+        XCTAssertEqual(stableStringify(.array([])), "[]")
+    }
+
+    func test_stableStringify_nested() {
+        XCTAssertEqual(
+            stableStringify(.object(["a": .array([.int(1), .int(2)]), "b": .object(["c": .string("d")])])),
+            "{\"a\":[1,2],\"b\":{\"c\":\"d\"}}"
+        )
+    }
+
+    /// Verbatim copy of the ORIGINAL stableStringify, to prove the optimized
+    /// version is byte-for-byte identical.
+    private func stableStringifyReference(_ v: JSONValue) -> String {
+        switch v {
+        case .null, .undefined: return "null"
+        case .bool(let b): return b ? "true" : "false"
+        case .int(let i): return String(i)
+        case .double(let d):
+            if d.rounded() == d && abs(d) < 1e18 { return String(Int64(d)) }
+            return String(d)
+        case .string(let s): return encodeJSONString(s)
+        case .array(let xs): return "[" + xs.map(stableStringifyReference).joined(separator: ",") + "]"
+        case .object(let o):
+            let sorted = o.keys.sorted()
+            let parts = sorted.map { k -> String in encodeJSONString(k) + ":" + stableStringifyReference(o[k]!) }
+            return "{" + parts.joined(separator: ",") + "}"
+        case .ref(let r): return encodeJSONString(r)
+        case .refList(let rs): return "[" + rs.map { encodeJSONString($0) }.joined(separator: ",") + "]"
+        }
+    }
+
+    private func randomString(using rng: inout LCG) -> String {
+        // Deliberately includes quotes, backslash, control chars, unicode, and
+        // structural chars ({}[]:,) to stress escaping + assembly.
+        let alphabet: [Character] = ["a", "Z", "0", "\"", "\\", "\n", "\t", "\r", "é", "🎉", " ", "\u{01}", "{", "}", ":", ","]
+        let len = Int.random(in: 0...8, using: &rng)
+        var s = ""
+        for _ in 0..<len { s.append(alphabet[Int.random(in: 0..<alphabet.count, using: &rng)]) }
+        return s
+    }
+
+    private func randomJSONValue(depth: Int, using rng: inout LCG) -> JSONValue {
+        let leafCases = 7
+        let pick = Int.random(in: 0...(depth <= 0 ? leafCases - 1 : leafCases + 1), using: &rng)
+        switch pick {
+        case 0: return .null
+        case 1: return .bool(Bool.random(using: &rng))
+        case 2: return .int(Int64.random(in: -100_000...100_000, using: &rng))
+        case 3: return .double(Double(Int.random(in: -1000...1000, using: &rng)) * 0.25)
+        case 4: return .string(randomString(using: &rng))
+        case 5: return .ref(randomString(using: &rng))
+        case 6: return .refList((0..<Int.random(in: 0...3, using: &rng)).map { _ in randomString(using: &rng) })
+        case 7:
+            return .array((0..<Int.random(in: 0...4, using: &rng)).map { _ in randomJSONValue(depth: depth - 1, using: &rng) })
+        default:
+            var o: [String: JSONValue] = [:]
+            for _ in 0..<Int.random(in: 0...4, using: &rng) { o[randomString(using: &rng)] = randomJSONValue(depth: depth - 1, using: &rng) }
+            return .object(o)
+        }
+    }
+
+    func test_stableStringify_differentialFuzz_byteIdentical() {
+        var rng = LCG(seed: 0x5742_1F1E)
+        for iter in 0..<3000 {
+            let v = randomJSONValue(depth: 3, using: &rng)
+            XCTAssertEqual(stableStringify(v), stableStringifyReference(v), "iter \(iter): \(v)")
+        }
+    }
 }

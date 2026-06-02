@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### `stableStringify` allocates in place (Phase 2)
+
+`stableStringify` — the canonical/cache-key generator run on every materialize
+signature and connection canonical key — built per-node intermediate `String`s via
+`.map`/`.joined`/`+`. It now appends into a single `reserveCapacity`'d buffer (shared
+`appendJSONString`; `encodeJSONString` delegates to it). Output is **byte-for-byte
+identical** (it's a cache key) — proven by a differential fuzz against a verbatim copy
+of the old implementation over 3000 random structures, plus characterization tests.
+~10–16% faster on representative object arrays; the win is reduced allocation, not a
+complexity change (it was already O(n)).
+
 ### `recycleSnapshots` list matching: O(n·m) → O(n+m) (Phase 2)
 
 The watcher snapshot-recycler (`Utils.recycleSnapshots`) matched list items by
