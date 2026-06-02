@@ -107,12 +107,15 @@ let package = Package(
             swiftSettings: strictSettings
         ),
         // TEMP (perf spike): standalone bench, `swift run -c release YYBench`.
-        // Depends only on yyjson (not Cachebay) so it builds fast and isolates
-        // the JSONDecoder-vs-yyjson comparison. Drop this target + Tools/YYBench
-        // once Phase 2 profiling concludes.
+        // Depends on Cachebay so it can profile the *real* JSONValue codec
+        // (`from(json:)`, etc.) plus raw yyjson for A/B comparisons. Drop this
+        // target + Tools/YYBench once Phase 2 profiling concludes.
         .executableTarget(
             name: "YYBench",
-            dependencies: [.product(name: "yyjson", package: "yyjson")],
+            dependencies: [
+                "Cachebay",
+                .product(name: "yyjson", package: "yyjson"),
+            ],
             path: "Tools/YYBench"
         ),
     ]

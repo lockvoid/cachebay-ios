@@ -10,6 +10,7 @@
 
 import Foundation
 import yyjson
+import Cachebay
 
 struct Record: Codable {
     let id: String
@@ -121,7 +122,96 @@ func bench(_ label: String, iters: Int, bytes: Int, _ body: () -> Int) {
     print("\(padded)\(nums)   count=\(produced)")
 }
 
+// MARK: - Baseline: JSONValue.from(json:) parse scaling (Phase 2)
+
+/// A representative GraphQL-ish entity array of `n` records.
+func makeRecordArrayJSON(_ n: Int) -> Data {
+    var objs: [String] = []
+    objs.reserveCapacity(n)
+    for i in 0..<n {
+        objs.append(#"""
+        {"__typename":"User","id":"User:\#(i)","name":"User Number \#(i)","email":"user\#(i)@example.com","age":\#(i % 90),"score":\#(Double(i) * 0.5),"active":\#(i % 2 == 0),"tags":["alpha","beta","gamma"],"bio":"A reasonably long biography string for record \#(i), to keep the payload representative of real responses."}
+        """#)
+    }
+    return Data(("[" + objs.joined(separator: ",") + "]").utf8)
+}
+
+func benchScale(_ label: String, iters: Int, bytes: Int, records: Int, _ body: () -> Int) {
+    _ = body() // warmup
+    let clock = ContinuousClock()
+    var best = Duration.seconds(1 << 30)
+    var produced = 0
+    for _ in 0..<iters {
+        let d = clock.measure { produced = body() }
+        best = min(best, d)
+    }
+    let bestMs = ms(best)
+    let mbps = (Double(bytes) / (1024 * 1024)) / (bestMs / 1000.0)
+    let nsPerRec = (bestMs * 1_000_000.0) / Double(records)
+    let padded = label.padding(toLength: 22, withPad: " ", startingAt: 0)
+    print(padded + String(format: "best %9.4f ms   %7.1f MB/s   %8.1f ns/record   (n=%d, %d B)", bestMs, mbps, nsPerRec, produced, bytes))
+}
+
+func runParseBaseline() {
+    print("=== BASELINE: JSONValue.from(json:) parse scaling (yyjson-backed) ===")
+    for n in [10, 100, 1000] {
+        let data = makeRecordArrayJSON(n)
+        benchScale("from(json:) n=\(n)", iters: 500, bytes: data.count, records: n) {
+            if case .array(let a)? = try? JSONValue.from(json: data) { return a.count }
+            return -1
+        }
+    }
+    print("")
+}
+
+func benchOps(_ label: String, iters: Int, units: Int, _ body: () -> Int) {
+    _ = body() // warmup
+    let clock = ContinuousClock()
+    var best = Duration.seconds(1 << 30)
+    var produced = 0
+    for _ in 0..<iters {
+        let d = clock.measure { produced = body() }
+        best = min(best, d)
+    }
+    let bestMs = ms(best)
+    let nsPer = (bestMs * 1_000_000.0) / Double(units)
+    print(label.padding(toLength: 22, withPad: " ", startingAt: 0)
+        + String(format: "best %9.4f ms   %10.1f ns/item   (n=%d)", bestMs, nsPer, produced))
+}
+
+/// Worst case for the recycle matcher: `next` is `prev` reordered (reversed) with
+/// changed content but identical per-item fingerprints — every next item must be
+/// matched against the prev set.
+func makeRecycleArrays(_ n: Int) -> (JSONValue, JSONValue, JSONValue, JSONValue) {
+    var prev: [JSONValue] = [], next: [JSONValue] = [], pFp: [JSONValue] = [], nFp: [JSONValue] = []
+    prev.reserveCapacity(n); next.reserveCapacity(n); pFp.reserveCapacity(n); nFp.reserveCapacity(n)
+    for i in 0..<n {
+        prev.append(.object(["id": .string("Item:\(i)"), "v": .int(Int64(i))]))
+        pFp.append(.object([CachebayConstants.fingerprintKey: .int(Int64(i))]))
+    }
+    for i in stride(from: n - 1, through: 0, by: -1) {
+        next.append(.object(["id": .string("Item:\(i)"), "v": .int(Int64(i + 1_000_000))]))
+        nFp.append(.object([CachebayConstants.fingerprintKey: .int(Int64(i))]))
+    }
+    return (.array(prev), .array(next), .array(pFp), .array(nFp))
+}
+
+func runRecycleBaseline() {
+    print("=== recycleSnapshots scaling (reordered list, all fingerprints match) ===")
+    for n in [10, 100, 1000] {
+        let (p, nx, pf, nf) = makeRecycleArrays(n)
+        benchOps("recycle n=\(n)", iters: 500, units: n) {
+            if case .array(let a) = recycleSnapshots(p, nx, pf, nf) { return a.count }
+            return -1
+        }
+    }
+    print("")
+}
+
 // MARK: - Run
+
+runParseBaseline()
+runRecycleBaseline()
 
 let N = 50_000
 let iters = 30
