@@ -208,10 +208,37 @@ func runRecycleBaseline() {
     print("")
 }
 
+func makeRecordArrayJSONValue(_ n: Int) -> JSONValue {
+    var arr: [JSONValue] = []
+    arr.reserveCapacity(n)
+    for i in 0..<n {
+        arr.append(.object([
+            "__typename": .string("User"),
+            "id": .string("User:\(i)"),
+            "name": .string("User Number \(i)"),
+            "age": .int(Int64(i % 90)),
+            "score": .double(Double(i) * 0.5),
+            "active": .bool(i % 2 == 0),
+            "tags": .array([.string("alpha"), .string("beta"), .string("gamma")]),
+        ]))
+    }
+    return .array(arr)
+}
+
+func runStableStringifyBaseline() {
+    print("=== stableStringify scaling (array of n objects, sorted keys) ===")
+    for n in [10, 100, 1000] {
+        let jv = makeRecordArrayJSONValue(n)
+        benchOps("stableStringify n=\(n)", iters: 500, units: n) { stableStringify(jv).count }
+    }
+    print("")
+}
+
 // MARK: - Run
 
 runParseBaseline()
 runRecycleBaseline()
+runStableStringifyBaseline()
 
 let N = 50_000
 let iters = 30
