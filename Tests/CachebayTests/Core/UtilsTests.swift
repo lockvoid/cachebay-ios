@@ -393,4 +393,112 @@ final class UtilsTests: XCTestCase {
         let result = recycleSnapshots(prev, next, prevFp, nextFp)
         XCTAssertEqual(result, .array([.object(["v": .string("A1")])]))
     }
+
+    // MARK: - Extra edge cases (regression-proofing the O(n+m) rewrite)
+
+    func test_recycleArray_emptyArrays() {
+        XCTAssertEqual(recycleSnapshots(.array([]), .array([]), .array([]), .array([])), .array([]))
+        // empty prev, non-empty next → all next
+        XCTAssertEqual(
+            recycleSnapshots(.array([]), .array([.object(["v": .int(1)])]), .array([]), .array([fp(1)])),
+            .array([.object(["v": .int(1)])])
+        )
+    }
+
+    func test_recycleArray_nonArrayPrevFp_usesNext() {
+        // prevFp not an array → nothing recyclable → every item is next's.
+        let prev: JSONValue = .array([.object(["v": .string("A")])])
+        let next: JSONValue = .array([.object(["v": .string("B")])])
+        XCTAssertEqual(recycleSnapshots(prev, next, .undefined, .array([fp(1)])),
+                       .array([.object(["v": .string("B")])]))
+    }
+
+    func test_recycleArray_nextFpShorterThanData() {
+        // next item beyond nextFp's length has no fingerprint → uses next.
+        let prev: JSONValue = .array([.object(["v": .string("A")])])
+        let next: JSONValue = .array([.object(["v": .string("A")]), .object(["v": .string("C")])])
+        let result = recycleSnapshots(prev, next, .array([fp(1)]), .array([fp(1)])) // nextFp has 1 entry
+        // next[0] fp1 → prev[0]={A}; next[1] no fp → next {C}
+        XCTAssertEqual(result, .array([.object(["v": .string("A")]), .object(["v": .string("C")])]))
+    }
+
+    func test_recycleArray_fingerprintStoredAsDouble_coercesEqually() {
+        // A fingerprint stored as .double(7.0) coerces to Int64 in both prev and
+        // next via the `.int` accessor — must still match.
+        let prev: JSONValue = .array([.object(["v": .string("A")])])
+        let next: JSONValue = .array([.object(["v": .string("B")])])
+        let prevFp: JSONValue = .array([.object([CachebayConstants.fingerprintKey: .double(7.0)])])
+        let nextFp: JSONValue = .array([.object([CachebayConstants.fingerprintKey: .int(7)])])
+        XCTAssertEqual(recycleSnapshots(prev, next, prevFp, nextFp),
+                       .array([.object(["v": .string("A")])]))  // recycled prev
+    }
+
+    // Reproducible PRNG so any failure is debuggable.
+    private struct LCG: RandomNumberGenerator {
+        var state: UInt64
+        init(seed: UInt64) { state = seed }
+        mutating func next() -> UInt64 {
+            state = state &* 6364136223846793005 &+ 1442695040888963407
+            return state
+        }
+    }
+
+    /// The ORIGINAL O(n·m) array-matching algorithm, verbatim — used only to
+    /// prove the optimized `recycleSnapshots` is byte-identical across inputs.
+    private func recycleArrayReference(_ pa: [JSONValue], _ na: [JSONValue], _ prevFp: JSONValue, _ nextFp: JSONValue) -> JSONValue {
+        var out: [JSONValue] = []
+        for i in 0..<na.count {
+            let nItem = na[i]
+            let nItemFp: JSONValue = { if case .array(let a) = nextFp, i < a.count { return a[i] }; return .undefined }()
+            if let nv = nItemFp[CachebayConstants.fingerprintKey]?.int {
+                var matched: JSONValue? = nil
+                for j in 0..<pa.count {
+                    let pItemFp: JSONValue = { if case .array(let a) = prevFp, j < a.count { return a[j] }; return .undefined }()
+                    if let pv = pItemFp[CachebayConstants.fingerprintKey]?.int, pv == nv { matched = pa[j]; break }
+                }
+                if let m = matched { out.append(m); continue }
+            }
+            out.append(nItem)
+        }
+        return .array(out)
+    }
+
+    // Differential fuzz: optimized vs original across thousands of random
+    // shapes — varying sizes, fingerprint overlap, gaps, duplicates, missing fps,
+    // and non-array fp side-channels. `gen` differs (0 vs 1) so prev≠next content,
+    // making a recycled (prev) item visibly distinct from a next item.
+    func test_recycleArray_differentialFuzz_matchesOriginal() {
+        var rng = LCG(seed: 0xCAFEBABE)
+        for iter in 0..<4000 {
+            let pn = Int.random(in: 0...7, using: &rng)
+            let nn = Int.random(in: 0...7, using: &rng)
+            var pa: [JSONValue] = [], pfp: [JSONValue] = []
+            for k in 0..<pn {
+                pa.append(.object(["id": .int(Int64(k)), "gen": .int(0)]))
+                pfp.append(Int.random(in: 0...4, using: &rng) == 0
+                    ? .object([:])  // ~20% missing fingerprint
+                    : .object([CachebayConstants.fingerprintKey: .int(Int64(Int.random(in: 0...5, using: &rng)))]))
+            }
+            var na: [JSONValue] = [], nfp: [JSONValue] = []
+            for k in 0..<nn {
+                na.append(.object(["id": .int(Int64(k)), "gen": .int(1)]))
+                nfp.append(Int.random(in: 0...4, using: &rng) == 0
+                    ? .object([:])
+                    : .object([CachebayConstants.fingerprintKey: .int(Int64(Int.random(in: 0...5, using: &rng)))]))
+            }
+            // Occasionally make fp arrays length-mismatched or non-array.
+            func sideChannel(_ arr: [JSONValue]) -> JSONValue {
+                switch Int.random(in: 0...6, using: &rng) {
+                case 0: return .undefined
+                case 1: return .array(arr.isEmpty ? [] : Array(arr.dropLast()))  // shorter
+                default: return .array(arr)
+                }
+            }
+            let prevFp = sideChannel(pfp)
+            let nextFp = sideChannel(nfp)
+            let got = recycleSnapshots(.array(pa), .array(na), prevFp, nextFp)
+            let want = recycleArrayReference(pa, na, prevFp, nextFp)
+            XCTAssertEqual(got, want, "iter \(iter): pn=\(pn) nn=\(nn) prevFp=\(prevFp) nextFp=\(nextFp)")
+        }
+    }
 }
