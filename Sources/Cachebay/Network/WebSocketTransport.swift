@@ -984,7 +984,7 @@ public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendabl
             emit(message.eventForOutbound())
             return
         }
-        let data = try JSONSerialization.data(withJSONObject: message.toFoundation())
+        let data = try message.toJSONValue().encodeYYJSON(sortKeys: false, pretty: false)
         guard let str = String(data: data, encoding: .utf8) else { throw CachebayError.networkError("WS encode failed") }
         guard let task else { throw CachebayError.networkError("WS not connected") }
         do {
@@ -1167,6 +1167,26 @@ enum WSClientMessage: Sendable {
     case complete(id: String)
     case ping
     case pong
+
+    /// JSONValue form used for outbound serialization via the yyjson writer.
+    func toJSONValue() -> JSONValue {
+        switch self {
+        case .connectionInit(let params):
+            return .object(["type": .string("connection_init"), "payload": .object(params)])
+        case .subscribe(let id, let query, let variables):
+            return .object([
+                "id": .string(id),
+                "type": .string("subscribe"),
+                "payload": .object(["query": .string(query), "variables": .object(variables)]),
+            ])
+        case .complete(let id):
+            return .object(["id": .string(id), "type": .string("complete")])
+        case .ping:
+            return .object(["type": .string("ping")])
+        case .pong:
+            return .object(["type": .string("pong")])
+        }
+    }
 
     func toFoundation() -> [String: Any] {
         switch self {

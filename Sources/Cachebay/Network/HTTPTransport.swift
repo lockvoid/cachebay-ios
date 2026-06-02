@@ -41,11 +41,11 @@ public struct URLSessionHTTPTransport: HTTPTransport {
         for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
         requestModifier?(&request)
 
-        let body: [String: Any] = [
-            "query": context.query,
-            "variables": JSONValue.object(context.variables).toFoundation(),
-        ]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let body: JSONValue = .object([
+            "query": .string(context.query),
+            "variables": .object(context.variables),
+        ])
+        request.httpBody = try body.encodeYYJSON(sortKeys: false, pretty: false)
 
         do {
             let (data, response) = try await session.data(for: request)

@@ -367,47 +367,18 @@ public final class SQLiteStorage: StorageAdapter, @unchecked Sendable {
 
     // MARK: - Record codec
 
-    /// Encode a record as JSON bytes. JSONValue round-trips through Foundation.
+    /// Encode a record as JSON bytes via the yyjson writer (one pass; `.ref`/
+    /// `.refList` written as `__ref`/`__refs` sentinels). Symmetric with the
+    /// one-pass `decodeRecord`.
     private func encodeRecord(_ record: [String: JSONValue]) -> Data {
-        let foundation = JSONValue.object(record).toFoundation()
-        return (try? JSONSerialization.data(withJSONObject: foundation, options: [])) ?? Data()
+        (try? JSONValue.object(record).encodeYYJSON(sortKeys: false, pretty: false)) ?? Data()
     }
 
     private func decodeRecord(_ data: Data) throws -> [String: JSONValue] {
-        let v = try JSONValue.from(json: data)
-        if case .object(var obj) = v {
-            // Restore `__ref` / `__refs` sentinels into typed cases so materialize reads them
-            // correctly without re-normalization.
-            restoreRefs(&obj)
-            return obj
-        }
-        throw SQLiteError(code: 0, message: "Unexpected non-object record")
-    }
-
-    private func restoreRefs(_ obj: inout [String: JSONValue]) {
-        for (k, v) in obj {
-            obj[k] = restoreRefsInValue(v)
-        }
-    }
-
-    private func restoreRefsInValue(_ v: JSONValue) -> JSONValue {
-        switch v {
-        case .object(let o):
-            if o.count == 1, let ref = o["__ref"]?.string {
-                return .ref(ref)
-            }
-            if o.count == 1, let refs = o["__refs"]?.array {
-                let all = refs.compactMap { $0.string }
-                if all.count == refs.count { return .refList(all) }
-            }
-            var out: [String: JSONValue] = [:]
-            for (k, sub) in o { out[k] = restoreRefsInValue(sub) }
-            return .object(out)
-        case .array(let a):
-            return .array(a.map(restoreRefsInValue))
-        default:
-            return v
-        }
+        // One pass: yyjson parse + inline `__ref`/`__refs` sentinel restoration.
+        // Replaces the prior JSONSerialization parse + `from(any:)` rebuild +
+        // separate `restoreRefs` walk (three passes → one).
+        try JSONValue.parseYYJSONRecord(data)
     }
 }
 

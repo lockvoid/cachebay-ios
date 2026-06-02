@@ -61,12 +61,16 @@ public extension JSONValue {
 public extension JSONValue {
     /// Parse from raw JSON bytes (e.g. server response body).
     /// `nil`/`undefined` in JSON maps to `.null`.
+    ///
+    /// Backed by yyjson (see `parseYYJSON`). Does not restore `__ref`/`__refs`
+    /// sentinels — server payloads carry none; the normalized-store decode path
+    /// opts in via `parseYYJSON(_:restoreRefs:)`.
     static func from(json data: Data) throws -> JSONValue {
-        let obj = try JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
-        return try from(any: obj)
+        try parseYYJSON(data, restoreRefs: false)
     }
 
-    /// Parse from a `JSONSerialization` result.
+    /// Parse from a `JSONSerialization` result. Retained for consumers and for
+    /// `toFoundation()` round-trips; the hot parse path is `from(json:)` (yyjson).
     static func from(any obj: Any) throws -> JSONValue {
         if obj is NSNull { return .null }
         if let n = obj as? NSNumber {
@@ -124,11 +128,10 @@ public extension JSONValue {
         return value
     }
 
-    /// Serialize to JSON data.
+    /// Serialize to JSON data (yyjson writer). Keys are emitted sorted, matching
+    /// the prior `JSONSerialization` `.sortedKeys` behavior.
     func encodeJSON(pretty: Bool = false) throws -> Data {
-        var opts: JSONSerialization.WritingOptions = [.sortedKeys]
-        if pretty { opts.insert(.prettyPrinted) }
-        return try JSONSerialization.data(withJSONObject: toFoundation(), options: opts)
+        try encodeYYJSON(sortKeys: true, pretty: pretty)
     }
 }
 

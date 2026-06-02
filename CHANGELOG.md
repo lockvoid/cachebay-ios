@@ -6,6 +6,143 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### yyjson as the JSON ⇄ bytes codec (Phase 1)
+
+Cachebay's JSON **read and write** paths now use [yyjson](https://github.com/ibireme/yyjson)
+(pinned `0.12.0`) instead of `JSONSerialization`. This is scoped deliberately to the
+`bytes ⇄ JSONValue` codec at the parse/serialize seams (`HTTPTransport`, `WebSocketTransport`,
+`Inspect`, SQLite hydration + persist) — the normalized store, `.ref`/`.refList`, `materialize`,
+and the macro decode contract all keep running on `JSONValue` unchanged. `materialize` never
+parses JSON (it walks the in-memory `JSONValue` graph), so it is untouched; the win is entirely at
+the ingest/hydration/persist edges. The canonical-key stringifier (`Utils.stableStringify` /
+`encodeJSONString`) is intentionally **not** touched — it's a separate deterministic path.
+
+- **`JSONValue.from(json:)`** → one yyjson pass (`Sources/Cachebay/Core/JSONValueParser.swift`),
+  replacing `JSONSerialization.jsonObject` + the `from(any:)` rebuild.
+- **`SQLiteStorage.decodeRecord`** → `parseYYJSONRecord`, which **fuses `__ref`/`__refs` sentinel
+  restoration into the parse walk** — collapsing the old three passes (JSONSerialization → build
+  tree → separate `restoreRefs` walk) into one. `restoreRefs`/`restoreRefsInValue` removed.
+- **Encode** (`JSONValue.encodeJSON`, `SQLiteStorage.encodeRecord`) → yyjson mutable-doc writer
+  (`encodeYYJSON`), with `.ref`/`.refList` written back as the `__ref`/`__refs` sentinels.
+  `encodeJSON` keeps sorted-key output.
+- **Outbound requests** (`HTTPTransport` body, `WebSocketTransport` messages) → yyjson writer too
+  (`WSClientMessage.toJSONValue()`). Net result: **zero `JSONSerialization` / `JSONEncoder` /
+  `JSONDecoder` calls remain in production `Sources`.** (`toFoundation()` / `from(any:)` are kept
+  as public Foundation-interop bridges but are no longer on any internal path.)
+- **Number-typing bug fixed for free**: yyjson knows int-vs-real from the literal, so `100.0`
+  decodes to `.double`. The old path used an `NSNumber.stringValue.contains(".")` heuristic that
+  misclassified `100.0` as `.int(100)`. (Decode is unaffected — the `int`/`double` accessors
+  already coerce both ways — and fingerprints key on version stamps, not value equality.)
+
+**Measured** (`Tools/YYBench`, release, arm64): on `__ref`-laden store blobs the hydration path
+goes **321 ms → 26 ms (~12×)**; raw parse of an 8.76 MB payload is ~9–12× vs `JSONSerialization`.
+
+**Behavior notes**: duplicate object keys resolve last-wins (yyjson) vs first-wins
+(`JSONSerialization`) — irrelevant for GraphQL responses / store blobs, documented + tested.
+uint64 values above `Int64.max` promote to `.double`.
+
+**Scope**: both parse and serialize. `JSONValue.from(any:)` / `toFoundation()` are retained
+(public; consumer-facing Foundation bridges). Phase 2 (separate) profiles/optimizes `JSONValue`
+itself (intermediate-tree elimination in materialize, etc.).
+
+### Interface-rooted fragments now compile
+
+Fragments whose root selection is on a GraphQL **interface/union** (so the generated root `Data`
+is a `@CachebayInterface` enum) failed to compile in two distinct ways. The Harry Potter demo has
+no interface fragments, so neither path was exercised; both surfaced migrating ferment-cuts-ios
+(`ElementFields`, `ChatWidgetFields`, `BrandKitAssetFields`, …).
+
+- **BUG 1 (blocker): missing `__cachebayFieldNames`.** The CLI emits
+  `static var __cachebayFieldNames: [AnyKeyPath: String] { Data.__cachebayFieldNames }` for *every*
+  fragment, but `@CachebayInterface` never generated that member (only `@CachebayData` did) — so
+  `Data.__cachebayFieldNames` was undefined. Fix: `CachebayInterfaceMacro` now emits a
+  `__cachebayFieldNames` table over the lifted shared accessors (one entry per interface-level
+  field), reusing `CachebayDataMacro.makeFieldNamesMap`. KeyPath patching of an interface
+  fragment's shared fields (`b.patch(fragment:id:) { $0.set(\.name, …) }`) now works too.
+- **BUG 2: inline sub-selection on a shared interface field couldn't be lifted.** A shared field
+  with an inline sub-selection (`derivatives { key }`) generated a *distinct* nested struct per
+  variant (`Shared.Derivatives`, `VideoElement.Derivatives`, …); the macro's lifted accessor
+  referenced bare `[Derivatives]` at enum scope, where it was unresolved and couldn't unify the
+  switch arms. Fix: `cli/src/emit.rs::render_typed_enum` now hoists each shared sub-selection to a
+  single enum-scope nested struct (`Data.Derivatives`), suppressing the per-variant copies; bare
+  references resolve outward to the one type. (Previously workaroundable only by pointing the
+  sub-selection at a named fragment so it typed as a single `Fragment.Data`.)
+
+#### Tests
+
+- **Swift** (4 new): `CachebayInterfaceBehaviourTests` (`__cachebayFieldNames` over shared fields);
+  `GeneratedSmokeTests` (3 — a REAL interface-rooted fragment fixture with a hoisted shared
+  sub-selection decodes a known variant, falls back to `.unknown(Shared)` keeping the shared
+  sub-selection, and exposes `Data.__cachebayFieldNames`). Updated the `test_interfaceExpansion`
+  golden for the new member.
+- **cli** (1 new): `codegen_tests::typed_enum_hoists_shared_subselection_to_single_nested_struct`
+  (a shared sub-selection emits exactly one enum-scope nested struct, not one per variant).
+
+#### What consumers need to do
+
+Re-run `cachebay-codegen`. Interface-rooted fragments now compile with no source change.
+
+### Output enum fields decode as the generated enum, wrapped in `GraphQLEnum<T>`
+
+A GraphQL **enum** selected in a query/fragment/mutation **output** was emitted as
+`Cachebay.JSONValue` instead of the generated Swift enum — even though the enum type was
+generated correctly and **input** fields of the same enum were typed correctly. The
+selection-set field-typer (`emit.rs::leaf_primitive_swift`) only recognised the four built-in
+scalars and fell back to `JSONValue` for everything else, including enums. A second, latent
+half of the bug: `collect_referenced_enums` seeded only from operation **variables** + input
+objects, so an output-only enum (one never used as an input) was **never generated** at all —
+typing an output field as it would have referenced a nonexistent symbol.
+
+#### The forward-compat decision
+
+Output enums must degrade gracefully: a value the client build doesn't yet know (a case the
+server added before the app updated) must **not** fail decode. For a non-null field
+(`intent: VideoIntent!`) a closed enum + lenient decoder would turn an unknown value into a
+whole-record miss — a dropped row in the UI. So output enum fields are typed
+`Cachebay.GraphQLEnum<T>` (`.known(T)` | `.unknown(String)`), keeping decode **total**, while
+the generated enum itself stays a clean closed `enum: String, CaseIterable` reused verbatim by
+input fields.
+
+> **House rule (deliberate, not an accident to "fix" later): interfaces carry their
+> forward-compat case inline, enums carry it via an outer wrapper.** `@CachebayInterface`
+> already is a sum type, so `.unknown(Shared)` lives *on the enum*. A GraphQL enum kept
+> `String`-backed + `CaseIterable` cannot host an associated-value case, so its unknown lives
+> one level out in `GraphQLEnum<T>`. Two idioms, one reason each.
+
+### Fix
+
+- **`Sources/Cachebay/Core/GraphQLEnum.swift`** (new): generic `GraphQLEnum<T>` with a single
+  `CachebayValue` conformance (string ⇄ `.known`/`.unknown`, total decode), `.value`,
+  `.rawValue`, heterogeneous `==`/`!=` against `T`, and `~=` so `switch`/`case .knownCase`
+  matches the bare case (non-exhaustive by design — forces a `default`/`.unknown` arm). Composes
+  through the existing `Optional` / `Array` conformances, so `GraphQLEnum<T>?` and
+  `[GraphQLEnum<T>]` work for free.
+- **`cli/src/schema.rs`**: `collect_referenced_enums` now also walks every operation/fragment
+  **output** selection set (fields + inline fragments; fragment defs walked independently), so
+  output-only enums are generated.
+- **`cli/src/plan.rs`** / **`cli/src/emit.rs`**: `PlanField` gains `swift_enum_type`
+  (populated when a leaf's named type is an enum, mirroring `swift_scalar_type`);
+  `typed_swift_type_for_field` emits `Cachebay.GraphQLEnum<Enum>` (honouring nullability/list)
+  before the `JSONValue` fallback. Input typing and non-enum `String!` fields are untouched.
+
+### Tests
+
+- **Swift** (12 new): `GraphQLEnumTests` (10 — known/unknown/non-string decode, round-trip,
+  `Optional`/`Array` composition, `== T`); `GeneratedSmokeTests` (2 — REAL CLI output decoding
+  a known + unknown enum, and proving an unknown value on a **non-null** enum does not miss the
+  record).
+- **cli** (5 new): `schema::tests` (3 — output enum direct / via fragment / input regression
+  guard); `codegen_tests` (2 — enum leaf → `GraphQLEnum<…>` for non-null/nullable/list, and
+  plain `String!` stays `String`).
+
+### What consumers need to do
+
+Re-run `cachebay-codegen`. Output enum fields flip from `Cachebay.JSONValue` to
+`Cachebay.GraphQLEnum<Enum>`; any output-only enums now appear in `Enums.graphql.swift`. At the
+call site, match with `case .known(.foo)` / a `default` for unknown (or the terser
+`case .foo` + `default` via `~=`), test a single case with `field == .foo` / `field != .foo`, or
+read `field.value` (`nil` when unknown). Input enum fields are unchanged.
+
 ## [0.15.1] — cli codegen emits `@include` / `@skip` (closes v0.15.0 codegen gap)
 
 v0.15.0 added runtime evaluation of `@include` / `@skip` in `Documents.materialize` and `Documents.normalize`, with tests for the runtime-lowering path (`Compiler.compilePlan(source:)`). But **`cachebay-cli` was never updated to propagate the directives into the emitted `PlanField` literals.** Production iOS apps use codegen-emitted plans where every field's `skipIf` / `includeIf` was `nil` — so the runtime gate was a no-op for the actual code path consumers use.

@@ -32,6 +32,9 @@ let package = Package(
     dependencies: [
         // Swift macro support. 602.x matches the Swift 6.2 toolchain.
         .package(url: "https://github.com/swiftlang/swift-syntax.git", from: "602.0.0"),
+        // yyjson C JSON parser — Cachebay's JSON ⇄ bytes codec (Phase 1).
+        // Used by the `Cachebay` target's parse/hydration/persist path.
+        .package(url: "https://github.com/ibireme/yyjson.git", from: "0.12.0"),
     ],
     targets: [
         .target(
@@ -44,7 +47,14 @@ let package = Package(
         // `.macro` plugin below — required to be its own compiler-plugin target.
         .target(
             name: "Cachebay",
-            dependencies: ["CachebayGraphQL", "CachebayMacros"],
+            dependencies: [
+                "CachebayGraphQL",
+                "CachebayMacros",
+                // Phase 1: yyjson is the JSON ⇄ bytes codec (parse edges +
+                // SQLite hydration). The normalized store, refs, materialize,
+                // and the macro decode contract all stay on JSONValue.
+                .product(name: "yyjson", package: "yyjson"),
+            ],
             path: "Sources/Cachebay",
             swiftSettings: strictSettings
         ),
