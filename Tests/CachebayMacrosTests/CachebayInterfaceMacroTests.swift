@@ -95,6 +95,8 @@ final class CachebayInterfaceMacroTests: XCTestCase {
                 public var cachebayJSON: Cachebay.JSONValue {
                     .object(self.__dataDict())
                 }
+
+                nonisolated(unsafe) public static let __cachebayFieldNames: [AnyKeyPath: String] = [\Self.__typename: "__typename", \Self.id: "id"]
             }
             """#,
             macros: macros

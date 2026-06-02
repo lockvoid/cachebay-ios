@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 
 use apollo_compiler::ast::Type;
+use apollo_compiler::executable::{Selection, SelectionSet};
 use apollo_compiler::schema::ExtendedType;
 use apollo_compiler::Schema;
 
@@ -62,17 +63,31 @@ pub enum TypeKind {
     InputObject,
 }
 
-/// Walk the variable types used by every operation, transitively chasing
-/// input-object fields, to collect all enum types that generated code needs.
+/// Collect every enum type generated code needs. Two sources:
+///   * **Inputs** — operation variables, transitively chasing input-object
+///     fields (`input X { color: Color }`).
+///   * **Outputs** — every field selected in an operation/fragment whose named
+///     type is an enum (`{ video { intent } }`). Without this, an output-only
+///     enum (never used as an input) is never emitted, so typing an output
+///     field as it would reference a nonexistent Swift symbol.
 pub fn collect_referenced_enums(ctx: &CompilerContext) -> BTreeMap<String, EnumTypeDef> {
     let mut queue: Vec<String> = Vec::new();
     let schema: &Schema = &ctx.schema;
 
-    // Seed from every operation variable.
+    // Seed from every operation variable (input side).
     for op in ctx.document.operations.iter() {
         for v in op.variables.iter() {
             queue.push(v.ty.inner_named_type().to_string());
         }
+    }
+
+    // Seed from every output selection set (output side). Fragment definitions
+    // are walked independently, so a spread doesn't need to be chased inline.
+    for op in ctx.document.operations.iter() {
+        collect_enums_from_selection_set(&op.selection_set, &mut queue);
+    }
+    for (_, frag) in ctx.document.fragments.iter() {
+        collect_enums_from_selection_set(&frag.selection_set, &mut queue);
     }
 
     let mut out: BTreeMap<String, EnumTypeDef> = BTreeMap::new();
@@ -96,6 +111,26 @@ pub fn collect_referenced_enums(ctx: &CompilerContext) -> BTreeMap<String, EnumT
         }
     }
     out
+}
+
+/// Push every field's named type from an output selection set onto `queue` (the
+/// main loop keeps the ones that resolve to enums) and recurse into nested
+/// selections + inline fragments. Fragment *spreads* are skipped here — the
+/// caller walks every fragment definition's own selection set, so chasing the
+/// spread inline would only double-visit.
+fn collect_enums_from_selection_set(sel: &SelectionSet, queue: &mut Vec<String>) {
+    for selection in sel.selections.iter() {
+        match selection {
+            Selection::Field(f) => {
+                queue.push(f.ty().inner_named_type().to_string());
+                collect_enums_from_selection_set(&f.selection_set, queue);
+            }
+            Selection::InlineFragment(inline) => {
+                collect_enums_from_selection_set(&inline.selection_set, queue);
+            }
+            Selection::FragmentSpread(_) => {}
+        }
+    }
 }
 
 /// Walk every `type X implements Y` in the schema to build the
@@ -214,5 +249,86 @@ fn kind_for_named(schema: &Schema, name: &str) -> TypeKind {
             Some(ExtendedType::Scalar(_)) => TypeKind::CustomScalar,
             _ => TypeKind::Scalar,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::load::CompilerContext;
+    use apollo_compiler::{ast, Schema};
+
+    fn ctx_from(schema_src: &str, op_src: &str) -> CompilerContext {
+        let schema =
+            Schema::parse_and_validate(schema_src, "schema.graphql").expect("schema should validate");
+        let document = ast::Document::parse(op_src, "op.graphql")
+            .expect("op should parse")
+            .to_executable_validate(&schema)
+            .expect("op should validate");
+        CompilerContext {
+            schema,
+            document,
+            file_paths: Default::default(),
+            diagnostics: Vec::new(),
+        }
+    }
+
+    // VideoIntent / WidgetKind are output-only (never an input). ProjectOrderBy
+    // is input-only (reached via `$filter: Filter`). The bug: the registry
+    // seeded only from variables + input objects, so the two output-only enums
+    // were never generated — and any field typed as them would reference a
+    // nonexistent Swift symbol.
+    const SCHEMA: &str = r#"
+        type Query { video(filter: Filter): Video }
+        type Video { id: ID! intent: VideoIntent! widget: Widget }
+        type Widget { id: ID! kind: WidgetKind! }
+        enum VideoIntent { ROLL STORY VIBE }
+        enum WidgetKind { CHAT GALLERY }
+        enum ProjectOrderBy { NAME DATE }
+        input Filter { order: ProjectOrderBy }
+    "#;
+
+    const OP: &str = r#"
+        query Q($filter: Filter) {
+          video(filter: $filter) {
+            id
+            intent
+            ...WidgetBits
+          }
+        }
+        fragment WidgetBits on Video {
+          widget { id kind }
+        }
+    "#;
+
+    #[test]
+    fn collects_output_enum_directly_selected() {
+        let enums = collect_referenced_enums(&ctx_from(SCHEMA, OP));
+        assert!(
+            enums.contains_key("VideoIntent"),
+            "output enum field `intent: VideoIntent!` must be collected; got {:?}",
+            enums.keys().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn collects_output_enum_reached_through_fragment() {
+        let enums = collect_referenced_enums(&ctx_from(SCHEMA, OP));
+        assert!(
+            enums.contains_key("WidgetKind"),
+            "output enum reached via fragment spread (`widget.kind`) must be collected; got {:?}",
+            enums.keys().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn still_collects_input_enum_via_variable() {
+        // Regression guard: the existing input-side path must keep working.
+        let enums = collect_referenced_enums(&ctx_from(SCHEMA, OP));
+        assert!(
+            enums.contains_key("ProjectOrderBy"),
+            "input enum via $filter: Filter{{ order: ProjectOrderBy }} must still be collected; got {:?}",
+            enums.keys().collect::<Vec<_>>()
+        );
     }
 }

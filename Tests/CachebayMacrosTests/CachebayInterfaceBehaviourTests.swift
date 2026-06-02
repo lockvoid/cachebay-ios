@@ -82,6 +82,16 @@ final class CachebayInterfaceBehaviourTests: XCTestCase {
         XCTAssertEqual(describe(Element(_dataDict: videoRecord(id: "v1"))!), "video:v1")
     }
 
+    // BUG 1 — the interface enum must emit `__cachebayFieldNames` (one entry per
+    // lifted shared accessor), so an interface-rooted fragment's CLI-emitted
+    // `Data.__cachebayFieldNames` resolves and KeyPath patching of shared fields works.
+    func test_interfaceData_emitsFieldNamesForSharedFields() {
+        let names = Element.__cachebayFieldNames
+        XCTAssertEqual(names[\Element.id], "id")
+        XCTAssertEqual(names[\Element.__typename], "__typename")
+        XCTAssertEqual(names.count, 2)   // only the Shared (interface-level) fields
+    }
+
     // Round-trip through __dataDict() and re-decode to an equal value (Equatable payoff).
     func test_roundTrip_and_equatable() {
         let e1 = Element(_dataDict: videoRecord(id: "v5"))!

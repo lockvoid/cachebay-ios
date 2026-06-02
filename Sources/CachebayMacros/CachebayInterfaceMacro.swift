@@ -85,6 +85,12 @@ enum CachebayEnumExpansion {
         members.append(makeDictInit(variants: variants))
         members.append(makeDataDict(variants: variants))
         members.append(contentsOf: makeConformance())
+        // KeyPath -> field-name table over the lifted shared accessors. Mirrors
+        // `@CachebayData` so an interface-rooted fragment's
+        // `Data.__cachebayFieldNames` (emitted for every fragment by the CLI)
+        // resolves, and `b.patch(fragment:id:) { $0.set(\.sharedField, …) }`
+        // works for the interface's common fields.
+        members.append(CachebayDataMacro.makeFieldNamesMap(props: sharedProps))
         return members
     }
 

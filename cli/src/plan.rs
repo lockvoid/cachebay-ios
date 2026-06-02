@@ -82,6 +82,10 @@ pub struct PlanField {
     /// `@cachebay(swiftType: "…")` directive (e.g. `Foundation.Date`). When unset,
     /// custom scalars fall back to `Cachebay.JSONValue` (raw passthrough).
     pub swift_scalar_type: Option<String>,
+    /// Generated Swift enum name when this leaf's named type is a GraphQL enum.
+    /// The typed emitter wraps it as `Cachebay.GraphQLEnum<Name>` (forward-compat
+    /// output decode); `None` for non-enum leaves.
+    pub swift_enum_type: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -328,6 +332,9 @@ fn lower_field(f: &Field, parent_typename: &str, ctx: &CompilerContext, exec_doc
     let default_value = parse_cachebay_default(&f.definition.directives);
     // `@cachebay(swiftType: …)` lives on the SCALAR type definition.
     let swift_scalar_type = lookup_scalar_swift_type(&ctx.schema, &named_type);
+    // When the leaf's named type is a GraphQL enum, the typed emitter wraps it
+    // in `Cachebay.GraphQLEnum<…>` instead of collapsing to `JSONValue`.
+    let swift_enum_type = lookup_enum_swift_type(&ctx.schema, &named_type);
 
     let sel_id = fingerprint_field(
         &response_key,
@@ -358,6 +365,19 @@ fn lower_field(f: &Field, parent_typename: &str, ctx: &CompilerContext, exec_doc
         include_if,
         default_value,
         swift_scalar_type,
+        swift_enum_type,
+    }
+}
+
+/// Returns the Swift enum type name when `named_type` is a GraphQL enum. The
+/// Swift name equals the GraphQL name (matching the input typer's
+/// `TypeKind::Enum => shape.named`); the typed emitter wraps output enum leaves
+/// in `Cachebay.GraphQLEnum<…>`. `None` for scalars / objects / interfaces.
+fn lookup_enum_swift_type(schema: &apollo_compiler::Schema, named_type: &str) -> Option<String> {
+    use apollo_compiler::schema::ExtendedType;
+    match schema.types.get(named_type) {
+        Some(ExtendedType::Enum(_)) => Some(named_type.to_string()),
+        _ => None,
     }
 }
 
@@ -465,6 +485,7 @@ fn synthetic_typename_field() -> PlanField {
         include_if: None,
         default_value: None,
         swift_scalar_type: None,
+        swift_enum_type: None,
     }
 }
 

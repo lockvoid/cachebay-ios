@@ -8,7 +8,7 @@
 //! Nothing exotic — no enum generation, no input-object generation in this MVP.
 //! Those extend cleanly once the pipeline is proven.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
@@ -490,6 +490,17 @@ fn render_typed_selection(
 /// type (`@cachebay(swiftType:)`). Used only by the typed emitter — the legacy
 /// dict-wrapper accessors still read custom scalars as `JSONValue`.
 fn typed_swift_type_for_field(f: &PlanField) -> String {
+    // Output enum leaf -> `Cachebay.GraphQLEnum<Enum>` wrapper. Keeps the
+    // generated enum closed (`String, CaseIterable`, used verbatim by inputs)
+    // while making output decode total: an unknown server value lands in
+    // `.unknown(raw)` instead of failing the whole record.
+    if let (Some(enum_name), OutputShape::Leaf { nullable, list }) =
+        (&f.swift_enum_type, &f.output_shape)
+    {
+        let base = format!("Cachebay.GraphQLEnum<{enum_name}>");
+        let list_ty = if *list { format!("[{base}]") } else { base };
+        return if *nullable { format!("{list_ty}?") } else { list_ty };
+    }
     if let (Some(ty), OutputShape::Leaf { nullable, list }) = (&f.swift_scalar_type, &f.output_shape) {
         let list_ty = if *list { format!("[{ty}]") } else { ty.clone() };
         return if *nullable { format!("{list_ty}?") } else { list_ty };
@@ -502,6 +513,23 @@ fn render_typed_struct(
     swift_name: &str,
     parent_named_type: &str,
     children: &[PlanField],
+    indent: &str,
+) -> String {
+    render_typed_struct_skipping(swift_name, parent_named_type, children, &BTreeSet::new(), indent)
+}
+
+/// Like `render_typed_struct`, but skips emitting the nested type for any child
+/// whose `response_key` is in `skip_nested`. Used by `render_typed_enum` to hoist
+/// a shared interface field's inline sub-selection to a single enum-scope nested
+/// struct: every variant's field then references the one shared type (resolved by
+/// outward name lookup), and the macro's lifted accessor can unify the switch
+/// arms. The field's `let` is still emitted — only its nested type definition is
+/// omitted (it lives one scope out).
+fn render_typed_struct_skipping(
+    swift_name: &str,
+    parent_named_type: &str,
+    children: &[PlanField],
+    skip_nested: &BTreeSet<String>,
     indent: &str,
 ) -> String {
     let (shared, _by_condition) = partition_children(parent_named_type, children);
@@ -531,9 +559,13 @@ fn render_typed_struct(
         };
         s.push_str(&format!("{indent}    {default_attr}public let {}: {ty}\n", child.response_key));
     }
-    // Nested object types become nested `@CachebayData`/`@CachebayInterface`.
+    // Nested object types become nested `@CachebayData`/`@CachebayInterface`,
+    // except those hoisted to an enclosing scope (see `skip_nested`).
     for child in &shared {
-        if !child.children.is_empty() && child.reuse_fragment.is_none() {
+        if !child.children.is_empty()
+            && child.reuse_fragment.is_none()
+            && !skip_nested.contains(&child.response_key)
+        {
             let name = title_case(&child.response_key);
             s.push('\n');
             s.push_str(&render_typed_selection(
@@ -558,10 +590,25 @@ fn render_typed_enum(
 ) -> String {
     let (shared, by_condition) = partition_children(parent_named_type, children);
 
+    // `Identifiable` requires an `id` member. The macro only lifts an `id`
+    // accessor when the interface's shared fields include `id`, so gate the
+    // conformance on that — mirroring `render_typed_struct_skipping`. An
+    // id-less interface (e.g. the `CookData` union) would otherwise declare
+    // `Identifiable` with no `id`, failing to conform.
+    let has_id = shared.iter().any(|c| c.response_key == "id");
+    let mut conformances: Vec<&str> = Vec::new();
+    if has_id {
+        conformances.push("Identifiable");
+    }
+    conformances.push("Sendable");
+    conformances.push("Hashable");
+    conformances.push("Cachebay.CachebayValue");
+    let conf = conformances.join(", ");
+
     let mut s = String::new();
     s.push_str(&format!("{indent}@CachebayInterface\n"));
     s.push_str(&format!(
-        "{indent}public enum {swift_name}: Identifiable, Sendable, Hashable, Cachebay.CachebayValue {{\n"
+        "{indent}public enum {swift_name}: {conf} {{\n"
     ));
     // One case per narrowed concrete type, payload = the variant struct.
     for tc in by_condition.keys() {
@@ -569,17 +616,40 @@ fn render_typed_enum(
     }
     s.push_str(&format!("{indent}    case unknown(Shared)\n"));
 
+    // A shared interface field with an inline sub-selection generates one nested
+    // type *per variant* if left to `render_typed_struct` (Shared.Derivatives,
+    // VideoElement.Derivatives, …) — distinct types the macro's lifted accessor
+    // can neither resolve at enum scope nor unify. Hoist each such sub-selection
+    // to a single enum-scope nested struct; the per-struct copies are suppressed
+    // via `skip_nested`, and bare references resolve outward to the hoisted type.
+    let hoist_keys: BTreeSet<String> = shared
+        .iter()
+        .filter(|c| !c.children.is_empty() && c.reuse_fragment.is_none())
+        .map(|c| c.response_key.clone())
+        .collect();
+
     // Shared struct carries the interface-level fields (§3.1).
     let shared_owned: Vec<PlanField> = shared.iter().map(|f| (*f).clone()).collect();
     s.push('\n');
-    s.push_str(&render_typed_struct("Shared", "", &shared_owned, &format!("{indent}    ")));
+    s.push_str(&render_typed_struct_skipping("Shared", "", &shared_owned, &hoist_keys, &format!("{indent}    ")));
+
+    // Hoisted shared sub-selections — emitted once at enum scope.
+    for child in shared.iter().filter(|c| hoist_keys.contains(&c.response_key)) {
+        s.push('\n');
+        s.push_str(&render_typed_selection(
+            &title_case(&child.response_key),
+            &child.named_type,
+            &child.children,
+            &format!("{indent}    "),
+        ));
+    }
 
     // One @CachebayData struct per variant = shared fields + the variant's own fields.
     for (tc, fields) in &by_condition {
         let mut variant_children: Vec<PlanField> = shared.iter().map(|f| (*f).clone()).collect();
         variant_children.extend(fields.iter().map(|f| (*f).clone()));
         s.push('\n');
-        s.push_str(&render_typed_struct(tc, tc, &variant_children, &format!("{indent}    ")));
+        s.push_str(&render_typed_struct_skipping(tc, tc, &variant_children, &hoist_keys, &format!("{indent}    ")));
     }
 
     s.push_str(&format!("{indent}}}\n"));
@@ -807,6 +877,7 @@ mod codegen_tests {
             include_if: None,
             default_value: None,
             swift_scalar_type: None,
+            swift_enum_type: None,
         }
     }
 
@@ -835,6 +906,7 @@ mod codegen_tests {
             include_if: None,
             default_value: None,
             swift_scalar_type: None,
+            swift_enum_type: None,
         }
     }
 
@@ -913,6 +985,37 @@ mod codegen_tests {
         // Each variant is a @CachebayData struct = shared + own fields.
         assert!(out.contains("@CachebayData(typename: \"VideoElement\")"), "{out}");
         assert!(out.contains("public let url: String"), "{out}");
+    }
+
+    #[test]
+    fn typed_enum_hoists_shared_subselection_to_single_nested_struct() {
+        // A shared interface field with an inline sub-selection (`derivatives { key }`)
+        // must emit ONE nested struct at enum scope — not a duplicate per variant.
+        // Per-variant duplicates (Shared.Derivatives, VideoElement.Derivatives, …) are
+        // distinct types, so the macro's lifted accessor `[Derivatives]` can neither
+        // resolve at enum scope nor unify the switch arms (BUG 2).
+        let mut derivatives = object("derivatives", "Cook", vec![typename_field(), id_field(), scalar("key", "String")]);
+        derivatives.output_shape = OutputShape::Object { nullable: false, list: true };
+        let children = vec![
+            typename_field(),
+            id_field(),
+            derivatives,                                      // shared (no type condition)
+            scalar_on("url", "String", "VideoElement"),       // variant-specific
+            scalar_on("waveformURL", "String", "AudioElement"),
+        ];
+        let out = render_typed_enum("Element", "Element", &children, "");
+
+        // Hoisted exactly once (not once per Shared + variant).
+        assert_eq!(
+            out.matches("struct Derivatives").count(),
+            1,
+            "shared sub-selection must be hoisted to a single enum-scope nested struct; {out}"
+        );
+        // Shared + each variant reference the (bare) hoisted type.
+        assert!(out.contains("public let derivatives: [Derivatives]"), "{out}");
+        // The enum shell is otherwise intact.
+        assert!(out.contains("case unknown(Shared)"), "{out}");
+        assert!(out.contains("@CachebayData(typename: \"VideoElement\")"), "{out}");
     }
 
     #[test]
@@ -1003,6 +1106,52 @@ mod codegen_tests {
         let raw = scalar("blob", "JSON");
         let out2 = render_typed_struct("D2", "D2", &[typename_field(), id_field(), raw], "");
         assert!(out2.contains("public let blob: Cachebay.JSONValue"), "{out2}");
+    }
+
+    fn enum_leaf(name: &str, enum_name: &str, nullable: bool, list: bool) -> PlanField {
+        let mut f = scalar(name, enum_name);
+        f.swift_enum_type = Some(enum_name.into());
+        f.output_shape = OutputShape::Leaf { nullable, list };
+        f
+    }
+
+    #[test]
+    fn typed_struct_output_enum_field_uses_graphql_enum_wrapper() {
+        // Output enum leaves are wrapped in `Cachebay.GraphQLEnum<…>` so an
+        // unknown server value decodes to `.unknown(raw)` instead of failing
+        // the record. Closed enum stays the type *parameter*, not the field type.
+        let out = render_typed_struct(
+            "V",
+            "VideoElement",
+            &[
+                typename_field(),
+                id_field(),
+                enum_leaf("intent", "VideoIntent", false, false), // VideoIntent!
+                enum_leaf("mood", "VideoIntent", true, false),    // VideoIntent
+                enum_leaf("intents", "VideoIntent", false, true), // [VideoIntent!]!
+            ],
+            "",
+        );
+        assert!(out.contains("public let intent: Cachebay.GraphQLEnum<VideoIntent>\n"), "non-null enum; {out}");
+        assert!(out.contains("public let mood: Cachebay.GraphQLEnum<VideoIntent>?\n"), "nullable enum; {out}");
+        assert!(out.contains("public let intents: [Cachebay.GraphQLEnum<VideoIntent>]\n"), "list enum; {out}");
+        // The bug: enum leaves must NOT collapse to JSONValue.
+        assert!(!out.contains("Cachebay.JSONValue"), "no enum should fall back to JSONValue; {out}");
+    }
+
+    #[test]
+    fn typed_struct_plain_string_field_stays_string() {
+        // A schema `String!` field (no enum hint) must NOT be wrapped — these
+        // are the `Element.kind/state`, `ChatMessage.status` etc. that the bug
+        // report explicitly says to leave as `String`.
+        let out = render_typed_struct(
+            "E",
+            "Element",
+            &[typename_field(), id_field(), scalar("kind", "String")],
+            "",
+        );
+        assert!(out.contains("public let kind: String\n"), "{out}");
+        assert!(!out.contains("GraphQLEnum"), "non-enum String must not be wrapped; {out}");
     }
 
     #[test]
