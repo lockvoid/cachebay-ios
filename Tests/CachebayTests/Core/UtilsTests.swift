@@ -345,4 +345,52 @@ final class UtilsTests: XCTestCase {
         XCTAssertEqual(recycleSnapshots(.bool(true), .bool(false), .undefined, .undefined), .bool(false))
         XCTAssertEqual(recycleSnapshots(.null, .null, .undefined, .undefined), .null)
     }
+
+    // MARK: - recycleSnapshots array-item recycling (characterization for the
+    //         O(n·m) → O(n+m) optimization; behavior must be preserved exactly).
+
+    private func fp(_ v: Int64) -> JSONValue { .object([CachebayConstants.fingerprintKey: .int(v)]) }
+
+    // Each next item whose fingerprint matches a prev item reuses the PREV
+    // instance (content), placed in NEXT's order — even when reordered.
+    func test_recycleArray_reusesPrevByFingerprint_inNextOrder() {
+        let prev: JSONValue = .array([.object(["v": .string("A")]), .object(["v": .string("B")])])
+        let next: JSONValue = .array([.object(["v": .string("B2")]), .object(["v": .string("A2")])])
+        let prevFp: JSONValue = .array([fp(7), fp(8)])
+        let nextFp: JSONValue = .array([fp(8), fp(7)])
+        let result = recycleSnapshots(prev, next, prevFp, nextFp)
+        // next[0] fp8 → prev[1]={B}; next[1] fp7 → prev[0]={A}
+        XCTAssertEqual(result, .array([.object(["v": .string("B")]), .object(["v": .string("A")])]))
+    }
+
+    // A next item whose fingerprint isn't in prev uses the NEXT value.
+    func test_recycleArray_usesNext_whenNoFingerprintMatch() {
+        let prev: JSONValue = .array([.object(["v": .string("A")])])
+        let next: JSONValue = .array([.object(["v": .string("A")]), .object(["v": .string("C")])])
+        let prevFp: JSONValue = .array([fp(7)])
+        let nextFp: JSONValue = .array([fp(7), fp(99)])
+        let result = recycleSnapshots(prev, next, prevFp, nextFp)
+        XCTAssertEqual(result, .array([.object(["v": .string("A")]), .object(["v": .string("C")])]))
+    }
+
+    // A next item with no fingerprint at all uses the NEXT value.
+    func test_recycleArray_usesNext_whenNextItemHasNoFingerprint() {
+        let prev: JSONValue = .array([.object(["v": .string("A")])])
+        let next: JSONValue = .array([.object(["v": .string("Z")])])
+        let prevFp: JSONValue = .array([fp(7)])
+        let nextFp: JSONValue = .array([.object([:])])  // no __version
+        let result = recycleSnapshots(prev, next, prevFp, nextFp)
+        XCTAssertEqual(result, .array([.object(["v": .string("Z")])]))
+    }
+
+    // Duplicate prev fingerprints: the FIRST matching prev item wins (preserves
+    // the original first-match `break`).
+    func test_recycleArray_firstWins_onDuplicatePrevFingerprint() {
+        let prev: JSONValue = .array([.object(["v": .string("A1")]), .object(["v": .string("A2")])])
+        let next: JSONValue = .array([.object(["v": .string("X")])])
+        let prevFp: JSONValue = .array([fp(7), fp(7)])
+        let nextFp: JSONValue = .array([fp(7)])
+        let result = recycleSnapshots(prev, next, prevFp, nextFp)
+        XCTAssertEqual(result, .array([.object(["v": .string("A1")])]))
+    }
 }

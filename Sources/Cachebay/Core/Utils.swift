@@ -119,29 +119,31 @@ public func recycleSnapshots(_ prev: JSONValue, _ next: JSONValue, _ prevFp: JSO
 
     switch (prev, next) {
     case (.array(let pa), .array(let na)):
+        // Build a `fingerprint → prev instance` map once, then resolve each next
+        // item in O(1) — O(n+m) instead of the prior O(n·m) per-item rescan.
+        // First-wins insertion preserves the original "first matching prev item"
+        // semantics (the old inner loop's `break`).
+        var prevByFp: [Int64: JSONValue] = [:]
+        if case .array(let prevArrFp) = prevFp {
+            let count = min(pa.count, prevArrFp.count)
+            prevByFp.reserveCapacity(count)
+            for j in 0..<count {
+                if let pv = prevArrFp[j][CachebayConstants.fingerprintKey]?.int, prevByFp[pv] == nil {
+                    prevByFp[pv] = pa[j]
+                }
+            }
+        }
+        let nextArrFp: [JSONValue]? = { if case .array(let arrFp) = nextFp { return arrFp } else { return nil } }()
         var out: [JSONValue] = []
         out.reserveCapacity(na.count)
         for i in 0..<na.count {
-            let nItem = na[i]
-            let nItemFp: JSONValue = {
-                if case .array(let arrFp) = nextFp, i < arrFp.count { return arrFp[i] }
-                return .undefined
-            }()
-            if let nv = nItemFp[CachebayConstants.fingerprintKey]?.int {
-                var matched: JSONValue? = nil
-                for j in 0..<pa.count {
-                    let pItemFp: JSONValue = {
-                        if case .array(let arrFp) = prevFp, j < arrFp.count { return arrFp[j] }
-                        return .undefined
-                    }()
-                    if let pv = pItemFp[CachebayConstants.fingerprintKey]?.int, pv == nv {
-                        matched = pa[j]
-                        break
-                    }
-                }
-                if let m = matched { out.append(m); continue }
+            if let arrFp = nextArrFp, i < arrFp.count,
+               let nv = arrFp[i][CachebayConstants.fingerprintKey]?.int,
+               let matched = prevByFp[nv] {
+                out.append(matched)   // recycle the unchanged prev instance
+            } else {
+                out.append(na[i])
             }
-            out.append(nItem)
         }
         return .array(out)
     case (.object(let po), .object(let no)):

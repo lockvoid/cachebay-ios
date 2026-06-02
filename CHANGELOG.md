@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### `recycleSnapshots` list matching: O(n·m) → O(n+m) (Phase 2)
+
+The watcher snapshot-recycler (`Utils.recycleSnapshots`) matched list items by
+re-scanning the entire previous array for *each* next item (O(n·m)), rebuilding a
+fingerprint closure on every inner iteration. This runs on every watcher emit for
+list data. Now it builds a `fingerprint → prev-instance` map once (first-wins,
+preserving the original first-match semantics) and resolves each next item in O(1).
+
+**Measured** (`Tools/YYBench`, reordered list, all fingerprints match): per-item
+cost is now flat (~90 ns) instead of growing with list size. A 1000-item reorder:
+**11.4 ms → 0.09 ms (~127×)**; 100-item: ~13×. Behavior is unchanged (characterized
+by new array-recycle tests + the existing suite).
+
 ### yyjson as the JSON ⇄ bytes codec (Phase 1)
 
 Cachebay's JSON **read and write** paths now use [yyjson](https://github.com/ibireme/yyjson)
