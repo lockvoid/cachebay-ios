@@ -107,7 +107,6 @@ func appendStable(_ v: JSONValue, into out: inout String) {
     }
 }
 
-@inlinable
 public func encodeJSONString(_ s: String) -> String {
     var out = ""
     out.reserveCapacity(s.count + 2)
@@ -116,7 +115,6 @@ public func encodeJSONString(_ s: String) -> String {
 }
 
 /// Appends the JSON-escaped, double-quoted form of `s` into `out`.
-@usableFromInline
 func appendJSONString(_ s: String, into out: inout String) {
     out += "\""
     for scalar in s.unicodeScalars {
