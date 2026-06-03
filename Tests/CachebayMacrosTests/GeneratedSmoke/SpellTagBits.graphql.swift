@@ -9,7 +9,7 @@ public struct SpellTagBits: Cachebay.CachebayFragment {
     public typealias Variables = Cachebay.EmptyVariables
 
     @CachebayData(typename: "Spell")
-    public struct Data: Sendable, Hashable, Cachebay.CachebayValue {
+    public struct Data: Sendable, Hashable, Codable, Cachebay.CachebayValue {
         public let tags: [Cachebay.GraphQLEnum<SpellTag>]
         public let __typename: String
     }

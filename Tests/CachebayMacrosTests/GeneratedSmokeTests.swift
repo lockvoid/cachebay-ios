@@ -123,6 +123,23 @@ final class GeneratedSmokeTests: XCTestCase {
         XCTAssertEqual(names[\ElementFields.Data.derivatives], "derivatives")
     }
 
+    // Codable on generated response structs (real CLI output): decode a
+    // server-shaped payload, round-trip, and confirm GraphQLEnum (known + unknown)
+    // survives. SpellEnumDetail.Data + .Spell are concrete → Codable.
+    func test_generated_codable_roundTrip() throws {
+        let json = Data(#"""
+        {"spell":{"__typename":"Spell","id":"s1","name":"Lumos","kind":"CHARM","mood":"HEX","state":"active","tags":["OFFENSIVE","MYSTERY"]}}
+        """#.utf8)
+        let data = try JSONDecoder().decode(SpellEnumDetail.Data.self, from: json)
+        XCTAssertEqual(data.spell?.name, "Lumos")
+        XCTAssertEqual(data.spell?.kind, .known(.charm))
+        XCTAssertEqual(data.spell?.mood, .known(.hex))
+        XCTAssertEqual(data.spell?.tags, [.known(.offensive), .unknown("MYSTERY")])
+        // Encode → decode round-trips to an equal value.
+        let back = try JSONDecoder().decode(SpellEnumDetail.Data.self, from: JSONEncoder().encode(data))
+        XCTAssertEqual(back, data)
+    }
+
     // The crux of choosing GraphQLEnum<T>: an unknown value on a NON-NULL enum
     // field (`kind: SpellKind!`) must NOT fail the whole record — otherwise a new
     // server enum case would drop the entire row from the UI.

@@ -2,18 +2,18 @@
 
 import Cachebay
 
-public enum SpellKind: String, Sendable, CaseIterable {
+public enum SpellKind: String, Codable, Sendable, CaseIterable {
     case charm = "CHARM"
     case hex = "HEX"
     case jinx = "JINX"
 }
 
-public enum SpellOrderBy: String, Sendable, CaseIterable {
+public enum SpellOrderBy: String, Codable, Sendable, CaseIterable {
     case name = "NAME"
     case power = "POWER"
 }
 
-public enum SpellTag: String, Sendable, CaseIterable {
+public enum SpellTag: String, Codable, Sendable, CaseIterable {
     case offensive = "OFFENSIVE"
     case defensive = "DEFENSIVE"
     case utility = "UTILITY"

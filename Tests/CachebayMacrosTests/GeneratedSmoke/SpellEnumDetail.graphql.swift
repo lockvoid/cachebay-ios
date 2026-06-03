@@ -22,11 +22,11 @@ public struct SpellEnumDetail: Cachebay.CachebayOperation {
     }
 
     @CachebayData(typename: "")
-    public struct Data: Sendable, Hashable, Cachebay.CachebayValue {
+    public struct Data: Sendable, Hashable, Codable, Cachebay.CachebayValue {
         public let spell: Spell?
 
         @CachebayData(typename: "Spell")
-        public struct Spell: Identifiable, Sendable, Hashable, Cachebay.CachebayValue {
+        public struct Spell: Identifiable, Sendable, Hashable, Codable, Cachebay.CachebayValue {
             public let __typename: String
             public let id: String
             public let name: String

@@ -15,21 +15,21 @@ public struct ElementFields: Cachebay.CachebayFragment {
         case unknown(Shared)
 
         @CachebayData(typename: "")
-        public struct Shared: Identifiable, Sendable, Hashable, Cachebay.CachebayValue {
+        public struct Shared: Identifiable, Sendable, Hashable, Codable, Cachebay.CachebayValue {
             public let __typename: String
             public let id: String
             public let derivatives: [Derivatives]
         }
 
         @CachebayData(typename: "Cook")
-        public struct Derivatives: Identifiable, Sendable, Hashable, Cachebay.CachebayValue {
+        public struct Derivatives: Identifiable, Sendable, Hashable, Codable, Cachebay.CachebayValue {
             public let __typename: String
             public let id: String
             public let key: String
         }
 
         @CachebayData(typename: "AudioElement")
-        public struct AudioElement: Identifiable, Sendable, Hashable, Cachebay.CachebayValue {
+        public struct AudioElement: Identifiable, Sendable, Hashable, Codable, Cachebay.CachebayValue {
             public let __typename: String
             public let id: String
             public let derivatives: [Derivatives]
@@ -37,7 +37,7 @@ public struct ElementFields: Cachebay.CachebayFragment {
         }
 
         @CachebayData(typename: "VideoElement")
-        public struct VideoElement: Identifiable, Sendable, Hashable, Cachebay.CachebayValue {
+        public struct VideoElement: Identifiable, Sendable, Hashable, Codable, Cachebay.CachebayValue {
             public let __typename: String
             public let id: String
             public let derivatives: [Derivatives]
