@@ -97,3 +97,18 @@ extension GraphQLEnum: CachebayValue {
 
     public var cachebayJSON: JSONValue { .string(rawValue) }
 }
+
+// MARK: - Codable (persistence / interop)
+
+extension GraphQLEnum: Codable {
+    /// Decodes from the raw string; an unrecognized value stays `.unknown` (total,
+    /// forward-compatible — never throws on a new server enum case).
+    public init(from decoder: Decoder) throws {
+        self.init(try decoder.singleValueContainer().decode(String.self))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(rawValue)
+    }
+}

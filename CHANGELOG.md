@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### `Codable` on generated response value structs (local persistence round-trip)
+
+Generated response `@CachebayData` structs + their nested structs + generated `enum`s now
+conform to `Codable`, so a typed payload (e.g. a derivative leaf the analyzer produces) can be
+persisted to / read back from an on-disk blob via `JSONEncoder`/`JSONDecoder` — bypassing the
+cache. This is a **separate, strict** path from the cache's `CachebayValue` decode.
+
+- **Macro:** `@CachebayData` emits a custom `init(from:)`/`encode(to:)`/`CodingKeys` when the type
+  declares `Codable` (rather than relying on synthesis) so decode **honors `@CachebayDefault`**
+  (`decodeIfPresent ?? default`). This keeps already-written blobs decodable across additive
+  schema bumps (a new non-optional field with a default doesn't invalidate old blobs → no
+  recompute storm). `CodingKeys` are the GraphQL **wire keys**, so a self-written blob is
+  interchangeable with a server `data` payload. Optionals decode via `decodeIfPresent`; encode
+  emits explicit `null`.
+- **Runtime:** `GraphQLEnum<T>: Codable` (raw string ⟷ `init(_:)`, so an unknown server value
+  stays `.unknown` — forward-compatible) and `JSONValue: Codable`.
+- **CLI:** adds `Codable` to a response struct's conformances **only when its whole subtree is
+  Codable-safe** — i.e. contains no polymorphic (`@CachebayInterface`) selection, transitively
+  (a fragment-spread field requires the referenced fragment's `Data` to be Codable too). Generated
+  `enum`s always get `Codable`.
+
+**Out of scope (deferred):** input objects and the typename-tagged `@CachebayInterface` enums
+(their concrete variant structs are Codable; the enum itself is not). A struct that holds an
+interface field is automatically left non-`Codable`.
+
+**Caveat:** a raw `Cachebay.JSONValue`-typed field holding a whole-number double (`.double(100.0)`)
+re-decodes as `.int(100)` (JSON int/double ambiguity). Concrete `Double` fields are unaffected.
+
 ### `stableStringify` allocates in place (Phase 2)
 
 `stableStringify` — the canonical/cache-key generator run on every materialize

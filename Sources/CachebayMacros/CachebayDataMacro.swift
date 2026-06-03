@@ -38,6 +38,14 @@ public struct CachebayDataMacro: MemberMacro {
         members.append(Self.makeDataDict(props: props))
         members.append(contentsOf: Self.makeCachebayValueConformance())
         members.append(Self.makeFieldNamesMap(props: props))
+        // Codable (persistence / interop) — only when the type opts in by
+        // declaring `Codable`/`Decodable`/`Encodable`. We emit it ourselves
+        // (rather than relying on synthesis) so `init(from:)` can honor
+        // `@CachebayDefault` (`decodeIfPresent ?? default`), keeping persisted
+        // blobs decodable across additive schema bumps.
+        if Self.declaresCodable(structDecl) {
+            members.append(contentsOf: Self.makeCodable(props: props, typename: typename))
+        }
         return members
     }
 }
@@ -167,6 +175,74 @@ extension CachebayDataMacro {
         \(raw: body)
         }
         """
+    }
+
+    /// True when the struct declares `Codable`/`Decodable`/`Encodable` — the
+    /// opt-in trigger for emitting the `Codable` members.
+    static func declaresCodable(_ decl: StructDeclSyntax) -> Bool {
+        guard let inherited = decl.inheritanceClause?.inheritedTypes else { return false }
+        for t in inherited {
+            let name = t.type.trimmedDescription
+            if name == "Codable" || name == "Decodable" || name == "Encodable"
+                || name.hasSuffix(".Codable") || name.hasSuffix(".Decodable") || name.hasSuffix(".Encodable") {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// The non-optional element type of a (possibly optional) property type.
+    static func unwrappedTypeString(_ p: CachebayProperty) -> String {
+        if let opt = p.type.as(OptionalTypeSyntax.self) {
+            return opt.wrappedType.trimmedDescription
+        }
+        var s = p.type.trimmedDescription
+        if s.hasSuffix("?") { s.removeLast() }
+        return s
+    }
+
+    /// Emits `CodingKeys` (cases = property names = wire keys), plus a custom
+    /// `init(from:)` / `encode(to:)`. Decode honors `@CachebayDefault`
+    /// (`decodeIfPresent ?? default`) and optionals (`decodeIfPresent`); encode
+    /// writes every field (optionals as explicit `null`, matching a wire payload).
+    static func makeCodable(props: [CachebayProperty], typename: String) -> [DeclSyntax] {
+        let keyCases = props.map { "case \($0.name)" }.joined(separator: "\n")
+        let codingKeys: DeclSyntax = """
+        public enum CodingKeys: String, CodingKey {
+        \(raw: keyCases)
+        }
+        """
+
+        var decodeLines: [String] = ["let container = try decoder.container(keyedBy: CodingKeys.self)"]
+        for p in props {
+            let t = p.type.trimmedDescription
+            if p.name == "__typename" && !typename.isEmpty {
+                decodeLines.append("self.\(p.name) = try container.decodeIfPresent(String.self, forKey: .\(p.name)) ?? \"\(typename)\"")
+            } else if let d = p.defaultExpr {
+                decodeLines.append("self.\(p.name) = try container.decodeIfPresent(\(t).self, forKey: .\(p.name)) ?? \(d.trimmedDescription)")
+            } else if p.isOptional {
+                decodeLines.append("self.\(p.name) = try container.decodeIfPresent(\(Self.unwrappedTypeString(p)).self, forKey: .\(p.name))")
+            } else {
+                decodeLines.append("self.\(p.name) = try container.decode(\(t).self, forKey: .\(p.name))")
+            }
+        }
+        let initFrom: DeclSyntax = """
+        public init(from decoder: any Decoder) throws {
+        \(raw: decodeLines.joined(separator: "\n"))
+        }
+        """
+
+        var encodeLines: [String] = ["var container = encoder.container(keyedBy: CodingKeys.self)"]
+        for p in props {
+            encodeLines.append("try container.encode(self.\(p.name), forKey: .\(p.name))")
+        }
+        let encodeTo: DeclSyntax = """
+        public func encode(to encoder: any Encoder) throws {
+        \(raw: encodeLines.joined(separator: "\n"))
+        }
+        """
+
+        return [codingKeys, initFrom, encodeTo]
     }
 
     /// KeyPath -> GraphQL field-name table for this type's own fields, used by the
