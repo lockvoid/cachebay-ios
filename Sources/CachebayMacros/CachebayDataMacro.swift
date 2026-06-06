@@ -34,7 +34,7 @@ public struct CachebayDataMacro: MemberMacro {
             members.append("public static let __cachebayTypename: String = \"\(raw: typename)\"")
         }
         members.append(DeclSyntax(try Self.makeMemberwiseInit(props: props, typename: typename)))
-        members.append(Self.makeDictInit(props: props, typename: typename))
+        members.append(Self.makeDictInit(props: props, typename: typename, structName: structDecl.name.text))
         members.append(Self.makeDataDict(props: props))
         members.append(contentsOf: Self.makeCachebayValueConformance())
         members.append(Self.makeFieldNamesMap(props: props))
@@ -142,13 +142,22 @@ extension CachebayDataMacro {
     /// decodes via the uniform `CachebayValue` hook; a nil → whole-record miss.
     /// When `typename` is non-empty, the record's `__typename` must match (so an
     /// interface can dispatch by trying each variant's initializer in turn).
-    static func makeDictInit(props: [CachebayProperty], typename: String) -> DeclSyntax {
+    static func makeDictInit(props: [CachebayProperty], typename: String, structName: String) -> DeclSyntax {
         var lines: [String] = []
         for p in props {
             let src = "dict[\"\(p.name)\"] ?? .undefined"
-            lines.append("guard let \(p.name) = \(p.type.trimmedDescription)(cachebayJSON: \(src)) else { return nil }")
+            // A required field returning nil silently blanks the whole record (and,
+            // via Array fail-all, a whole list). Surface which field/typename failed
+            // through CachebayDiagnostics so a decode-to-nil is never invisible.
+            // Optional fields are skipped: their init? never returns nil, so the
+            // guard's else is unreachable for them (no misleading "required" miss).
+            if p.isOptional {
+                lines.append("guard let \(p.name) = \(p.type.trimmedDescription)(cachebayJSON: \(src)) else { return nil }")
+            } else {
+                lines.append("guard let \(p.name) = \(p.type.trimmedDescription)(cachebayJSON: \(src)) else { Cachebay.CachebayDiagnostics.decodeMiss(\"\(structName)\", \"required field '\(p.name)' did not decode\"); return nil }")
+            }
             if p.name == "__typename" && !typename.isEmpty {
-                lines.append("guard \(p.name) == \"\(typename)\" else { return nil }")
+                lines.append("guard \(p.name) == \"\(typename)\" else { Cachebay.CachebayDiagnostics.decodeMiss(\"\(structName)\", \"__typename did not match expected '\(typename)'\"); return nil }")
             }
         }
         for p in props {

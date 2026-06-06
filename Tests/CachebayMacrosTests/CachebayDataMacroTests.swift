@@ -60,15 +60,19 @@ struct Cook {
 
     @_spi(Cachebay) public init?(_dataDict dict: [String: Cachebay.JSONValue]) {
         guard let __typename = String(cachebayJSON: dict["__typename"] ?? .undefined) else {
+            Cachebay.CachebayDiagnostics.decodeMiss("Cook", "required field '__typename' did not decode");
             return nil
         }
         guard __typename == "Cook" else {
+            Cachebay.CachebayDiagnostics.decodeMiss("Cook", "__typename did not match expected 'Cook'");
             return nil
         }
         guard let id = String(cachebayJSON: dict["id"] ?? .undefined) else {
+            Cachebay.CachebayDiagnostics.decodeMiss("Cook", "required field 'id' did not decode");
             return nil
         }
         guard let title = String(cachebayJSON: dict["title"] ?? .undefined) else {
+            Cachebay.CachebayDiagnostics.decodeMiss("Cook", "required field 'title' did not decode");
             return nil
         }
         self.__typename = __typename
@@ -133,15 +137,19 @@ struct Video {
 
     @_spi(Cachebay) public init?(_dataDict dict: [String: Cachebay.JSONValue]) {
         guard let __typename = String(cachebayJSON: dict["__typename"] ?? .undefined) else {
+            Cachebay.CachebayDiagnostics.decodeMiss("Video", "required field '__typename' did not decode");
             return nil
         }
         guard __typename == "VideoElement" else {
+            Cachebay.CachebayDiagnostics.decodeMiss("Video", "__typename did not match expected 'VideoElement'");
             return nil
         }
         guard let id = String(cachebayJSON: dict["id"] ?? .undefined) else {
+            Cachebay.CachebayDiagnostics.decodeMiss("Video", "required field 'id' did not decode");
             return nil
         }
         guard let rank = String(cachebayJSON: dict["rank"] ?? .undefined) else {
+            Cachebay.CachebayDiagnostics.decodeMiss("Video", "required field 'rank' did not decode");
             return nil
         }
         guard let intent = String?(cachebayJSON: dict["intent"] ?? .undefined) else {

@@ -154,11 +154,19 @@ extension Array: CachebayValue where Element: CachebayValue {
     /// A required list that is missing/null/non-array, or whose element fails to
     /// decode, is a record miss (`nil`). Use `[T]?` for a nullable list.
     public init?(cachebayJSON json: JSONValue) {
-        guard case .array(let xs) = json else { return nil }
+        guard case .array(let xs) = json else {
+            CachebayDiagnostics.decodeMiss("[\(Element.self)]", "value was not an array")
+            return nil
+        }
         var out: [Element] = []
         out.reserveCapacity(xs.count)
-        for x in xs {
-            guard let e = Element(cachebayJSON: x) else { return nil }
+        for (i, x) in xs.enumerated() {
+            guard let e = Element(cachebayJSON: x) else {
+                // Fail-all: one bad element drops the whole required list. This is the
+                // exact silent path behind the ferment-cuts empty list — surface it.
+                CachebayDiagnostics.decodeMiss("[\(Element.self)]", "element \(i) of \(xs.count) failed to decode → whole list dropped")
+                return nil
+            }
             out.append(e)
         }
         self = out

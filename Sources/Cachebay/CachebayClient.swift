@@ -163,6 +163,14 @@ public final class CachebayClient: @unchecked Sendable {
 
     public init(options: CachebayOptions) {
         let profiler = options.profiler
+        // Route typed-decode diagnostics through the same logger as materialize,
+        // so a decode-to-nil (required field / __typename / list element) is never
+        // silent. See `CachebayDiagnostics`.
+        if let decodeLogger = options.logger {
+            CachebayDiagnostics.sink = { msg in
+                decodeLogger.warning("[Cachebay] \(msg, privacy: .public)")
+            }
+        }
         let graph = Graph(options: GraphOptions(keys: options.keys, interfaces: options.interfaces, onChange: nil), profiler: profiler)
         let planner = Planner()
         let canonical = Canonical(graph: graph)
