@@ -142,13 +142,15 @@ func appendJSONString(_ s: String, into out: inout String) {
 public func recycleSnapshots(_ prev: JSONValue, _ next: JSONValue, _ prevFp: JSONValue, _ nextFp: JSONValue) -> JSONValue {
     if isDataDeepEqual(prev, next) { return prev }
 
-    let prevVersion = prevFp[CachebayConstants.fingerprintKey]?.int
-    let nextVersion = nextFp[CachebayConstants.fingerprintKey]?.int
-
-    if let pv = prevVersion, let nv = nextVersion, pv == nv {
-        return prev
-    }
-
+    // NOTE: no version/fingerprint short-circuit here. A `prevFp.__version ==
+    // nextFp.__version` check at this point would return the STALE `prev` even
+    // though `isDataDeepEqual` above has already proven `prev != next` — which
+    // happens whenever a fingerprint is stale (the watcher's non-atomic
+    // (record, version) read race, and optimistic connection writes). That
+    // silently dropped just-added connection edges from a watcher emit
+    // (ferment-cuts empty-list bug: materialize produced 27 edges, the watcher
+    // received 0). Recycle structurally instead — identity is still preserved
+    // per-item by fingerprint in the array case below.
     switch (prev, next) {
     case (.array(let pa), .array(let na)):
         // Build a `fingerprint → prev instance` map once, then resolve each next

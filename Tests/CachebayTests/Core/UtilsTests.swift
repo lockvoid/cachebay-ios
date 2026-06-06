@@ -339,6 +339,27 @@ final class UtilsTests: XCTestCase {
         XCTAssertTrue(isDataDeepEqual(result, next))
     }
 
+    /// ferment-cuts empty-list root cause: a connection gains edges
+    /// (`prev` empty → `next` has rows), but the root fingerprint *collides*
+    /// with the stale `prev` (the watcher/optimistic stale-version case).
+    /// `recycleSnapshots` must reflect `next`, never silently return the
+    /// stale `prev` just because versions matched — by the time the version
+    /// check is reached, `isDataDeepEqual` has already proven the data differs.
+    func test_recycleSnapshots_fingerprintCollisionButDataDiffers_reflectsNext() {
+        let prev: JSONValue = .object(["edges": .array([])])
+        let next: JSONValue = .object(["edges": .array([
+            .object(["node": .object(["id": .string("a")])]),
+            .object(["node": .object(["id": .string("b")])]),
+        ])])
+        let prevFp: JSONValue = .object([CachebayConstants.fingerprintKey: .int(7)])
+        let nextFp: JSONValue = .object([CachebayConstants.fingerprintKey: .int(7)]) // collide
+        let result = recycleSnapshots(prev, next, prevFp, nextFp)
+        guard case .object(let o) = result, case .array(let e)? = o["edges"] else {
+            XCTFail("unexpected shape: \(result)"); return
+        }
+        XCTAssertEqual(e.count, 2, "recycle must reflect next's 2 edges, not return the stale empty prev on fingerprint collision")
+    }
+
     func test_recycleSnapshots_handlesPrimitives() {
         XCTAssertEqual(recycleSnapshots(.int(42), .int(42), .undefined, .undefined), .int(42))
         XCTAssertEqual(recycleSnapshots(.string("hello"), .string("hello"), .undefined, .undefined), .string("hello"))
