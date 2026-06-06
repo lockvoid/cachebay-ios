@@ -635,7 +635,7 @@ public final class Documents: @unchecked Sendable {
                 typeCondition: nil, expectedArgNames: [],
                 buildArgs: { _ in [:] }, stringifyArgs: { _ in "" },
                 isConnection: false, connectionKey: nil, connectionFilters: nil,
-                connectionMode: nil, pageArgs: nil,
+                connectionMode: nil, pageArgs: nil, connectionEdgeTypename: nil,
                 skipIf: nil, includeIf: nil, selId: ""
             )
             context.readEntity(rootId, field: synthetic, into: &data, fingerprint: &fingerprints, path: rootId)

@@ -44,12 +44,24 @@ public final class Canonical: @unchecked Sendable {
         // Page mode: replace entire canonical with incoming page.
         if field.connectionMode == .page {
             applyPageMode(field: field, canonicalKey: canonicalKey, page: page, incomingEdgeRefs: incomingEdgeRefs)
+            stampEdgeTypename(field, canonicalKey)
             replayer?.replay(connectionKeys: [canonicalKey])
             return
         }
 
         applyInfiniteMode(field: field, canonicalKey: canonicalKey, page: page, incomingEdgeRefs: incomingEdgeRefs, variables: variables)
+        stampEdgeTypename(field, canonicalKey)
         replayer?.replay(connectionKeys: [canonicalKey])
+    }
+
+    /// Record the schema-derived edge type name on the canonical (merge, so it
+    /// survives the page-mode `replaceRecord` above). Lets an optimistic
+    /// `insertEdge` give its synthetic edge the authoritative `__typename` even
+    /// when the connection is empty (no sibling edge to copy from). Runtime-
+    /// compiled plans carry no edge type (no schema) → no stamp → sibling/guess.
+    private func stampEdgeTypename(_ field: PlanField, _ canonicalKey: CacheKey) {
+        guard let edgeTypename = field.connectionEdgeTypename else { return }
+        graph.putRecord(canonicalKey, [CachebayConstants.connectionEdgeTypenameField: .string(edgeTypename)])
     }
 
     // MARK: - Page mode

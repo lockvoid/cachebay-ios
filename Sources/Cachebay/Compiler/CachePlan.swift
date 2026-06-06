@@ -49,6 +49,11 @@ public struct PlanField: Hashable, Sendable {
     public let connectionFilters: [String]?
     public let connectionMode: ConnectionMode?
     public let pageArgs: [String]?
+    /// Schema-derived edge type name for a connection field (e.g.
+    /// "QueryProjectsConnectionEdge"), emitted by codegen. Stamped onto the
+    /// connection canonical at normalize so an optimistic `insertEdge` can give a
+    /// synthetic edge the authoritative `__typename` even for an empty connection.
+    public let connectionEdgeTypename: String?
 
     // `@skip(if: ...)` — when this evaluates to `true`, the field is
     // excluded from the selection set (no read, no write, no dep). Nil

@@ -63,7 +63,7 @@ public final class Inspect: @unchecked Sendable {
                 buildArgs: { _ in filters },
                 stringifyArgs: stringify,
                 isConnection: true, connectionKey: fieldName, connectionFilters: filterKeys,
-                connectionMode: nil, pageArgs: nil,
+                connectionMode: nil, pageArgs: nil, connectionEdgeTypename: nil,
                 skipIf: nil, includeIf: nil, selId: ""
             )
             out.insert(Keys.buildConnectionCanonicalKey(field: field, parentId: parentStr, variables: filters))

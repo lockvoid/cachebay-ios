@@ -731,8 +731,23 @@ public final class Optimistic: @unchecked Sendable {
         let nextIndex = (graph.getRecord(counterKey)?["value"]?.int ?? 0) + 1
         graph.replaceRecord(counterKey, ["value": .int(nextIndex)])
 
+        // The optimistic edge must carry the SAME `__typename` as the connection's
+        // real edges, so a typed connection (whose generated edge struct guards the
+        // edge `__typename`) can decode it. The edge type is schema-determined, so
+        // resolve it authoritatively, in order:
+        //   1. the type stamped on the canonical from the codegen plan
+        //      (`Canonical.updateConnection`) — correct even for an EMPTY connection;
+        //   2. an existing sibling edge's `__typename` (connections are homogeneous);
+        //   3. a best-effort "<Node>Edge" guess — only for a connection that was
+        //      never normalized (no stamp) and has no edges. Now LOUD on decode
+        //      failure via `CachebayDiagnostics`, never silent.
         let nodeType = entityKey.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: true).first.map(String.init) ?? ""
-        let edgeTypename = nodeType.isEmpty ? "Edge" : "\(nodeType)Edge"
+        let graph = self.graph
+        let stampedEdgeTypename = canonical[CachebayConstants.connectionEdgeTypenameField]?.string
+        let existingEdgeTypename = edgeRefs.lazy
+            .compactMap { graph.getRecord($0)?[CachebayConstants.typenameField]?.string }
+            .first
+        let edgeTypename = stampedEdgeTypename ?? existingEdgeTypename ?? (nodeType.isEmpty ? "Edge" : "\(nodeType)Edge")
         let edgeKey = "\(canonicalKey).edges.\(nextIndex)"
 
         var edgeRecord: [String: JSONValue] = [
@@ -743,6 +758,17 @@ public final class Optimistic: @unchecked Sendable {
             for (k, v) in meta where k != CachebayConstants.typenameField && k != CachebayConstants.connectionNodeField {
                 edgeRecord[k] = v
             }
+        }
+        // Synthetic cursor: a structural optimistic edge has no server cursor, but a
+        // typed connection that selects a non-null `cursor` can't decode an edge
+        // without one — and via the list's fail-all decode, one cursorless edge
+        // drops the *whole* connection (the empty-list-after-create bug). Give it a
+        // unique, stable placeholder so the edge decodes; the server's page replaces
+        // it on refetch. `hasRealCursor` keeps this placeholder out of `::cursorIndex`
+        // below — only genuine server cursors may drive pagination splicing.
+        let hasRealCursor = edgeRecord["cursor"] != nil
+        if !hasRealCursor {
+            edgeRecord["cursor"] = .string(edgeKey)
         }
         graph.replaceRecord(edgeKey, edgeRecord)
 
@@ -778,8 +804,9 @@ public final class Optimistic: @unchecked Sendable {
             for (k, v) in index where v >= insertPos {
                 index[k] = v + 1
             }
-            // Add the new cursor (only if the edge meta included one).
-            if let cursor = getEdgeCursor(edgeKey) {
+            // Add the new cursor — only a genuine server cursor, never the synthetic
+            // placeholder above (which must not participate in pagination splicing).
+            if hasRealCursor, let cursor = getEdgeCursor(edgeKey) {
                 index[cursor] = insertPos
             }
             writeCursorIndex(canonicalKey, index)
@@ -912,7 +939,7 @@ public final class Optimistic: @unchecked Sendable {
             buildArgs: { _ in filters },
             stringifyArgs: stringify,
             isConnection: true, connectionKey: selector.key, connectionFilters: filtersList,
-            connectionMode: nil, pageArgs: nil,
+            connectionMode: nil, pageArgs: nil, connectionEdgeTypename: nil,
             skipIf: nil, includeIf: nil, selId: ""
         )
         return Keys.buildConnectionCanonicalKey(field: field, parentId: parentId, variables: filters)

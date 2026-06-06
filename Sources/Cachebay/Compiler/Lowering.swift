@@ -142,6 +142,10 @@ enum Lowering {
             connectionFilters: connectionFilters,
             connectionMode: connectionMode,
             pageArgs: pageArgs,
+            // Runtime-compiled plans have no schema, so no edge type here; codegen
+            // plans carry it. Optimistic inserts on a runtime-compiled connection
+            // fall back to sibling-copy then guess.
+            connectionEdgeTypename: nil,
             skipIf: skipIf,
             includeIf: includeIf,
             selId: selId

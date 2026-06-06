@@ -15,6 +15,10 @@ use std::path::Path;
 use crate::plan::{ArgPiece, ConnectionMode, OpKind, OutputShape, Plan, PlanField};
 use crate::schema::{EnumTypeDef, InputField, InputTypeDef, TypeKind, TypeShape};
 
+/// GraphQL response key for a connection's edge list. The connection's edge type
+/// is the named type of this child field.
+const CONNECTION_EDGES_KEY: &str = "edges";
+
 pub fn write_all(
     plans: &[Plan],
     inputs: &BTreeMap<String, InputTypeDef>,
@@ -330,6 +334,19 @@ fn render_plan_field_literal(f: &PlanField, indent: &str) -> String {
         }
         if !f.page_args.is_empty() {
             s.push_str(&format!("{indent}    pageArgs: {},\n", render_string_list(&f.page_args)));
+        }
+        // Schema edge type (the `edges` child's named type, e.g.
+        // "QueryProjectsConnectionEdge"). The runtime stamps it on the canonical so
+        // an optimistic `insertEdge` can give a synthetic edge the authoritative
+        // `__typename` — even for an empty connection with no sibling to copy from.
+        if let Some(edge_type) = f
+            .children
+            .iter()
+            .find(|c| c.response_key == CONNECTION_EDGES_KEY)
+            .map(|e| e.named_type.as_str())
+            .filter(|t| !t.is_empty())
+        {
+            s.push_str(&format!("{indent}    connectionEdgeTypename: \"{}\",\n", edge_type));
         }
     }
     // @skip / @include — emitted as `skipIf: .variable("foo")` /
@@ -1362,5 +1379,34 @@ mod codegen_tests {
             literal.contains("includeIf: .constant(false)"),
             "render_plan_field_literal must support literal Boolean args; output:\n{literal}"
         );
+    }
+
+    /// A connection field emits its schema edge type (the `edges` child's named
+    /// type) so the runtime can stamp it on the canonical — letting an optimistic
+    /// insert give a synthetic edge the authoritative `__typename` even when the
+    /// connection is empty (the empty-list-after-create fix, schema as truth).
+    #[test]
+    fn plan_literal_connection_emits_edge_typename() {
+        let edges = object(
+            CONNECTION_EDGES_KEY,
+            "QueryProjectsConnectionEdge",
+            vec![typename_field(), scalar("cursor", "String")],
+        );
+        let mut conn = object("projects", "QueryProjectsConnection", vec![edges]);
+        conn.is_connection = true;
+        conn.connection_key = Some("projects".into());
+        let literal = render_plan_field_literal(&conn, "");
+        assert!(
+            literal.contains("connectionEdgeTypename: \"QueryProjectsConnectionEdge\""),
+            "connection field must emit its edge type name; output:\n{literal}"
+        );
+    }
+
+    /// A non-connection field must NOT emit the key (keeps generated files lean).
+    #[test]
+    fn plan_literal_nonConnection_omits_edge_typename() {
+        let plain = object("project", "Project", vec![typename_field(), id_field()]);
+        let literal = render_plan_field_literal(&plain, "");
+        assert!(!literal.contains("connectionEdgeTypename"), "output:\n{literal}");
     }
 }

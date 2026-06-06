@@ -26,6 +26,7 @@ public extension PlanField {
         connectionFilters: [String]? = nil,
         connectionMode: ConnectionMode? = nil,
         pageArgs: [String]? = nil,
+        connectionEdgeTypename: String? = nil,
         skipIf: DirectiveCondition? = nil,
         includeIf: DirectiveCondition? = nil,
         children: [PlanField] = []
@@ -67,6 +68,7 @@ public extension PlanField {
             connectionFilters: connectionFilters,
             connectionMode: connectionMode,
             pageArgs: pageArgs,
+            connectionEdgeTypename: connectionEdgeTypename,
             skipIf: skipIf,
             includeIf: includeIf,
             selId: selId

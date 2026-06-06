@@ -14,6 +14,14 @@ public enum CachebayConstants {
     public static let connectionAfterField = "after"
     public static let connectionBeforeField = "before"
 
+    /// Reserved field on a connection canonical recording its edge type name
+    /// (e.g. "QueryProjectsConnectionEdge"), stamped from the schema-derived plan
+    /// when the connection is normalized. Lets an optimistic `insertEdge` give its
+    /// synthetic edge the AUTHORITATIVE edge `__typename` — even for an empty
+    /// connection where there's no sibling edge to copy from. Not part of the
+    /// materialized shape (materialize reads only `edges`/`pageInfo`).
+    public static let connectionEdgeTypenameField = "__edgeTypename"
+
     public static let connectionModeInfinite = "infinite"
     public static let connectionModePage = "page"
     public static let connectionTypename = "Connection"
