@@ -131,8 +131,7 @@ fn run_codegen(args: CodegenArgs) -> anyhow::Result<()> {
     let enums = schema::collect_referenced_enums(&ctx);
     let interfaces = schema::collect_interface_implementations(&ctx);
 
-    // Emit Swift.
-    std::fs::create_dir_all(&args.output)?;
+    // Emit Swift (write-changed + sweep-stale, atomically — see reconcile_output_dir).
     emit::write_all(&plans, &inputs, &enums, &interfaces, &args.output, &args.namespace)?;
 
     println!(

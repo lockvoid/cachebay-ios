@@ -79,26 +79,81 @@ pub fn write_all(
     out_dir: &Path,
     namespace: &str,
 ) -> anyhow::Result<()> {
+    // Build the COMPLETE output set in memory first, then reconcile the directory.
+    // Nothing on disk is touched until every file is generated, so a generation
+    // failure leaves existing output untouched; unchanged files aren't rewritten,
+    // so a no-op regen doesn't invalidate the generated SwiftPM target.
+    let mut files: BTreeMap<String, String> = BTreeMap::new();
     if !enums.is_empty() {
-        fs::write(out_dir.join("Enums.graphql.swift"), render_enums(enums))?;
+        files.insert("Enums.graphql.swift".into(), render_enums(enums));
     }
     if !inputs.is_empty() {
-        fs::write(out_dir.join("Inputs.graphql.swift"), render_inputs(inputs))?;
+        files.insert("Inputs.graphql.swift".into(), render_inputs(inputs));
     }
     // The namespace enum is declared once (here); each operation/fragment file extends it.
-    fs::write(
-        out_dir.join("Schema.graphql.swift"),
-        render_schema(interfaces, namespace),
-    )?;
+    files.insert("Schema.graphql.swift".into(), render_schema(interfaces, namespace));
     // Which fragments' `Data` are Codable (concrete subtree, no interface enum) —
     // so a struct that spreads them can itself be Codable.
     let safe_fragments = compute_safe_fragments(plans);
     for plan in plans {
-        let file_name = format!("{}.graphql.swift", plan.name);
-        let contents = wrap_in_namespace(render_typed_plan_impl(plan, &safe_fragments), namespace);
-        fs::write(out_dir.join(file_name), contents)?;
+        files.insert(
+            format!("{}.graphql.swift", plan.name),
+            wrap_in_namespace(render_typed_plan_impl(plan, &safe_fragments), namespace),
+        );
     }
+    reconcile_output_dir(out_dir, &files)?;
     Ok(())
+}
+
+/// Outcome of `reconcile_output_dir`, surfaced for tests/telemetry.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ReconcileStats {
+    pub written: usize,
+    pub skipped: usize,
+    pub deleted: usize,
+}
+
+/// Bring `out_dir` in line with the generated `files` set, atomically and
+/// minimally:
+///
+/// 1. **Writes first** — each changed file is written to a temp sibling and
+///    `rename`d into place (atomic per file); byte-identical files are skipped so
+///    a no-op regen leaves mtimes stable. If any write fails we return early,
+///    *before* step 2, so a failed run never removes existing output.
+/// 2. **Deletes last** — `*.graphql.swift` files we did NOT generate this run are
+///    swept (renamed/removed operations don't linger as orphans). Files with any
+///    other extension are left untouched.
+pub fn reconcile_output_dir(
+    out_dir: &Path,
+    files: &BTreeMap<String, String>,
+) -> std::io::Result<ReconcileStats> {
+    fs::create_dir_all(out_dir)?;
+    let mut stats = ReconcileStats::default();
+
+    // 1. Writes (changed only), atomic per file.
+    for (name, content) in files {
+        let path = out_dir.join(name);
+        if fs::read_to_string(&path).map(|cur| cur == *content).unwrap_or(false) {
+            stats.skipped += 1;
+            continue;
+        }
+        let tmp = out_dir.join(format!(".{name}.tmp"));
+        fs::write(&tmp, content)?;
+        fs::rename(&tmp, &path)?;
+        stats.written += 1;
+    }
+
+    // 2. Sweep stale generated files (only AFTER every write succeeded).
+    for entry in fs::read_dir(out_dir)? {
+        let entry = entry?;
+        let fname = entry.file_name().to_string_lossy().into_owned();
+        if fname.ends_with(".graphql.swift") && !files.contains_key(&fname) {
+            fs::remove_file(entry.path())?;
+            stats.deleted += 1;
+        }
+    }
+
+    Ok(stats)
 }
 
 /// Wrap a typed operation/fragment file's struct in `extension <namespace> { … }`
@@ -1513,5 +1568,61 @@ mod codegen_tests {
         );
         let plan = plan_fixture("X", OpKind::Query, "Query", vec![post]);
         assert!(collect_unmapped_scalar_warnings(&[plan]).is_empty());
+    }
+
+    // MARK: - Atomic output reconcile (decode-hardening)
+
+    fn fresh_test_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("cachebay_reconcile_{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A no-op regen must not rewrite byte-identical files — stable mtimes keep
+    /// the generated SwiftPM target out of the rebuild graph.
+    #[test]
+    fn reconcile_skips_unchanged_files() {
+        let dir = fresh_test_dir("skip");
+        std::fs::write(dir.join("A.graphql.swift"), "X").unwrap();
+        let files = BTreeMap::from([("A.graphql.swift".to_string(), "X".to_string())]);
+        let stats = reconcile_output_dir(&dir, &files).unwrap();
+        assert_eq!(stats.written, 0, "identical content must not be rewritten");
+        assert_eq!(stats.skipped, 1);
+        assert_eq!(std::fs::read_to_string(dir.join("A.graphql.swift")).unwrap(), "X");
+    }
+
+    /// On success: changed files rewritten, stale `.graphql.swift` swept, foreign
+    /// files left alone (the delete-then-write virtue survives the refactor).
+    #[test]
+    fn reconcile_rewrites_changed_deletes_stale_keeps_foreign() {
+        let dir = fresh_test_dir("rewrite");
+        std::fs::write(dir.join("A.graphql.swift"), "old").unwrap();
+        std::fs::write(dir.join("Stale.graphql.swift"), "orphan").unwrap();
+        std::fs::write(dir.join("README.md"), "keep").unwrap();
+        let files = BTreeMap::from([("A.graphql.swift".to_string(), "new".to_string())]);
+        let stats = reconcile_output_dir(&dir, &files).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("A.graphql.swift")).unwrap(), "new");
+        assert!(!dir.join("Stale.graphql.swift").exists(), "stale .graphql.swift must be swept");
+        assert!(dir.join("README.md").exists(), "foreign files must be preserved");
+        assert_eq!(stats.written, 1);
+        assert_eq!(stats.deleted, 1);
+    }
+
+    /// A mid-run write failure must leave existing output untouched — writes run
+    /// before deletes, so a failed write never reaches the stale sweep.
+    #[test]
+    fn reconcile_failed_write_does_not_delete_stale() {
+        let dir = fresh_test_dir("fail");
+        // Force the write of A to fail: target path is a non-empty directory.
+        std::fs::create_dir(dir.join("A.graphql.swift")).unwrap();
+        std::fs::write(dir.join("A.graphql.swift").join("blocker"), "x").unwrap();
+        std::fs::write(dir.join("Stale.graphql.swift"), "orphan").unwrap();
+        let files = BTreeMap::from([("A.graphql.swift".to_string(), "new".to_string())]);
+        assert!(reconcile_output_dir(&dir, &files).is_err(), "writing onto a dir must fail");
+        assert!(
+            dir.join("Stale.graphql.swift").exists(),
+            "a failed run must not delete stale files (writes precede deletes)"
+        );
     }
 }
