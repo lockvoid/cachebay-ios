@@ -72,4 +72,38 @@ final class CachebayDiagnosticsTests: XCTestCase {
             "a real materialize miss must reach the sink; got \(box.lines)"
         )
     }
+
+    // MARK: - Encode fixed-point (custom-scalar stability)
+
+    private struct StableScalar: CachebayValue {
+        let s: String
+        init(s: String) { self.s = s }
+        init?(cachebayJSON j: JSONValue) { guard let x = j.string else { return nil }; self.s = x }
+        var cachebayJSON: JSONValue { .string(s) }
+    }
+    /// Asymmetric: decode drops the sign, so re-encoding differs.
+    private struct LossyScalar: CachebayValue {
+        let n: Int
+        init(n: Int) { self.n = n }
+        init?(cachebayJSON j: JSONValue) { guard let i = j.int else { return nil }; self.n = abs(Int(i)) }
+        var cachebayJSON: JSONValue { .int(Int64(n)) }
+    }
+
+    func test_encodeStable_true_forSymmetricConformance() {
+        XCTAssertTrue(CachebayDiagnostics.checkEncodeStable(StableScalar(s: "hello")))
+    }
+
+    func test_encodeStable_falseAndReports_forLossyConformance() {
+        let box = Box()
+        CachebayDiagnostics.sink = { box.lines.append($0) }
+        XCTAssertFalse(CachebayDiagnostics.checkEncodeStable(LossyScalar(n: -5)))
+        XCTAssertTrue(box.lines.contains { $0.contains("encode-unstable") }, "got \(box.lines)")
+    }
+
+    /// The fixed point is on the ENCODED form, so a Date that loses sub-millisecond
+    /// precision on round-trip is still encode-stable (re-encoding yields the same
+    /// string) — the false-positive class we explicitly avoid.
+    func test_encodeStable_toleratesDateSubMillisecondPrecision() {
+        XCTAssertTrue(CachebayDiagnostics.checkEncodeStable(Date(timeIntervalSince1970: 1_700_000_000.123456)))
+    }
 }

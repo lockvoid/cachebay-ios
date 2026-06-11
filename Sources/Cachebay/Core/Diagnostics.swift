@@ -42,6 +42,32 @@ public enum CachebayDiagnostics {
         report("materialize miss: \(detail())")
     }
 
+    /// Verify a `CachebayValue` conformance is **encode-stable**: re-encoding after
+    /// one decode round-trip yields identical JSON — `encode(decode(encode(x))) ==
+    /// encode(x)`. Catches genuinely lossy/asymmetric custom-scalar conformances
+    /// while tolerating legitimate precision normalization (the fixed point is on
+    /// the *encoded* form, so a `Date` that loses sub-ms on round-trip still
+    /// passes). Reports an `encode-unstable` miss (and, with `strictAssert`,
+    /// aborts) when it isn't, and returns the result.
+    ///
+    /// Does NOT validate the server wire format — a value the server rejects
+    /// (e.g. a Date in the wrong layout) encodes fine locally; only the server
+    /// knows. Use this in tests for your custom scalar conformances.
+    @discardableResult
+    public static func checkEncodeStable<T: CachebayValue>(_ value: T, _ label: String = "") -> Bool {
+        let name = label.isEmpty ? "\(T.self)" : label
+        let encoded = value.cachebayJSON
+        guard let roundTrip = T(cachebayJSON: encoded) else {
+            report("encode-unstable: \(name) — decode(encode(x)) returned nil")
+            return false
+        }
+        if roundTrip.cachebayJSON != encoded {
+            report("encode-unstable: \(name) — re-encode differs after a round-trip (lossy/asymmetric conformance)")
+            return false
+        }
+        return true
+    }
+
     private static func report(_ message: String) {
         // The sink adds the "[Cachebay] " prefix (the client's logger sink does, and
         // so does the default stderr sink) — pass the bare message to avoid doubling.
