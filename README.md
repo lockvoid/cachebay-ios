@@ -33,7 +33,7 @@ A quick architectural overview of how Cachebay works — see **[Keynotes](./Docs
 - **[Queries](./Docs/QUERIES.md)** — `readQuery` / `writeQuery` / `watchQuery`
 - **[Fragments](./Docs/FRAGMENTS.md)** — `readFragment` / `writeFragment` / `watchFragment`
 - **[Mutations](./Docs/MUTATIONS.md)** — write merging, optimistic patterns
-- **[Subscriptions](./Docs/SUBSCRIPTIONS.md)** — `graphql-transport-ws` over `URLSessionWebSocketTask`
+- **[Subscriptions](./Docs/SUBSCRIPTIONS.md)** — `graphql-transport-ws` over `URLSessionWebSocketTask`, or Ably realtime channels via `CachebayAbly`
 - **[Relay Connections](./Docs/RELAY_CONNECTIONS.md)** — `@connection` directive
 - **[Optimistic Updates](./Docs/OPTIMISTIC_UPDATES.md)** — layering, lifecycle (dispose/commit/revert), `autoCommit`
 - **[Storage](./Docs/STORAGE.md)** — SQLite, cross-process sync, eviction

@@ -6,6 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### `CachebayAbly` — Ably realtime transport (new optional product)
+
+A `WSTransport` backed by [Ably](https://ably.com) realtime channels, for backends that deliver
+GraphQL subscriptions over Ably instead of a `graphql-transport-ws` socket. Shipped as a **separate
+library product** so `ably-cocoa` is pulled in only when you opt into it (target-based resolution
+keeps it out of core `Cachebay`'s dependency graph).
+
+- `AblyTransport(realtime:resolveChannel:)` — you own the `ARTRealtime` (configure `authCallback`
+  for token auth; the transport never touches credentials). `resolveChannel` (`async throws`) maps
+  a subscription to an `AblyChannelTarget` (channel name + optional event-name filter + Ably channel
+  `params` like `rewind`), and may run a server handshake first. A convenience `init(options:)`
+  lets the transport own the client.
+- **Frames:** each Ably message's `data` is decoded to `JSONValue` and split as a `{data, errors}`
+  envelope (or treated as raw `data`), then normalized like any other subscription frame.
+- **Lifecycle:** a fatal `.failed` (expired token / denied capability) terminates the stream;
+  transient `.disconnected`/`.suspended` are left to Ably's auto-reconnect. Channels are released
+  once their last subscription ends.
+- See [Subscriptions → Ably transport](./Docs/SUBSCRIPTIONS.md#ably-transport-cachebayably).
+
+### Empty-list-after-create fix + typed-decode diagnostics
+
+- **fix(connection):** an optimistic `linkNode` now gives its synthetic edge the connection's real
+  edge `__typename` — carried from the schema through the plan (`PlanField.connectionEdgeTypename`,
+  emitted by the CLI) and stamped on the canonical at normalize, so it's correct even for an empty
+  connection — plus a synthetic `cursor`. The edge decodes through the generated edge struct's
+  `__typename` guard instead of being dropped and blanking the whole connection.
+- **feat(diagnostics):** typed-decode failures (required field, `__typename` mismatch, list
+  fail-all) now surface via `CachebayDiagnostics` through your `logger`, instead of silently
+  returning `nil`.
+- **fix(recycle):** dropped an unsound version short-circuit in `recycleSnapshots` that could
+  return a stale snapshot on a fingerprint collision (silently dropping just-added edges).
+
 ### `Codable` on generated response value structs (local persistence round-trip)
 
 Generated response `@CachebayData` structs + their nested structs + generated `enum`s now

@@ -40,7 +40,7 @@ let result = try await client.executeQuery(
 - **[Fragments](./FRAGMENTS.md)** — `readFragment` / `writeFragment` / `watchFragment`
 - **[SwiftUI](./SWIFTUI.md)** — `@CachebayQuery` declarative wrapper (`CachebayUI`)
 - **[Mutations](./MUTATIONS.md)** — write merging, optimistic patterns
-- **[Subscriptions](./SUBSCRIPTIONS.md)** — `graphql-transport-ws` over `URLSessionWebSocketTask`
+- **[Subscriptions](./SUBSCRIPTIONS.md)** — `graphql-transport-ws` over `URLSessionWebSocketTask`, or Ably channels via `CachebayAbly`
 - **[Relay Connections](./RELAY_CONNECTIONS.md)** — `@connection` directive
 - **[Optimistic Updates](./OPTIMISTIC_UPDATES.md)** — layering, commit, revert
 - **[Storage](./STORAGE.md)** — SQLite, cross-process sync, dispose

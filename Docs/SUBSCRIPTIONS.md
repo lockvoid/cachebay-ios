@@ -410,6 +410,62 @@ public protocol WSTransport: Sendable {
 
 ---
 
+## Ably transport (`CachebayAbly`)
+
+For backends that deliver GraphQL subscription results over [Ably](https://ably.com) channels instead of a `graphql-transport-ws` socket, Cachebay ships **`CachebayAbly`** — a `WSTransport` backed by the Ably realtime SDK. It's a **separate library product** so `ably-cocoa` is only pulled in when you opt into it (SwiftPM target-based resolution keeps it out of core `Cachebay`'s dependency graph).
+
+Add the product alongside `Cachebay`:
+
+```swift
+.product(name: "Cachebay", package: "cachebay-ios"),
+.product(name: "CachebayAbly", package: "cachebay-ios"),
+```
+
+### Wiring
+
+```swift
+import Ably
+import CachebayAbly
+
+// 1. An Ably client YOU own. Use token auth in production — never ship an
+//    API key in the client. (https://ably.com/docs/auth/token)
+let options = ARTClientOptions()
+options.authCallback = { _, done in
+    Task { done(try? await fetchAblyTokenRequest(), nil) }   // your server issues the token
+}
+options.clientId = currentUserId
+let realtime = ARTRealtime(options: options)
+
+// 2. Map each subscription operation to an Ably channel. The closure is
+//    `async throws`, so it can do a server handshake first (e.g. POST the
+//    operation and get back the channel to listen on).
+let ablyWS = AblyTransport(realtime: realtime) { ctx in
+    let channelName = try await startSubscription(query: ctx.query, variables: ctx.variables)
+    return AblyChannelTarget(name: channelName, params: ["rewind": "1"])
+}
+
+// 3. Drop it in where you'd pass the WS transport.
+let client = CachebayClient(options: CachebayOptions(
+    transport: Transport(http: httpTransport, ws: ablyWS)
+))
+```
+
+### How it maps
+
+- **Auth** is entirely yours: configure `ARTClientOptions.authCallback` (token auth) and pass the `ARTRealtime`. The transport never touches credentials. (A convenience `init(options:)` lets the transport own the client if you prefer.)
+- **Channel** comes from your `resolveChannel` closure. `AblyChannelTarget` carries the channel `name`, an optional message `eventName` filter, and optional Ably channel `params` (e.g. `["rewind": "1"]` so a late subscriber still receives current state on attach).
+- **Frame contract**: each Ably message's `data` is decoded to a `JSONValue` (default: parse as JSON — `String`/`Data`/Foundation all handled, override via `decodeMessage:`). If it's a GraphQL envelope (`{data, errors}`) it's split into `OperationResult(data:error:)`; otherwise the whole payload is the `data`. Cachebay then normalizes every frame exactly as with the WS transport.
+
+### Lifecycle
+
+- A **fatal** Ably state — connection or channel `.failed` (expired token, denied capability) — terminates the subscription stream with a `CombinedError`.
+- **Transient** states (`.disconnected` / `.suspended`) are left alone: Ably reconnects and resumes automatically, so subscribers' `for try await` loops don't error during the gap (same behaviour as the WS transport's auto-reconnect).
+- When the consumer drops the stream, the message listener is removed and the channel is released once its last subscription ends (`releaseChannelWhenIdle`, default `true`).
+
+> Channel naming and message envelope are a **server↔client convention** — `resolveChannel` + `decodeMessage` are the two hooks you set to match your backend.
+
+---
+
 ## Cancellation
 
 The stream is cancellable via the standard Swift concurrency APIs:

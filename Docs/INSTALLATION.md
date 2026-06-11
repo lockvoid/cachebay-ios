@@ -40,6 +40,8 @@ Or in Xcode: **File → Add Package Dependencies… →** paste the URL → choo
 | ------------------ | ------------------------------------------------------ |
 | `Cachebay`         | Always — the runtime client.                            |
 | `CachebayGraphQL`  | Only if you parse GraphQL strings at runtime (rare — codegen handles every operation by default). |
+| `CachebayUI`       | SwiftUI integration — the `@CachebayQuery` property wrapper. |
+| `CachebayAbly`     | Subscriptions over [Ably](https://ably.com) realtime channels. Pulls in `ably-cocoa` (only when you add this product). See [Subscriptions → Ably transport](./SUBSCRIPTIONS.md#ably-transport-cachebayably). |
 
 The `cachebay-cli` codegen tool lives in [`cli/`](../cli/) — built from the same repo, distributed as a Rust binary. See [CODEGEN.md](./CODEGEN.md).
 
