@@ -35,6 +35,9 @@ pub struct CompilerContext {
     pub document: apollo_compiler::validation::Valid<ExecutableDocument>,
     pub file_paths: HashMap<FileId, PathBuf>,
     pub diagnostics: Vec<String>,
+    /// Effective scalar → Swift-type map (in-SDL `@cachebay(swiftType:)` ⊕ config).
+    /// Populated by `main` after compilation, before plan building.
+    pub scalar_types: std::collections::BTreeMap<String, String>,
 }
 
 impl CompilerContext {
@@ -180,6 +183,7 @@ pub fn build_compiler(
             document: empty_executable(),
             file_paths,
             diagnostics,
+            scalar_types: Default::default(),
         });
     }
 
@@ -194,11 +198,12 @@ pub fn build_compiler(
                 document: empty_executable(),
                 file_paths,
                 diagnostics,
+                scalar_types: Default::default(),
             });
         }
     };
 
-    Ok(CompilerContext { schema, document, file_paths, diagnostics })
+    Ok(CompilerContext { schema, document, file_paths, diagnostics, scalar_types: Default::default() })
 }
 
 /// Pull the `FileId` off the first definition (or source map entry) of a

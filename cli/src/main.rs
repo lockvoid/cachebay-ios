@@ -71,6 +71,29 @@ struct CodegenArgs {
     /// emit at top level.
     #[arg(long, default_value = "")]
     namespace: String,
+
+    /// Path to `cachebay.config.json` (scalar → Swift-type map). Defaults to a
+    /// `cachebay.config.json` sibling of the schema if present.
+    #[arg(long)]
+    config: Option<PathBuf>,
+}
+
+/// The scalar config for this run: an explicit `--config` (must exist), else a
+/// `cachebay.config.json` next to the schema if present, else empty.
+fn resolve_scalar_config(args: &CodegenArgs) -> anyhow::Result<std::collections::BTreeMap<String, String>> {
+    if let Some(path) = &args.config {
+        return config::load_scalar_config(path);
+    }
+    let sibling = args
+        .schema
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join(config::CONFIG_FILE_NAME);
+    if sibling.exists() {
+        config::load_scalar_config(&sibling)
+    } else {
+        Ok(Default::default())
+    }
 }
 
 fn main() -> ExitCode {
@@ -103,13 +126,18 @@ fn run_codegen(args: CodegenArgs) -> anyhow::Result<()> {
     let operation_files = load::collect_operation_files_excluding(&args.operations, &[args.schema.clone()])?;
 
     // Build validated HIR via apollo-compiler.
-    let ctx = load::build_compiler(&schema_src, &operation_files, &args.operations)?;
+    let mut ctx = load::build_compiler(&schema_src, &operation_files, &args.operations)?;
     if !ctx.diagnostics.is_empty() {
         for d in &ctx.diagnostics {
             eprintln!("{d}");
         }
         anyhow::bail!("{} GraphQL diagnostic(s)", ctx.diagnostics.len());
     }
+
+    // Resolve scalar swiftType mappings: in-SDL `@cachebay(swiftType:)` merged
+    // with `cachebay.config.json` (hard error on disagreement).
+    let scalar_config = resolve_scalar_config(&args)?;
+    ctx.scalar_types = plan::effective_scalar_types(&ctx.schema, &scalar_config)?;
 
     // Build a cachebay plan per operation.
     let plans = plan::build_plans(&ctx)?;

@@ -265,11 +265,13 @@ mod tests {
             .expect("op should parse")
             .to_executable_validate(&schema)
             .expect("op should validate");
+        let scalar_types = crate::plan::collect_sdl_scalar_types(&schema);
         CompilerContext {
             schema,
             document,
             file_paths: Default::default(),
             diagnostics: Vec::new(),
+            scalar_types,
         }
     }
 

@@ -330,8 +330,9 @@ fn lower_field(f: &Field, parent_typename: &str, ctx: &CompilerContext, exec_doc
     // `@cachebay(default: …)` lives on the SCHEMA field definition (not the
     // selection), so read it off the resolved field definition.
     let default_value = parse_cachebay_default(&f.definition.directives);
-    // `@cachebay(swiftType: …)` lives on the SCALAR type definition.
-    let swift_scalar_type = lookup_scalar_swift_type(&ctx.schema, &named_type);
+    // Effective scalar swiftType (in-SDL `@cachebay(swiftType:)` ⊕ config),
+    // precomputed onto the context before plan building.
+    let swift_scalar_type = ctx.scalar_types.get(named_type.as_str()).cloned();
     // When the leaf's named type is a GraphQL enum, the typed emitter wraps it
     // in `Cachebay.GraphQLEnum<…>` instead of collapsing to `JSONValue`.
     let swift_enum_type = lookup_enum_swift_type(&ctx.schema, &named_type);
@@ -385,22 +386,37 @@ fn lookup_enum_swift_type(schema: &apollo_compiler::Schema, named_type: &str) ->
 /// custom scalar (e.g. `Date`) to a Swift type (e.g. `Foundation.Date`). The
 /// consumer is responsible for conforming that type to `CachebayValue`
 /// (Cachebay ships conformances for `URL`/`Date`).
-fn lookup_scalar_swift_type(schema: &apollo_compiler::Schema, named_type: &str) -> Option<String> {
+/// In-SDL `@cachebay(swiftType:)` mappings for every scalar type. Merged with the
+/// `cachebay.config.json` scalar map (see `effective_scalar_types`).
+pub fn collect_sdl_scalar_types(
+    schema: &apollo_compiler::Schema,
+) -> std::collections::BTreeMap<String, String> {
     use apollo_compiler::schema::ExtendedType;
-    let ExtendedType::Scalar(scalar) = schema.types.get(named_type)? else {
-        return None;
-    };
-    let dir = scalar.directives.iter().find(|d| d.name.as_str() == "cachebay")?;
-    for arg in dir.arguments.iter() {
-        if arg.name.as_str() == "swiftType" {
-            if let Value::String(s) = &*arg.value {
-                if !s.is_empty() {
-                    return Some(s.to_string());
+    let mut out = std::collections::BTreeMap::new();
+    for (name, ty) in schema.types.iter() {
+        let ExtendedType::Scalar(scalar) = ty else { continue };
+        let Some(dir) = scalar.directives.iter().find(|d| d.name.as_str() == "cachebay") else { continue };
+        for arg in dir.arguments.iter() {
+            if arg.name.as_str() == "swiftType" {
+                if let Value::String(s) = &*arg.value {
+                    if !s.is_empty() {
+                        out.insert(name.to_string(), s.to_string());
+                    }
                 }
             }
         }
     }
-    None
+    out
+}
+
+/// Effective scalar → Swift-type map: in-SDL `@cachebay(swiftType:)` directives
+/// merged with the config `scalars`, hard-erroring on disagreement (no silent
+/// precedence). Stored on `CompilerContext.scalar_types` before plan building.
+pub fn effective_scalar_types(
+    schema: &apollo_compiler::Schema,
+    config: &std::collections::BTreeMap<String, String>,
+) -> anyhow::Result<std::collections::BTreeMap<String, String>> {
+    crate::config::merge_scalar_types(&collect_sdl_scalar_types(schema), config)
 }
 
 /// Reads a `@cachebay(default: …)` construction default off a schema field's
