@@ -20,30 +20,54 @@ use std::path::Path;
 /// via `--config`).
 pub const CONFIG_FILE_NAME: &str = "cachebay.config.json";
 
-/// Parse the `scalars` map from a `cachebay.config.json` body:
-/// `{ "scalars": { "ISO8601DateTime": "Foundation.Date", "JSON": "Cachebay.JSONValue" } }`.
-/// A missing/empty `scalars` key yields an empty map; **malformed JSON is an
-/// error** (a config that silently parses to nothing is exactly the disease we're
-/// treating).
-pub fn parse_scalar_config(json: &str) -> anyhow::Result<BTreeMap<String, String>> {
+/// Parsed `cachebay.config.json`. Keeps a single coherent shape as the config
+/// grows (scalars now; polymorphism; future knobs) so adding one never breaks
+/// the file contract.
+///
+/// ```json
+/// { "scalars": { "ISO8601DateTime": "Foundation.Date", "JSON": "Cachebay.JSONValue" },
+///   "polymorphism": { "exhaustive": true } }
+/// ```
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct CachebayConfig {
+    /// Scalar → Swift-type overrides (merged with in-SDL `@cachebay(swiftType:)`).
+    pub scalars: BTreeMap<String, String>,
+    /// `polymorphism.exhaustive`: emit one interface/union case per schema
+    /// implementor (not just per selected inline fragment). Opt-in — it adds
+    /// enum cases, which is source-breaking for exhaustive switches.
+    pub exhaustive_interfaces: bool,
+}
+
+/// Parse a `cachebay.config.json` body. A missing key takes its default;
+/// **malformed JSON is an error** (a config that silently parses to nothing is
+/// exactly the disease we're treating).
+pub fn parse_config(json: &str) -> anyhow::Result<CachebayConfig> {
     let value: serde_json::Value = serde_json::from_str(json)
         .map_err(|e| anyhow::anyhow!("invalid {CONFIG_FILE_NAME}: {e}"))?;
-    let mut out = BTreeMap::new();
-    if let Some(scalars) = value.get("scalars").and_then(|v| v.as_object()) {
-        for (name, ty) in scalars {
+
+    let mut scalars = BTreeMap::new();
+    if let Some(map) = value.get("scalars").and_then(|v| v.as_object()) {
+        for (name, ty) in map {
             if let Some(s) = ty.as_str() {
-                out.insert(name.clone(), s.to_string());
+                scalars.insert(name.clone(), s.to_string());
             }
         }
     }
-    Ok(out)
+
+    let exhaustive_interfaces = value
+        .get("polymorphism")
+        .and_then(|p| p.get("exhaustive"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    Ok(CachebayConfig { scalars, exhaustive_interfaces })
 }
 
-/// Read + parse the scalar config at `path`.
-pub fn load_scalar_config(path: &Path) -> anyhow::Result<BTreeMap<String, String>> {
+/// Read + parse the config at `path`.
+pub fn load_config(path: &Path) -> anyhow::Result<CachebayConfig> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| anyhow::anyhow!("reading {}: {e}", path.display()))?;
-    parse_scalar_config(&text)
+    parse_config(&text)
 }
 
 /// Merge in-SDL `@cachebay(swiftType:)` mappings (`sdl`) with `config` scalars.
@@ -73,23 +97,32 @@ mod tests {
 
     #[test]
     fn parse_reads_scalars_map() {
-        let cfg = parse_scalar_config(
+        let cfg = parse_config(
             r#"{ "scalars": { "ISO8601DateTime": "Foundation.Date", "JSON": "Cachebay.JSONValue" } }"#,
         )
         .unwrap();
-        assert_eq!(cfg.get("ISO8601DateTime").map(String::as_str), Some("Foundation.Date"));
-        assert_eq!(cfg.get("JSON").map(String::as_str), Some("Cachebay.JSONValue"));
+        assert_eq!(cfg.scalars.get("ISO8601DateTime").map(String::as_str), Some("Foundation.Date"));
+        assert_eq!(cfg.scalars.get("JSON").map(String::as_str), Some("Cachebay.JSONValue"));
+        assert!(!cfg.exhaustive_interfaces, "absent polymorphism defaults off");
     }
 
     #[test]
-    fn parse_empty_when_no_scalars_key() {
-        assert!(parse_scalar_config(r#"{ "other": 1 }"#).unwrap().is_empty());
-        assert!(parse_scalar_config("{}").unwrap().is_empty());
+    fn parse_reads_polymorphism_exhaustive() {
+        let cfg = parse_config(r#"{ "polymorphism": { "exhaustive": true } }"#).unwrap();
+        assert!(cfg.exhaustive_interfaces);
+        assert!(cfg.scalars.is_empty());
+    }
+
+    #[test]
+    fn parse_empty_when_no_keys() {
+        let cfg = parse_config("{}").unwrap();
+        assert!(cfg.scalars.is_empty());
+        assert!(!cfg.exhaustive_interfaces);
     }
 
     #[test]
     fn parse_errors_on_malformed_json() {
-        assert!(parse_scalar_config("{ not json").is_err());
+        assert!(parse_config("{ not json").is_err());
     }
 
     #[test]

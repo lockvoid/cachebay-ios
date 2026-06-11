@@ -78,11 +78,11 @@ struct CodegenArgs {
     config: Option<PathBuf>,
 }
 
-/// The scalar config for this run: an explicit `--config` (must exist), else a
-/// `cachebay.config.json` next to the schema if present, else empty.
-fn resolve_scalar_config(args: &CodegenArgs) -> anyhow::Result<std::collections::BTreeMap<String, String>> {
+/// The config for this run: an explicit `--config` (must exist), else a
+/// `cachebay.config.json` next to the schema if present, else defaults.
+fn resolve_config(args: &CodegenArgs) -> anyhow::Result<config::CachebayConfig> {
     if let Some(path) = &args.config {
-        return config::load_scalar_config(path);
+        return config::load_config(path);
     }
     let sibling = args
         .schema
@@ -90,7 +90,7 @@ fn resolve_scalar_config(args: &CodegenArgs) -> anyhow::Result<std::collections:
         .unwrap_or_else(|| std::path::Path::new("."))
         .join(config::CONFIG_FILE_NAME);
     if sibling.exists() {
-        config::load_scalar_config(&sibling)
+        config::load_config(&sibling)
     } else {
         Ok(Default::default())
     }
@@ -134,10 +134,10 @@ fn run_codegen(args: CodegenArgs) -> anyhow::Result<()> {
         anyhow::bail!("{} GraphQL diagnostic(s)", ctx.diagnostics.len());
     }
 
-    // Resolve scalar swiftType mappings: in-SDL `@cachebay(swiftType:)` merged
-    // with `cachebay.config.json` (hard error on disagreement).
-    let scalar_config = resolve_scalar_config(&args)?;
-    ctx.scalar_types = plan::effective_scalar_types(&ctx.schema, &scalar_config)?;
+    // Resolve config: scalar swiftType mappings (in-SDL ⊕ config, hard error on
+    // disagreement) + the exhaustive-interfaces flag.
+    let config = resolve_config(&args)?;
+    ctx.scalar_types = plan::effective_scalar_types(&ctx.schema, &config.scalars)?;
 
     // Build a cachebay plan per operation.
     let plans = plan::build_plans(&ctx)?;
@@ -160,7 +160,7 @@ fn run_codegen(args: CodegenArgs) -> anyhow::Result<()> {
     let interfaces = schema::collect_interface_implementations(&ctx);
 
     // Emit Swift (write-changed + sweep-stale, atomically — see reconcile_output_dir).
-    emit::write_all(&plans, &inputs, &enums, &interfaces, &args.output, &args.namespace)?;
+    emit::write_all(&plans, &inputs, &enums, &interfaces, &args.output, &args.namespace, config.exhaustive_interfaces)?;
 
     println!(
         "cachebay-cli: wrote {} operation(s) + {} input type(s) + {} enum(s) + {} interface(s) to {}",

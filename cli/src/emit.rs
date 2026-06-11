@@ -71,6 +71,35 @@ pub fn collect_unmapped_scalar_warnings(plans: &[Plan]) -> Vec<UnmappedScalarWar
         .collect()
 }
 
+/// Cross-cutting state threaded through the typed emitter — bundled so adding a
+/// knob (interfaces map, exhaustive flag) doesn't ripple a new parameter through
+/// every render function.
+#[derive(Clone, Copy)]
+struct EmitCtx<'a> {
+    /// Fragments whose `Data` is Codable-safe (so a struct spreading them can be).
+    safe_fragments: &'a BTreeSet<String>,
+    /// Interface/union → schema implementor type names (for exhaustive cases).
+    interfaces: &'a BTreeMap<String, Vec<String>>,
+    /// `polymorphism.exhaustive`: emit one case per schema implementor, not just
+    /// per selected inline fragment.
+    exhaustive: bool,
+}
+
+static EMPTY_SAFE_FRAGMENTS: BTreeSet<String> = BTreeSet::new();
+static EMPTY_INTERFACES: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+impl EmitCtx<'static> {
+    /// No fragments/interfaces, exhaustive off — for the simple `render_typed_*`
+    /// wrappers and unit tests of non-exhaustive shapes.
+    fn bare() -> Self {
+        EmitCtx {
+            safe_fragments: &EMPTY_SAFE_FRAGMENTS,
+            interfaces: &EMPTY_INTERFACES,
+            exhaustive: false,
+        }
+    }
+}
+
 pub fn write_all(
     plans: &[Plan],
     inputs: &BTreeMap<String, InputTypeDef>,
@@ -78,6 +107,7 @@ pub fn write_all(
     interfaces: &BTreeMap<String, Vec<String>>,
     out_dir: &Path,
     namespace: &str,
+    exhaustive: bool,
 ) -> anyhow::Result<()> {
     // Build the COMPLETE output set in memory first, then reconcile the directory.
     // Nothing on disk is touched until every file is generated, so a generation
@@ -95,10 +125,11 @@ pub fn write_all(
     // Which fragments' `Data` are Codable (concrete subtree, no interface enum) —
     // so a struct that spreads them can itself be Codable.
     let safe_fragments = compute_safe_fragments(plans);
+    let ctx = EmitCtx { safe_fragments: &safe_fragments, interfaces, exhaustive };
     for plan in plans {
         files.insert(
             format!("{}.graphql.swift", plan.name),
-            wrap_in_namespace(render_typed_plan_impl(plan, &safe_fragments), namespace),
+            wrap_in_namespace(render_typed_plan_impl(plan, &ctx), namespace),
         );
     }
     reconcile_output_dir(out_dir, &files)?;
@@ -659,21 +690,21 @@ fn render_typed_selection(
     children: &[PlanField],
     indent: &str,
 ) -> String {
-    render_typed_selection_impl(swift_name, parent_named_type, children, &BTreeSet::new(), indent)
+    render_typed_selection_impl(swift_name, parent_named_type, children, &EmitCtx::bare(), indent)
 }
 
 fn render_typed_selection_impl(
     swift_name: &str,
     parent_named_type: &str,
     children: &[PlanField],
-    safe_fragments: &BTreeSet<String>,
+    ctx: &EmitCtx,
     indent: &str,
 ) -> String {
     let (_shared, by_condition) = partition_children(parent_named_type, children);
     if by_condition.is_empty() {
-        render_typed_struct_skipping(swift_name, parent_named_type, children, &BTreeSet::new(), safe_fragments, indent)
+        render_typed_struct_skipping(swift_name, parent_named_type, children, &BTreeSet::new(), ctx, indent)
     } else {
-        render_typed_enum_impl(swift_name, parent_named_type, children, safe_fragments, indent)
+        render_typed_enum_impl(swift_name, parent_named_type, children, ctx, indent)
     }
 }
 
@@ -706,7 +737,7 @@ fn render_typed_struct(
     children: &[PlanField],
     indent: &str,
 ) -> String {
-    render_typed_struct_skipping(swift_name, parent_named_type, children, &BTreeSet::new(), &BTreeSet::new(), indent)
+    render_typed_struct_skipping(swift_name, parent_named_type, children, &BTreeSet::new(), &EmitCtx::bare(), indent)
 }
 
 /// Like `render_typed_struct`, but (1) skips emitting the nested type for any
@@ -719,7 +750,7 @@ fn render_typed_struct_skipping(
     parent_named_type: &str,
     children: &[PlanField],
     skip_nested: &BTreeSet<String>,
-    safe_fragments: &BTreeSet<String>,
+    ctx: &EmitCtx,
     indent: &str,
 ) -> String {
     let (shared, _by_condition) = partition_children(parent_named_type, children);
@@ -735,7 +766,7 @@ fn render_typed_struct_skipping(
     }
     conformances.push("Sendable");
     conformances.push("Hashable");
-    if is_codable_safe(parent_named_type, children, safe_fragments) {
+    if is_codable_safe(parent_named_type, children, ctx.safe_fragments) {
         conformances.push("Codable");
     }
     conformances.push("Cachebay.CachebayValue");
@@ -765,7 +796,7 @@ fn render_typed_struct_skipping(
                 &name,
                 &child.named_type,
                 &child.children,
-                safe_fragments,
+                ctx,
                 &format!("{indent}    "),
             ));
         }
@@ -782,7 +813,7 @@ fn render_typed_enum(
     children: &[PlanField],
     indent: &str,
 ) -> String {
-    render_typed_enum_impl(swift_name, parent_named_type, children, &BTreeSet::new(), indent)
+    render_typed_enum_impl(swift_name, parent_named_type, children, &EmitCtx::bare(), indent)
 }
 
 /// The interface enum itself is intentionally **not** `Codable` (typename-tagged
@@ -792,10 +823,29 @@ fn render_typed_enum_impl(
     swift_name: &str,
     parent_named_type: &str,
     children: &[PlanField],
-    safe_fragments: &BTreeSet<String>,
+    ctx: &EmitCtx,
     indent: &str,
 ) -> String {
     let (shared, by_condition) = partition_children(parent_named_type, children);
+
+    // The case set. Default: one per selected inline fragment. Exhaustive: one
+    // per SCHEMA implementor (variant fields if the selection inline-fragmented
+    // it, else just the interface fields) — so a record/draft typed as a
+    // non-selected implementor lands in its own typed case, not `.unknown`.
+    // `.unknown(Shared)` always stays, strictly for typenames not in the schema
+    // snapshot (true forward-compat: newer server vs older app).
+    let variants: Vec<(String, Vec<&PlanField>)> = if ctx.exhaustive {
+        if let Some(implementors) = ctx.interfaces.get(parent_named_type) {
+            implementors
+                .iter()
+                .map(|tc| (tc.clone(), by_condition.get(tc.as_str()).cloned().unwrap_or_default()))
+                .collect()
+        } else {
+            by_condition.iter().map(|(tc, f)| (tc.clone(), f.clone())).collect()
+        }
+    } else {
+        by_condition.iter().map(|(tc, f)| (tc.clone(), f.clone())).collect()
+    };
 
     // `Identifiable` requires an `id` member. The macro only lifts an `id`
     // accessor when the interface's shared fields include `id`, so gate the
@@ -817,8 +867,8 @@ fn render_typed_enum_impl(
     s.push_str(&format!(
         "{indent}public enum {swift_name}: {conf} {{\n"
     ));
-    // One case per narrowed concrete type, payload = the variant struct.
-    for tc in by_condition.keys() {
+    // One case per variant, payload = the variant struct.
+    for (tc, _) in &variants {
         s.push_str(&format!("{indent}    case {}({tc})\n", lower_first(tc)));
     }
     s.push_str(&format!("{indent}    case unknown(Shared)\n"));
@@ -838,7 +888,7 @@ fn render_typed_enum_impl(
     // Shared struct carries the interface-level fields (§3.1).
     let shared_owned: Vec<PlanField> = shared.iter().map(|f| (*f).clone()).collect();
     s.push('\n');
-    s.push_str(&render_typed_struct_skipping("Shared", "", &shared_owned, &hoist_keys, safe_fragments, &format!("{indent}    ")));
+    s.push_str(&render_typed_struct_skipping("Shared", "", &shared_owned, &hoist_keys, ctx, &format!("{indent}    ")));
 
     // Hoisted shared sub-selections — emitted once at enum scope.
     for child in shared.iter().filter(|c| hoist_keys.contains(&c.response_key)) {
@@ -847,17 +897,19 @@ fn render_typed_enum_impl(
             &title_case(&child.response_key),
             &child.named_type,
             &child.children,
-            safe_fragments,
+            ctx,
             &format!("{indent}    "),
         ));
     }
 
-    // One @CachebayData struct per variant = shared fields + the variant's own fields.
-    for (tc, fields) in &by_condition {
+    // One @CachebayData struct per variant = shared fields + the variant's own
+    // fields. A non-selected implementor (exhaustive mode) has no own fields, so
+    // its struct carries just the interface fields — typename pinned by the macro.
+    for (tc, fields) in &variants {
         let mut variant_children: Vec<PlanField> = shared.iter().map(|f| (*f).clone()).collect();
         variant_children.extend(fields.iter().map(|f| (*f).clone()));
         s.push('\n');
-        s.push_str(&render_typed_struct_skipping(tc, tc, &variant_children, &hoist_keys, safe_fragments, &format!("{indent}    ")));
+        s.push_str(&render_typed_struct_skipping(tc, tc, &variant_children, &hoist_keys, ctx, &format!("{indent}    ")));
     }
 
     s.push_str(&format!("{indent}}}\n"));
@@ -878,10 +930,10 @@ fn lower_first(s: &str) -> String {
 /// conforms to `CachebayOperation`/`CachebayFragment`. The CachePlan literal,
 /// Variables bridge, and network query are unchanged (they're data).
 fn render_typed_plan(plan: &Plan) -> String {
-    render_typed_plan_impl(plan, &BTreeSet::new())
+    render_typed_plan_impl(plan, &EmitCtx::bare())
 }
 
-fn render_typed_plan_impl(plan: &Plan, safe_fragments: &BTreeSet<String>) -> String {
+fn render_typed_plan_impl(plan: &Plan, ctx: &EmitCtx) -> String {
     let mut s = String::new();
     s.push_str("// Generated by cachebay-cli. DO NOT EDIT.\n");
     s.push_str(&format!("// Source: {}\n\n", plan.source_path));
@@ -956,7 +1008,7 @@ fn render_typed_plan_impl(plan: &Plan, safe_fragments: &BTreeSet<String>) -> Str
                 .cloned()
                 .collect()
         };
-        s.push_str(&render_typed_selection_impl("Data", &plan.root_typename, &root_fields, safe_fragments, "    "));
+        s.push_str(&render_typed_selection_impl("Data", &plan.root_typename, &root_fields, ctx, "    "));
         s.push('\n');
     }
 
@@ -1624,5 +1676,54 @@ mod codegen_tests {
             dir.join("Stale.graphql.swift").exists(),
             "a failed run must not delete stale files (writes precede deletes)"
         );
+    }
+
+    // MARK: - Exhaustive interface cases (decode-hardening)
+
+    fn element_children() -> Vec<PlanField> {
+        // Interface selection that inline-fragments ONLY VideoElement.
+        vec![typename_field(), id_field(), scalar_on("url", "String", "VideoElement")]
+    }
+
+    fn element_implementors() -> BTreeMap<String, Vec<String>> {
+        BTreeMap::from([(
+            "Element".to_string(),
+            vec![
+                "VideoElement".to_string(),
+                "AudioElement".to_string(),
+                "ImageElement".to_string(),
+                "LottieElement".to_string(),
+            ],
+        )])
+    }
+
+    /// Flag ON: a case per schema implementor (4) + unknown. Non-selected
+    /// implementors get a typename-pinned struct carrying the interface fields.
+    #[test]
+    fn interface_exhaustive_emits_case_per_schema_implementor() {
+        let children = element_children();
+        let interfaces = element_implementors();
+        let safe: BTreeSet<String> = BTreeSet::new();
+        let ctx = EmitCtx { safe_fragments: &safe, interfaces: &interfaces, exhaustive: true };
+        let out = render_typed_enum_impl("Element", "Element", &children, &ctx, "");
+
+        for case in ["videoElement(VideoElement)", "audioElement(AudioElement)",
+                     "imageElement(ImageElement)", "lottieElement(LottieElement)"] {
+            assert!(out.contains(&format!("case {case}")), "missing case {case}:\n{out}");
+        }
+        assert!(out.contains("case unknown(Shared)"), "{out}");
+        // Non-selected implementor → typename-pinned struct (the draft-can't-lie property).
+        assert!(out.contains("@CachebayData(typename: \"AudioElement\")"), "{out}");
+        // Selected implementor keeps its variant field.
+        assert!(out.contains("public let url: String"), "{out}");
+    }
+
+    /// Flag OFF (default): only inline-fragmented variants — the old shape.
+    #[test]
+    fn interface_nonExhaustive_emits_only_selected_variants() {
+        let out = render_typed_enum("Element", "Element", &element_children(), "");
+        assert!(out.contains("case videoElement(VideoElement)"), "{out}");
+        assert!(!out.contains("audioElement"), "non-exhaustive must not add unselected implementors:\n{out}");
+        assert!(out.contains("case unknown(Shared)"), "{out}");
     }
 }
