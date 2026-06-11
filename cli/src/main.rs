@@ -113,6 +113,20 @@ fn run_codegen(args: CodegenArgs) -> anyhow::Result<()> {
 
     // Build a cachebay plan per operation.
     let plans = plan::build_plans(&ctx)?;
+
+    // Warn (once per scalar) about custom scalars with no `swiftType` mapping —
+    // they collapse to untyped `Cachebay.JSONValue`, pushing fake optionality into
+    // call sites. Carry the blast radius so it's an audit trigger, not noise.
+    for w in emit::collect_unmapped_scalar_warnings(&plans) {
+        eprintln!(
+            "cachebay-cli: warning: scalar `{}` has no swiftType mapping — emitted as `Cachebay.JSONValue` ({} use{}, {} non-null). Map it via `@cachebay(swiftType: \"…\")` for a typed field, or to `\"Cachebay.JSONValue\"` to silence.",
+            w.scalar,
+            w.uses,
+            if w.uses == 1 { "" } else { "s" },
+            w.non_null,
+        );
+    }
+
     let inputs = schema::collect_referenced_input_types(&ctx);
     let enums = schema::collect_referenced_enums(&ctx);
     let interfaces = schema::collect_interface_implementations(&ctx);

@@ -19,6 +19,58 @@ use crate::schema::{EnumTypeDef, InputField, InputTypeDef, TypeKind, TypeShape};
 /// is the named type of this child field.
 const CONNECTION_EDGES_KEY: &str = "edges";
 
+/// Built-in GraphQL scalars — always typed (`swift_type_for_shape`), never warned.
+const BUILTIN_SCALARS: &[&str] = &["Int", "Float", "String", "Boolean", "ID"];
+
+/// A custom scalar used by operations that has no `swiftType` mapping, so codegen
+/// emits its fields as untyped `Cachebay.JSONValue`. Surfaced as a build warning
+/// (one per scalar, with blast-radius counts) so an untyped field is a deliberate
+/// choice, not a silent default. `non_null` counts the non-null uses — the
+/// fake-optionality sites where a `Foo!` collapses to `JSONValue` and loses its
+/// non-null typing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnmappedScalarWarning {
+    pub scalar: String,
+    pub uses: usize,
+    pub non_null: usize,
+}
+
+/// A field whose type is a custom scalar with no `swiftType` mapping → emitted as
+/// `Cachebay.JSONValue`. Built-ins, enums (`swift_enum_type`), and explicitly
+/// mapped scalars (`swift_scalar_type`, including `"Cachebay.JSONValue"`) are
+/// excluded — the last is the deliberate "I mean it" silencer.
+fn is_unmapped_custom_scalar(f: &PlanField) -> bool {
+    matches!(f.output_shape, OutputShape::Leaf { .. })
+        && f.swift_enum_type.is_none()
+        && f.swift_scalar_type.is_none()
+        && !BUILTIN_SCALARS.contains(&f.named_type.as_str())
+}
+
+/// Walk every operation's selection tree and tally unmapped custom scalars — one
+/// entry per scalar, with total + non-null use counts, sorted by scalar name.
+pub fn collect_unmapped_scalar_warnings(plans: &[Plan]) -> Vec<UnmappedScalarWarning> {
+    fn walk(fields: &[PlanField], tally: &mut BTreeMap<String, (usize, usize)>) {
+        for f in fields {
+            if is_unmapped_custom_scalar(f) {
+                let entry = tally.entry(f.named_type.clone()).or_insert((0, 0));
+                entry.0 += 1;
+                if let OutputShape::Leaf { nullable: false, .. } = f.output_shape {
+                    entry.1 += 1;
+                }
+            }
+            walk(&f.children, tally);
+        }
+    }
+    let mut tally: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    for plan in plans {
+        walk(&plan.root, &mut tally);
+    }
+    tally
+        .into_iter()
+        .map(|(scalar, (uses, non_null))| UnmappedScalarWarning { scalar, uses, non_null })
+        .collect()
+}
+
 pub fn write_all(
     plans: &[Plan],
     inputs: &BTreeMap<String, InputTypeDef>,
@@ -1408,5 +1460,58 @@ mod codegen_tests {
         let plain = object("project", "Project", vec![typename_field(), id_field()]);
         let literal = render_plan_field_literal(&plain, "");
         assert!(!literal.contains("connectionEdgeTypename"), "output:\n{literal}");
+    }
+
+    // MARK: - Unmapped-scalar warning (decode-hardening)
+
+    /// An unmapped custom scalar (emitted as `Cachebay.JSONValue`) produces ONE
+    /// warning per scalar — not per field — carrying the blast-radius counts
+    /// (total uses + non-null uses, the fake-optionality sites).
+    #[test]
+    fn unmapped_custom_scalar_warns_once_per_scalar_with_counts() {
+        let created = scalar("createdAt", "ISO8601DateTime"); // unmapped, non-null
+        let updated = scalar("updatedAt", "ISO8601DateTime"); // unmapped, non-null
+        let mut deleted = scalar("deletedAt", "ISO8601DateTime");
+        deleted.output_shape = OutputShape::Leaf { nullable: true, list: false }; // unmapped, nullable
+        // Explicitly mapped to JSONValue — the "I mean it" silencer.
+        let mut blob = scalar("metadata", "JSON");
+        blob.swift_scalar_type = Some("Cachebay.JSONValue".into());
+
+        let post = object(
+            "post",
+            "Post",
+            vec![id_field(), title_scalar(), created, updated, deleted, blob],
+        );
+        let plan = plan_fixture("GetPost", OpKind::Query, "Query", vec![post]);
+
+        let warnings = collect_unmapped_scalar_warnings(&[plan]);
+        assert_eq!(warnings.len(), 1, "one warning per scalar, not per field: {warnings:?}");
+        assert_eq!(warnings[0].scalar, "ISO8601DateTime");
+        assert_eq!(warnings[0].uses, 3);
+        assert_eq!(warnings[0].non_null, 2);
+    }
+
+    /// No warning for built-in scalars, scalars mapped to a real type, or the
+    /// explicit `Cachebay.JSONValue` silencer.
+    #[test]
+    fn no_scalar_warning_for_builtins_mapped_or_jsonvalue_silencer() {
+        let mut dt = scalar("at", "ISO8601DateTime");
+        dt.swift_scalar_type = Some("Foundation.Date".into()); // mapped to a real type
+        let mut blob = scalar("meta", "JSON");
+        blob.swift_scalar_type = Some("Cachebay.JSONValue".into()); // explicit JSONValue silencer
+        let post = object(
+            "post",
+            "Post",
+            vec![
+                id_field(),               // ID  (built-in)
+                title_scalar(),           // String (built-in)
+                scalar("count", "Int"),   // Int (built-in)
+                scalar("score", "Float"), // Float (built-in)
+                dt,
+                blob,
+            ],
+        );
+        let plan = plan_fixture("X", OpKind::Query, "Query", vec![post]);
+        assert!(collect_unmapped_scalar_warnings(&[plan]).is_empty());
     }
 }
