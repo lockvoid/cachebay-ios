@@ -28,6 +28,11 @@ let package = Package(
         // SwiftUI integration: the @CachebayQuery property wrapper. Optional —
         // import only in SwiftUI targets so the core stays framework-agnostic.
         .library(name: "CachebayUI", targets: ["CachebayUI"]),
+        // Ably realtime transport: a `WSTransport` backed by Ably channels, for
+        // backends that deliver GraphQL subscriptions over Ably. Optional — only
+        // consumers that add this product pull in ably-cocoa (target-based
+        // resolution keeps it out of core `Cachebay`'s dependency graph).
+        .library(name: "CachebayAbly", targets: ["CachebayAbly"]),
     ],
     dependencies: [
         // Swift macro support. 602.x matches the Swift 6.2 toolchain.
@@ -35,6 +40,10 @@ let package = Package(
         // yyjson C JSON parser — Cachebay's JSON ⇄ bytes codec (Phase 1).
         // Used by the `Cachebay` target's parse/hydration/persist path.
         .package(url: "https://github.com/ibireme/yyjson.git", from: "0.12.0"),
+        // Ably realtime SDK — used ONLY by the optional `CachebayAbly` target.
+        // With SwiftPM target-based resolution, consumers that depend only on the
+        // `Cachebay` product never fetch this.
+        .package(url: "https://github.com/ably/ably-cocoa.git", from: "1.2.0"),
     ],
     targets: [
         .target(
@@ -88,6 +97,23 @@ let package = Package(
             name: "CachebayUI",
             dependencies: ["Cachebay"],
             path: "Sources/CachebayUI",
+            swiftSettings: strictSettings
+        ),
+        // Ably realtime transport. Depends on `Cachebay` (the `WSTransport`
+        // protocol) + ably-cocoa. Isolated so non-Ably consumers don't pull Ably.
+        .target(
+            name: "CachebayAbly",
+            dependencies: [
+                "Cachebay",
+                .product(name: "Ably", package: "ably-cocoa"),
+            ],
+            path: "Sources/CachebayAbly",
+            swiftSettings: strictSettings
+        ),
+        .testTarget(
+            name: "CachebayAblyTests",
+            dependencies: ["CachebayAbly", "Cachebay"],
+            path: "Tests/CachebayAblyTests",
             swiftSettings: strictSettings
         ),
         .testTarget(
