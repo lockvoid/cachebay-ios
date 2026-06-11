@@ -868,11 +868,11 @@ struct MaterializeContext {
                 case .none, .some(.undefined):
                     out[outKey] = .undefined
                     strictOK = false; canonicalOK = false
-                    logger?.warning("[Cachebay] materialize miss: record \(id, privacy: .public) has no field '\(storeKey, privacy: .public)' (selection set required) — likely a mutation/fragment wrote a partial entity that doesn't satisfy a watching query's selection set")
+                    CachebayDiagnostics.materializeMiss("record \(id) has no field '\(storeKey)' (selection set required) — likely a mutation/fragment wrote a partial entity that doesn't satisfy a watching query's selection set")
                 default:
                     out[outKey] = .undefined
                     strictOK = false; canonicalOK = false
-                    logger?.warning("[Cachebay] materialize miss: record \(id, privacy: .public) field '\(storeKey, privacy: .public)' has unexpected link shape — selection set requires ref/refList/null")
+                    CachebayDiagnostics.materializeMiss("record \(id) field '\(storeKey)' has unexpected link shape — selection set requires ref/refList/null")
                 }
                 continue
             }
