@@ -71,6 +71,40 @@ pub fn collect_unmapped_scalar_warnings(plans: &[Plan]) -> Vec<UnmappedScalarWar
         .collect()
 }
 
+/// Under `polymorphism.exhaustive`, an interface selection's cases are derived
+/// from the SCHEMA implementor list — so an inline fragment that narrows via
+/// ANOTHER interface (`... on Captionable` inside an `Element` selection) is not
+/// a concrete implementor and would silently vanish from the generated enum.
+/// Reject it loudly (a hard error) rather than drop fields. Run only when the
+/// flag is on — non-exhaustive mode keeps such a condition as its own case.
+pub fn validate_exhaustive(
+    plans: &[Plan],
+    interfaces: &BTreeMap<String, Vec<String>>,
+) -> anyhow::Result<()> {
+    fn walk(fields: &[PlanField], interfaces: &BTreeMap<String, Vec<String>>) -> anyhow::Result<()> {
+        for f in fields {
+            if let Some(implementors) = interfaces.get(&f.named_type) {
+                for child in &f.children {
+                    if let Some(tc) = &child.type_condition {
+                        if tc != &f.named_type && !implementors.contains(tc) {
+                            anyhow::bail!(
+                                "selection narrows `{}` via `{}`, not a concrete implementor — unsupported under polymorphism.exhaustive (it would silently drop `{}`'s fields). Use a concrete-implementor inline fragment, or turn exhaustive off.",
+                                f.named_type, tc, tc
+                            );
+                        }
+                    }
+                }
+            }
+            walk(&f.children, interfaces)?;
+        }
+        Ok(())
+    }
+    for plan in plans {
+        walk(&plan.root, interfaces)?;
+    }
+    Ok(())
+}
+
 /// Cross-cutting state threaded through the typed emitter — bundled so adding a
 /// knob (interfaces map, exhaustive flag) doesn't ripple a new parameter through
 /// every render function.
@@ -841,6 +875,9 @@ fn render_typed_enum_impl(
                 .map(|tc| (tc.clone(), by_condition.get(tc.as_str()).cloned().unwrap_or_default()))
                 .collect()
         } else {
+            // No implementor list (unions: `collect_interface_implementations`
+            // excludes them by design) → intentionally keep the non-exhaustive
+            // shape. Exhaustive unions are a future extension of the config key.
             by_condition.iter().map(|(tc, f)| (tc.clone(), f.clone())).collect()
         }
     } else {
@@ -1725,5 +1762,27 @@ mod codegen_tests {
         assert!(out.contains("case videoElement(VideoElement)"), "{out}");
         assert!(!out.contains("audioElement"), "non-exhaustive must not add unselected implementors:\n{out}");
         assert!(out.contains("case unknown(Shared)"), "{out}");
+    }
+
+    /// Under exhaustive, an inline fragment that narrows via ANOTHER interface
+    /// (not a concrete implementor) would silently drop its fields — so it's a
+    /// hard error, not a quiet loss.
+    #[test]
+    fn exhaustive_rejects_non_implementor_inline_fragment() {
+        let narrowing = scalar_on("caption", "String", "Captionable"); // another interface
+        let elements = object("elements", "Element", vec![typename_field(), id_field(), narrowing]);
+        let plan = plan_fixture("Q", OpKind::Query, "Query", vec![elements]);
+        let interfaces = element_implementors(); // Element -> 4 concrete types, no Captionable
+        let err = validate_exhaustive(&[plan], &interfaces).unwrap_err().to_string();
+        assert!(err.contains("Captionable") && err.contains("Element"), "{err}");
+    }
+
+    /// Concrete-implementor inline fragments are fine.
+    #[test]
+    fn exhaustive_allows_concrete_implementor_inline_fragments() {
+        let v = scalar_on("url", "String", "VideoElement");
+        let elements = object("elements", "Element", vec![typename_field(), id_field(), v]);
+        let plan = plan_fixture("Q", OpKind::Query, "Query", vec![elements]);
+        assert!(validate_exhaustive(&[plan], &element_implementors()).is_ok());
     }
 }

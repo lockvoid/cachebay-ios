@@ -159,6 +159,12 @@ fn run_codegen(args: CodegenArgs) -> anyhow::Result<()> {
     let enums = schema::collect_referenced_enums(&ctx);
     let interfaces = schema::collect_interface_implementations(&ctx);
 
+    // Under exhaustive, reject interface selections that narrow via another
+    // interface (would silently drop fields) before emitting anything.
+    if config.exhaustive_interfaces {
+        emit::validate_exhaustive(&plans, &interfaces)?;
+    }
+
     // Emit Swift (write-changed + sweep-stale, atomically — see reconcile_output_dir).
     emit::write_all(&plans, &inputs, &enums, &interfaces, &args.output, &args.namespace, config.exhaustive_interfaces)?;
 
