@@ -635,18 +635,74 @@ fn serialize_value(v: &Value, out: &mut Vec<ArgPiece>) {
 }
 
 fn shape_for_type(ty: &Type, has_children: bool) -> OutputShape {
-    let mut nullable = true;
-    let mut list = false;
-    let mut cursor = ty.clone();
-    loop {
-        cursor = match cursor {
-            Type::NonNullNamed(inner) => { nullable = false; Type::Named(inner) }
-            Type::NonNullList(inner) => { nullable = false; Type::List(inner) }
-            Type::List(inner) => { list = true; *inner }
-            Type::Named(_) => break,
-        };
-    }
+    // Outer nullability and list-ness come from the OUTERMOST wrapper ONLY. The
+    // previous loop also let an inner element's non-null clobber `nullable`, so
+    // `[T!]` (a NULLABLE list of non-null elements) was mis-typed as non-optional
+    // `[T]` — a server `null` then failed to decode and cascaded the parent to
+    // nil. `[T!]` is `[T]?`; only the outermost `!` removes the optional.
+    // (Element-level nullability isn't tracked here — OutputShape carries a single
+    // `list` flag, matching the prior behavior.)
+    let (nullable, list) = match ty {
+        Type::NonNullNamed(_) => (false, false),
+        Type::Named(_) => (true, false),
+        Type::NonNullList(_) => (false, true),
+        Type::List(_) => (true, true),
+    };
     if has_children { OutputShape::Object { nullable, list } } else { OutputShape::Leaf { nullable, list } }
+}
+
+#[cfg(test)]
+mod shape_for_type_tests {
+    use super::*;
+
+    fn named(s: &str) -> Name {
+        Name::new(s).unwrap()
+    }
+    fn outer_nullable(s: OutputShape) -> bool {
+        match s {
+            OutputShape::Leaf { nullable, .. } | OutputShape::Object { nullable, .. } => nullable,
+        }
+    }
+    fn is_list(s: OutputShape) -> bool {
+        match s {
+            OutputShape::Leaf { list, .. } | OutputShape::Object { list, .. } => list,
+        }
+    }
+
+    /// `[Sub!]` — the LIST is nullable; the element's `!` must NOT flip the list's
+    /// nullability. Today it does (→ `[Sub]` instead of `[Sub]?`, so a server
+    /// `null` fails to decode and cascades the parent to nil).
+    #[test]
+    fn nullable_list_of_nonnull_element_is_outer_nullable() {
+        let ty = Type::List(Box::new(Type::NonNullNamed(named("Sub")))); // [Sub!]
+        let shape = shape_for_type(&ty, true);
+        assert!(is_list(shape.clone()), "{shape:?}");
+        assert!(outer_nullable(shape.clone()), "[Sub!] is a NULLABLE list → [Sub]?; got {shape:?}");
+    }
+
+    /// `[Sub!]!` — non-null list → not optional.
+    #[test]
+    fn nonnull_list_is_not_outer_nullable() {
+        let ty = Type::NonNullList(Box::new(Type::NonNullNamed(named("Sub")))); // [Sub!]!
+        let shape = shape_for_type(&ty, true);
+        assert!(is_list(shape.clone()) && !outer_nullable(shape.clone()), "{shape:?}");
+    }
+
+    /// `[Sub]` — nullable list of nullable elements → still outer-nullable.
+    #[test]
+    fn nullable_list_of_nullable_element_is_outer_nullable() {
+        let ty = Type::List(Box::new(Type::Named(named("Sub")))); // [Sub]
+        let shape = shape_for_type(&ty, true);
+        assert!(is_list(shape.clone()) && outer_nullable(shape.clone()), "{shape:?}");
+    }
+
+    /// Bare named: `Sub!` → not nullable, not a list; `Sub` → nullable.
+    #[test]
+    fn bare_named_nullability() {
+        assert!(!outer_nullable(shape_for_type(&Type::NonNullNamed(named("Sub")), false)));
+        assert!(outer_nullable(shape_for_type(&Type::Named(named("Sub")), false)));
+        assert!(!is_list(shape_for_type(&Type::NonNullNamed(named("Sub")), false)));
+    }
 }
 
 /// Map a resolved `TypeShape` to a Swift type string, honouring
