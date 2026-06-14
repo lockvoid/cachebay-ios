@@ -8,15 +8,15 @@ import Cachebay
 public struct SpellEnumDetail: Cachebay.CachebayOperation {
     public struct Variables: Cachebay.OperationVariables {
         public var id: String
-        public var order: Cachebay.GraphQLNullable<SpellOrderBy>
-        public init(id: String, order: Cachebay.GraphQLNullable<SpellOrderBy> = nil) {
+        public var order: SpellOrderBy?
+        public init(id: String, order: SpellOrderBy? = nil) {
             self.id = id
             self.order = order
         }
         public var __cachebay: [String: Cachebay.JSONValue] {
             var out: [String: Cachebay.JSONValue] = [:]
             out["id"] = .string(id)
-            if let __v = order.__cachebayEncode({ v in .string(v.rawValue) }) { out["order"] = __v }
+            if let order = order { out["order"] = .string(order.rawValue) }
             return out
         }
     }

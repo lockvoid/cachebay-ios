@@ -35,6 +35,11 @@ pub struct InputField {
     pub name: String,
     pub graphql_type: String,
     pub shape: TypeShape,
+    /// `true` when `cachebay.config.json`'s `explicitNullable` lists
+    /// `"<InputType>.<field>"` — this field's `null` ≠ absent on the server, so
+    /// it emits the tri-state `GraphQLNullable<T>` rather than omit-on-nil.
+    /// `@oneOf` members ignore this (explicit null is invalid there).
+    pub explicit_nullable: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -175,10 +180,14 @@ pub fn collect_referenced_input_types(ctx: &CompilerContext) -> BTreeMap<String,
                 if shape.kind == TypeKind::InputObject {
                     queue.push(shape.named.clone());
                 }
+                let explicit_nullable = ctx
+                    .explicit_nullable
+                    .contains(&format!("{name}.{fname}"));
                 fields.push(InputField {
                     name: fname.to_string(),
                     graphql_type: f.ty.to_string(),
                     shape,
+                    explicit_nullable,
                 });
             }
             let is_one_of = input.directives.iter().any(|d| d.name.as_str() == "oneOf");
@@ -272,6 +281,7 @@ mod tests {
             file_paths: Default::default(),
             diagnostics: Vec::new(),
             scalar_types,
+            explicit_nullable: Default::default(),
         }
     }
 

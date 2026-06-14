@@ -13,7 +13,7 @@ directive @connection(
 ) on FIELD
 "#;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 /// `cachebay.config.json` filename, discovered next to the schema (overridable
@@ -26,7 +26,8 @@ pub const CONFIG_FILE_NAME: &str = "cachebay.config.json";
 ///
 /// ```json
 /// { "scalars": { "ISO8601DateTime": "Foundation.Date", "JSON": "Cachebay.JSONValue" },
-///   "polymorphism": { "exhaustive": true } }
+///   "polymorphism": { "exhaustive": true },
+///   "explicitNullable": ["UpdateProjectInput.brief", "ListSpells.filter"] }
 /// ```
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct CachebayConfig {
@@ -36,6 +37,20 @@ pub struct CachebayConfig {
     /// implementor (not just per selected inline fragment). Opt-in — it adds
     /// enum cases, which is source-breaking for exhaustive switches.
     pub exhaustive_interfaces: bool,
+    /// Input positions that genuinely distinguish an explicit JSON `null`
+    /// ("clear this field") from omission ("leave it untouched") on the server.
+    /// These — and only these — emit the tri-state `Cachebay.GraphQLNullable<T>`;
+    /// every other nullable input stays a plain `Optional` whose `nil` OMITS the
+    /// key. Keys are `"<InputType>.<field>"` for input-object fields and
+    /// `"<Operation>.<variable>"` for operation variables.
+    ///
+    /// Why a list and not the blanket default: whether `null` ≠ absent is a
+    /// per-field *server* contract; recording it here (the source of truth)
+    /// keeps it off all the call sites that never need it. Standard
+    /// introspection drops applied directives, so config is the reliable
+    /// channel (an `@cachebay(explicitNullable:)` directive only survives in
+    /// hand-authored SDL).
+    pub explicit_nullable: BTreeSet<String>,
 }
 
 /// Parse a `cachebay.config.json` body. A missing key takes its default;
@@ -60,7 +75,16 @@ pub fn parse_config(json: &str) -> anyhow::Result<CachebayConfig> {
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    Ok(CachebayConfig { scalars, exhaustive_interfaces })
+    let mut explicit_nullable = BTreeSet::new();
+    if let Some(arr) = value.get("explicitNullable").and_then(|v| v.as_array()) {
+        for item in arr {
+            if let Some(s) = item.as_str() {
+                explicit_nullable.insert(s.to_string());
+            }
+        }
+    }
+
+    Ok(CachebayConfig { scalars, exhaustive_interfaces, explicit_nullable })
 }
 
 /// Read + parse the config at `path`.
@@ -118,6 +142,18 @@ mod tests {
         let cfg = parse_config("{}").unwrap();
         assert!(cfg.scalars.is_empty());
         assert!(!cfg.exhaustive_interfaces);
+        assert!(cfg.explicit_nullable.is_empty(), "absent explicitNullable defaults empty");
+    }
+
+    #[test]
+    fn parse_reads_explicit_nullable_list() {
+        let cfg = parse_config(
+            r#"{ "explicitNullable": ["UpdateProjectInput.brief", "ListSpells.filter"] }"#,
+        )
+        .unwrap();
+        assert!(cfg.explicit_nullable.contains("UpdateProjectInput.brief"));
+        assert!(cfg.explicit_nullable.contains("ListSpells.filter"));
+        assert_eq!(cfg.explicit_nullable.len(), 2);
     }
 
     #[test]

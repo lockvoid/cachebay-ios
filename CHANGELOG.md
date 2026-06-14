@@ -6,23 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-### Tri-state nullable inputs — `GraphQLNullable<T>` (breaking: input/variable API)
+### Nullable inputs: omit-on-nil by default, opt-in tri-state `GraphQLNullable<T>`
 
 GraphQL distinguishes an **omitted** input field (absent from the wire → "leave untouched") from an
 **explicit null** (`= null` → "clear"), and resolvers act on the difference. The codegen previously
 serialized every nil Swift optional as explicit `null`, so it could *never* omit a field — silently
 turning "patch one field" mutations into "overwrite every other field with null."
 
-- **runtime:** new `GraphQLNullable<T>` (`.none` = omit · `.null` = explicit null · `.some` = value),
-  mirroring Apollo. `nil` and the generated `= nil` default mean **omit**; literals wrap to `.some`
-  (`name: "x"`, `count: 3`, `tags: ["a"]`); `GraphQLNullable(anOptional)` bridges a `T?` (`nil` → omit).
-- **codegen:** schema-nullable input-object fields **and** operation variables now emit
-  `Cachebay.GraphQLNullable<Inner>` and serialize via `__cachebayEncode`, so `.none` omits the key
-  entirely. Non-null fields and output decoding are unchanged.
-- **`@oneOf` members stay plain `Optional`** — explicit null is invalid for `@oneOf`, so the tri-state
-  would only let callers express an illegal state (`nil` already means omit there).
-- **Migration:** pass a non-literal value as `.some(x)` (or `GraphQLNullable(x)`); send `.null` to
-  clear a field; omit it / pass `nil` to leave it untouched.
+- **Default (the fix):** nullable input-object fields and operation variables stay plain `Optional`;
+  a `nil` now **omits** the key from the payload instead of sending `null`. Invisible at call sites
+  — no `.some` / `.unwrapped` churn; read and write your inputs as ordinary optionals.
+- **Opt-in tri-state:** where `null` ≠ absent genuinely matters, mark `"<InputType>.<field>"` /
+  `"<Operation>.<variable>"` in `cachebay.config.json`'s `explicitNullable` and that position emits
+  `Cachebay.GraphQLNullable<T>` (`.none` = omit · `.null` = explicit null · `.some` = value),
+  mirroring Apollo. `nil` and the `= nil` default mean omit; literals wrap to `.some` (`name: "x"`);
+  `GraphQLNullable(anOptional)` bridges a `T?`. Config is the channel because introspection drops
+  applied directives; an `@cachebay(explicitNullable:)` SDL directive is sugar for hand-authored schemas.
+- **`@oneOf` members stay `Optional`** regardless (explicit null is invalid there).
+- **runtime:** `GraphQLNullable<T>` ships for the opt-in fields; serialization runs through
+  `__cachebayEncode` so `.none` omits the key entirely. Output decoding is unchanged.
+
+Why opt-in and not blanket: whether `null` ≠ absent is a per-field *server* contract — recording it
+in the source of truth (schema/config) keeps the tri-state tax off the ~99% of call sites that never
+need it, while keeping the capability one config line away where it does.
 
 ### `CachebayAbly` — Ably realtime transport (new optional product)
 

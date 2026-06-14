@@ -60,9 +60,9 @@ struct CreateSpellView: View {
             let input = CreateSpellInput(
                 name: name,
                 category: category,
-                creator: creator.isEmpty ? nil : .some(creator),
+                creator: creator.isEmpty ? nil : creator,
                 effect: effect,
-                light: light.isEmpty ? nil : .some(light)
+                light: light.isEmpty ? nil : light
             )
             let result = try await store.client.execute(mutation: CreateSpell.self, variables: .init(input: input))
             if let spell = result.data?.createSpell.spell {

@@ -7,19 +7,19 @@ import Cachebay
 /// Query ListSpells: ListSpells.graphql
 public struct ListSpells: Cachebay.CachebayOperation {
     public struct Variables: Cachebay.OperationVariables {
-        public var first: Cachebay.GraphQLNullable<Int>
-        public var after: Cachebay.GraphQLNullable<String>
-        public var filter: Cachebay.GraphQLNullable<SpellFilter>
-        public init(first: Cachebay.GraphQLNullable<Int> = nil, after: Cachebay.GraphQLNullable<String> = nil, filter: Cachebay.GraphQLNullable<SpellFilter> = nil) {
+        public var first: Int?
+        public var after: String?
+        public var filter: SpellFilter?
+        public init(first: Int? = nil, after: String? = nil, filter: SpellFilter? = nil) {
             self.first = first
             self.after = after
             self.filter = filter
         }
         public var __cachebay: [String: Cachebay.JSONValue] {
             var out: [String: Cachebay.JSONValue] = [:]
-            if let __v = first.__cachebayEncode({ v in .int(Int64(v)) }) { out["first"] = __v }
-            if let __v = after.__cachebayEncode({ v in .string(v) }) { out["after"] = __v }
-            if let __v = filter.__cachebayEncode({ v in (v).__cachebay }) { out["filter"] = __v }
+            if let first = first { out["first"] = .int(Int64(first)) }
+            if let after = after { out["after"] = .string(after) }
+            if let filter = filter { out["filter"] = (filter).__cachebay }
             return out
         }
     }

@@ -35,6 +35,10 @@ pub struct VarDef {
     pub swift_type: String,
     pub nullable: bool,
     pub has_default: bool,
+    /// `true` when `cachebay.config.json`'s `explicitNullable` lists
+    /// `"<Operation>.<variable>"` — emit the tri-state `GraphQLNullable<T>`
+    /// instead of omit-on-nil `Optional`.
+    pub tristate: bool,
     /// Resolved type shape — used by the emitter to pick the right JSONValue bridge.
     pub shape: TypeShape,
 }
@@ -156,14 +160,17 @@ fn build_operation_plan(
         .iter()
         .map(|v| {
             let shape = shape_of(&ctx.schema, &v.ty);
+            // A variable is a top-level input position (never a `@oneOf` member).
+            // It's tri-state only when the config marks `"<Operation>.<var>"`;
+            // otherwise plain `Optional` whose `nil` omits the variable.
+            let tristate = ctx.explicit_nullable.contains(&format!("{name}.{}", v.name));
             VarDef {
                 name: v.name.to_string(),
                 graphql_type: v.ty.to_string(),
-                // Operation variables are top-level input positions and never
-                // `@oneOf` members, so a nullable variable is always tri-state.
-                swift_type: swift_input_type(&shape, true),
+                swift_type: swift_input_type(&shape, tristate),
                 nullable: shape.nullable,
                 has_default: v.default_value.is_some(),
+                tristate,
                 shape,
             }
         })

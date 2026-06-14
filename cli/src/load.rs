@@ -38,6 +38,11 @@ pub struct CompilerContext {
     /// Effective scalar → Swift-type map (in-SDL `@cachebay(swiftType:)` ⊕ config).
     /// Populated by `main` after compilation, before plan building.
     pub scalar_types: std::collections::BTreeMap<String, String>,
+    /// Input positions (`"<InputType>.<field>"` / `"<Operation>.<variable>"`)
+    /// that emit the tri-state `GraphQLNullable<T>` instead of omit-on-nil
+    /// `Optional`. From `cachebay.config.json`'s `explicitNullable`; populated by
+    /// `main` before plan building.
+    pub explicit_nullable: std::collections::BTreeSet<String>,
 }
 
 impl CompilerContext {
@@ -184,6 +189,7 @@ pub fn build_compiler(
             file_paths,
             diagnostics,
             scalar_types: Default::default(),
+            explicit_nullable: Default::default(),
         });
     }
 
@@ -199,11 +205,19 @@ pub fn build_compiler(
                 file_paths,
                 diagnostics,
                 scalar_types: Default::default(),
+                explicit_nullable: Default::default(),
             });
         }
     };
 
-    Ok(CompilerContext { schema, document, file_paths, diagnostics, scalar_types: Default::default() })
+    Ok(CompilerContext {
+        schema,
+        document,
+        file_paths,
+        diagnostics,
+        scalar_types: Default::default(),
+        explicit_nullable: Default::default(),
+    })
 }
 
 /// Pull the `FileId` off the first definition (or source map entry) of a

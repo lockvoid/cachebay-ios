@@ -138,6 +138,7 @@ fn run_codegen(args: CodegenArgs) -> anyhow::Result<()> {
     // disagreement) + the exhaustive-interfaces flag.
     let config = resolve_config(&args)?;
     ctx.scalar_types = plan::effective_scalar_types(&ctx.schema, &config.scalars)?;
+    ctx.explicit_nullable = config.explicit_nullable.clone();
 
     // Build a cachebay plan per operation.
     let plans = plan::build_plans(&ctx)?;
