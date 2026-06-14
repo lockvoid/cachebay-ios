@@ -19,16 +19,16 @@ public struct CreateSpell: Cachebay.CachebayOperation {
     }
 
     @CachebayData(typename: "")
-    public struct Data: Sendable, Hashable, Cachebay.CachebayValue {
+    public struct Data: Sendable, Hashable, Codable, Cachebay.CachebayValue {
         public let createSpell: CreateSpell
 
         @CachebayData(typename: "CreateSpellPayload")
-        public struct CreateSpell: Sendable, Hashable, Cachebay.CachebayValue {
+        public struct CreateSpell: Sendable, Hashable, Codable, Cachebay.CachebayValue {
             public let spell: Spell?
             public let __typename: String
 
             @CachebayData(typename: "Spell")
-            public struct Spell: Identifiable, Sendable, Hashable, Cachebay.CachebayValue {
+            public struct Spell: Identifiable, Sendable, Hashable, Codable, Cachebay.CachebayValue {
                 public let id: String
                 public let name: String
                 public let category: String

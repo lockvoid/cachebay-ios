@@ -48,7 +48,7 @@ private struct DeclarativeSpellsList: View {
 
     init(search: String) {
         self.search = search
-        let filter = search.isEmpty ? nil : SpellFilter(query: search)
+        let filter: GraphQLNullable<SpellFilter> = search.isEmpty ? nil : .some(SpellFilter(query: .some(search)))
         _query = CachebayQuery(ListSpells.self, variables: .init(first: 20, after: nil, filter: filter))
     }
 
@@ -60,10 +60,10 @@ private struct DeclarativeSpellsList: View {
     }
 
     private func fetch(after: String?) async {
-        let filter = search.isEmpty ? nil : SpellFilter(query: search)
+        let filter: GraphQLNullable<SpellFilter> = search.isEmpty ? nil : .some(SpellFilter(query: .some(search)))
         _ = try? await store.client.execute(
             ListSpells.self,
-            variables: .init(first: 20, after: after, filter: filter),
+            variables: .init(first: 20, after: GraphQLNullable(after), filter: filter),
             cachePolicy: after == nil ? .cacheAndNetwork : .networkOnly
         )
     }
@@ -78,7 +78,7 @@ private struct ImperativeSpellsList: View {
     @State private var data: ListSpells.Data? = nil
     @State private var watcher: WatchQueryHandle? = nil
 
-    private var filter: SpellFilter? { search.isEmpty ? nil : SpellFilter(query: search) }
+    private var filter: GraphQLNullable<SpellFilter> { search.isEmpty ? nil : .some(SpellFilter(query: .some(search))) }
 
     var body: some View {
         SpellsListContent(spells: data?.spells) { after in
@@ -104,7 +104,7 @@ private struct ImperativeSpellsList: View {
     private func fetch(after: String?) async {
         _ = try? await store.client.execute(
             ListSpells.self,
-            variables: .init(first: 20, after: after, filter: filter),
+            variables: .init(first: 20, after: GraphQLNullable(after), filter: filter),
             cachePolicy: after == nil ? .cacheAndNetwork : .networkOnly
         )
     }

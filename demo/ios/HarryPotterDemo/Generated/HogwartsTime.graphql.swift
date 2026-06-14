@@ -9,11 +9,11 @@ public struct HogwartsTime: Cachebay.CachebayOperation {
     public typealias Variables = Cachebay.EmptyVariables
 
     @CachebayData(typename: "")
-    public struct Data: Sendable, Hashable, Cachebay.CachebayValue {
+    public struct Data: Sendable, Hashable, Codable, Cachebay.CachebayValue {
         public let hogwartsTimeUpdated: HogwartsTimeUpdated
 
         @CachebayData(typename: "HogwartsTime")
-        public struct HogwartsTimeUpdated: Identifiable, Sendable, Hashable, Cachebay.CachebayValue {
+        public struct HogwartsTimeUpdated: Identifiable, Sendable, Hashable, Codable, Cachebay.CachebayValue {
             public let id: String
             public let time: String
             public let __typename: String

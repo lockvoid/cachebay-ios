@@ -2,7 +2,7 @@
 
 import Cachebay
 
-public enum SpellSort: String, Sendable, CaseIterable {
+public enum SpellSort: String, Codable, Sendable, CaseIterable {
     case nameAsc = "NAME_ASC"
     case createDateDesc = "CREATE_DATE_DESC"
 }

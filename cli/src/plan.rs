@@ -159,7 +159,9 @@ fn build_operation_plan(
             VarDef {
                 name: v.name.to_string(),
                 graphql_type: v.ty.to_string(),
-                swift_type: swift_type_for_shape(&shape),
+                // Operation variables are top-level input positions and never
+                // `@oneOf` members, so a nullable variable is always tri-state.
+                swift_type: swift_input_type(&shape, true),
                 nullable: shape.nullable,
                 has_default: v.default_value.is_some(),
                 shape,
@@ -708,12 +710,14 @@ mod shape_for_type_tests {
 /// Map a resolved `TypeShape` to a Swift type string, honouring
 /// nullability and list wrapping and using the generated struct name for
 /// user-defined input objects / enums.
-pub fn swift_type_for_shape(shape: &TypeShape) -> String {
+/// The base + list type WITHOUT field-level optionality — the `Inner` of an
+/// input position's `Inner?` / `Cachebay.GraphQLNullable<Inner>`.
+///
+/// Always qualifies `JSONValue` with the `Cachebay.` module prefix so host apps
+/// that also import another GraphQL client (Apollo's `JSONValue` is a frequent
+/// collision during migration) get an unambiguous type lookup.
+fn inner_swift_type(shape: &TypeShape) -> String {
     use crate::schema::TypeKind;
-    // Always qualify `JSONValue` with the `Cachebay.` module prefix so that
-    // host apps which also import other GraphQL clients (Apollo's
-    // `JSONValue` is a frequent collision during migration) get an
-    // unambiguous type lookup.
     let base: String = match shape.kind {
         TypeKind::Scalar => match shape.named.as_str() {
             "String" | "ID" => "String".into(),
@@ -726,12 +730,37 @@ pub fn swift_type_for_shape(shape: &TypeShape) -> String {
         TypeKind::Enum => shape.named.clone(),
         TypeKind::InputObject => shape.named.clone(),
     };
-    let inner = if shape.list {
+    if shape.list {
         if shape.inner_nullable { format!("[{base}?]") } else { format!("[{base}]") }
     } else {
         base
-    };
+    }
+}
+
+/// Map a resolved `TypeShape` to a Swift type string, honouring nullability and
+/// list wrapping (plain `Optional` form — used where the omit-vs-explicit-null
+/// distinction is irrelevant).
+pub fn swift_type_for_shape(shape: &TypeShape) -> String {
+    let inner = inner_swift_type(shape);
     if shape.nullable { format!("{inner}?") } else { inner }
+}
+
+/// Swift type for an **input position** (input-object field or operation
+/// variable). A schema-nullable position becomes the tri-state
+/// `Cachebay.GraphQLNullable<Inner>` so callers can distinguish OMIT (`nil` /
+/// `.none`) from explicit null (`.null`) — the GraphQL spec treats an absent
+/// input field and an `= null` field differently. The one exception is `@oneOf`
+/// members (`tristate == false`): explicit null is invalid there, so they stay
+/// plain `Optional` where `nil` simply means omit. Non-null positions are bare.
+pub fn swift_input_type(shape: &TypeShape, tristate: bool) -> String {
+    let inner = inner_swift_type(shape);
+    if !shape.nullable {
+        inner
+    } else if tristate {
+        format!("Cachebay.GraphQLNullable<{inner}>")
+    } else {
+        format!("{inner}?")
+    }
 }
 
 fn escape_json(s: &str) -> String {

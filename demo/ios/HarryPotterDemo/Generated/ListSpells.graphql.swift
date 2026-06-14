@@ -7,42 +7,42 @@ import Cachebay
 /// Query ListSpells: ListSpells.graphql
 public struct ListSpells: Cachebay.CachebayOperation {
     public struct Variables: Cachebay.OperationVariables {
-        public var first: Int?
-        public var after: String?
-        public var filter: SpellFilter?
-        public init(first: Int? = nil, after: String? = nil, filter: SpellFilter? = nil) {
+        public var first: Cachebay.GraphQLNullable<Int>
+        public var after: Cachebay.GraphQLNullable<String>
+        public var filter: Cachebay.GraphQLNullable<SpellFilter>
+        public init(first: Cachebay.GraphQLNullable<Int> = nil, after: Cachebay.GraphQLNullable<String> = nil, filter: Cachebay.GraphQLNullable<SpellFilter> = nil) {
             self.first = first
             self.after = after
             self.filter = filter
         }
         public var __cachebay: [String: Cachebay.JSONValue] {
             var out: [String: Cachebay.JSONValue] = [:]
-            out["first"] = (first).map { .int(Int64($0)) } ?? .null
-            out["after"] = (after).map { .string($0) } ?? .null
-            out["filter"] = (filter).map { ($0).__cachebay } ?? .null
+            if let __v = first.__cachebayEncode({ v in .int(Int64(v)) }) { out["first"] = __v }
+            if let __v = after.__cachebayEncode({ v in .string(v) }) { out["after"] = __v }
+            if let __v = filter.__cachebayEncode({ v in (v).__cachebay }) { out["filter"] = __v }
             return out
         }
     }
 
     @CachebayData(typename: "")
-    public struct Data: Sendable, Hashable, Cachebay.CachebayValue {
+    public struct Data: Sendable, Hashable, Codable, Cachebay.CachebayValue {
         public let spells: Spells
 
         @CachebayData(typename: "SpellConnection")
-        public struct Spells: Sendable, Hashable, Cachebay.CachebayValue {
+        public struct Spells: Sendable, Hashable, Codable, Cachebay.CachebayValue {
             public let totalCount: Int
             public let edges: [Edges]
             public let pageInfo: PageInfo
             public let __typename: String
 
             @CachebayData(typename: "SpellEdge")
-            public struct Edges: Sendable, Hashable, Cachebay.CachebayValue {
+            public struct Edges: Sendable, Hashable, Codable, Cachebay.CachebayValue {
                 public let cursor: String
                 public let node: Node
                 public let __typename: String
 
                 @CachebayData(typename: "Spell")
-                public struct Node: Identifiable, Sendable, Hashable, Cachebay.CachebayValue {
+                public struct Node: Identifiable, Sendable, Hashable, Codable, Cachebay.CachebayValue {
                     public let id: String
                     public let name: String
                     public let category: String
@@ -55,7 +55,7 @@ public struct ListSpells: Cachebay.CachebayOperation {
             }
 
             @CachebayData(typename: "PageInfo")
-            public struct PageInfo: Sendable, Hashable, Cachebay.CachebayValue {
+            public struct PageInfo: Sendable, Hashable, Codable, Cachebay.CachebayValue {
                 public let hasNextPage: Bool
                 public let endCursor: String?
                 public let __typename: String
@@ -109,6 +109,7 @@ query ListSpells($first: Int, $after: String, $filter: SpellFilter) {
                 connectionFilters: ["filter"],
                 connectionMode: .infinite,
                 pageArgs: ["first", "after"],
+                connectionEdgeTypename: "SpellEdge",
                 children: [
                     PlanField.make(
                         responseKey: "totalCount",

@@ -9,7 +9,7 @@ public struct SpellFields: Cachebay.CachebayFragment {
     public typealias Variables = Cachebay.EmptyVariables
 
     @CachebayData(typename: "Spell")
-    public struct Data: Identifiable, Sendable, Hashable, Cachebay.CachebayValue {
+    public struct Data: Identifiable, Sendable, Hashable, Codable, Cachebay.CachebayValue {
         public let id: String
         public let name: String
         public let category: String

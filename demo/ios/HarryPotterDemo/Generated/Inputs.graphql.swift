@@ -5,12 +5,12 @@ import Cachebay
 public struct CreateSpellInput: Sendable {
     public var name: String
     public var category: String
-    public var creator: String?
+    public var creator: Cachebay.GraphQLNullable<String>
     public var effect: String
-    public var light: String?
-    public var imageUrl: String?
-    public var wikiUrl: String?
-    public init(name: String, category: String, creator: String? = nil, effect: String, light: String? = nil, imageUrl: String? = nil, wikiUrl: String? = nil) {
+    public var light: Cachebay.GraphQLNullable<String>
+    public var imageUrl: Cachebay.GraphQLNullable<String>
+    public var wikiUrl: Cachebay.GraphQLNullable<String>
+    public init(name: String, category: String, creator: Cachebay.GraphQLNullable<String> = nil, effect: String, light: Cachebay.GraphQLNullable<String> = nil, imageUrl: Cachebay.GraphQLNullable<String> = nil, wikiUrl: Cachebay.GraphQLNullable<String> = nil) {
         self.name = name
         self.category = category
         self.creator = creator
@@ -23,11 +23,11 @@ public struct CreateSpellInput: Sendable {
         var out: [String: Cachebay.JSONValue] = [:]
         out["name"] = .string(name)
         out["category"] = .string(category)
-        out["creator"] = (creator).map { .string($0) } ?? .null
+        if let __v = creator.__cachebayEncode({ v in .string(v) }) { out["creator"] = __v }
         out["effect"] = .string(effect)
-        out["light"] = (light).map { .string($0) } ?? .null
-        out["imageUrl"] = (imageUrl).map { .string($0) } ?? .null
-        out["wikiUrl"] = (wikiUrl).map { .string($0) } ?? .null
+        if let __v = light.__cachebayEncode({ v in .string(v) }) { out["light"] = __v }
+        if let __v = imageUrl.__cachebayEncode({ v in .string(v) }) { out["imageUrl"] = __v }
+        if let __v = wikiUrl.__cachebayEncode({ v in .string(v) }) { out["wikiUrl"] = __v }
         return .object(out)
     }
 }
@@ -45,16 +45,16 @@ public struct DeleteSpellInput: Sendable {
 }
 
 public struct SpellFilter: Sendable {
-    public var query: String?
-    public var sort: SpellSort?
-    public init(query: String? = nil, sort: SpellSort? = nil) {
+    public var query: Cachebay.GraphQLNullable<String>
+    public var sort: Cachebay.GraphQLNullable<SpellSort>
+    public init(query: Cachebay.GraphQLNullable<String> = nil, sort: Cachebay.GraphQLNullable<SpellSort> = nil) {
         self.query = query
         self.sort = sort
     }
     public var __cachebay: Cachebay.JSONValue {
         var out: [String: Cachebay.JSONValue] = [:]
-        out["query"] = (query).map { .string($0) } ?? .null
-        out["sort"] = (sort).map { .string($0.rawValue) } ?? .null
+        if let __v = query.__cachebayEncode({ v in .string(v) }) { out["query"] = __v }
+        if let __v = sort.__cachebayEncode({ v in .string(v.rawValue) }) { out["sort"] = __v }
         return .object(out)
     }
 }

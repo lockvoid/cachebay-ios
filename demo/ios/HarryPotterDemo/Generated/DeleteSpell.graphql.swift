@@ -19,7 +19,7 @@ public struct DeleteSpell: Cachebay.CachebayOperation {
     }
 
     @CachebayData(typename: "")
-    public struct Data: Sendable, Hashable, Cachebay.CachebayValue {
+    public struct Data: Sendable, Hashable, Codable, Cachebay.CachebayValue {
         public let deleteSpell: Bool
     }
 

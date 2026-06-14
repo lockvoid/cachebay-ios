@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Tri-state nullable inputs — `GraphQLNullable<T>` (breaking: input/variable API)
+
+GraphQL distinguishes an **omitted** input field (absent from the wire → "leave untouched") from an
+**explicit null** (`= null` → "clear"), and resolvers act on the difference. The codegen previously
+serialized every nil Swift optional as explicit `null`, so it could *never* omit a field — silently
+turning "patch one field" mutations into "overwrite every other field with null."
+
+- **runtime:** new `GraphQLNullable<T>` (`.none` = omit · `.null` = explicit null · `.some` = value),
+  mirroring Apollo. `nil` and the generated `= nil` default mean **omit**; literals wrap to `.some`
+  (`name: "x"`, `count: 3`, `tags: ["a"]`); `GraphQLNullable(anOptional)` bridges a `T?` (`nil` → omit).
+- **codegen:** schema-nullable input-object fields **and** operation variables now emit
+  `Cachebay.GraphQLNullable<Inner>` and serialize via `__cachebayEncode`, so `.none` omits the key
+  entirely. Non-null fields and output decoding are unchanged.
+- **`@oneOf` members stay plain `Optional`** — explicit null is invalid for `@oneOf`, so the tri-state
+  would only let callers express an illegal state (`nil` already means omit there).
+- **Migration:** pass a non-literal value as `.some(x)` (or `GraphQLNullable(x)`); send `.null` to
+  clear a field; omit it / pass `nil` to leave it untouched.
+
 ### `CachebayAbly` — Ably realtime transport (new optional product)
 
 A `WSTransport` backed by [Ably](https://ably.com) realtime channels, for backends that deliver
