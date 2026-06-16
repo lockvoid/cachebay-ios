@@ -55,37 +55,41 @@ jobs:
       - name: Add Rust targets (rustup is preinstalled on macOS runners)
         run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
-      - name: Import Developer ID signing certificate
-        # Built-in `security` — no third-party action.
+      # Import the Developer ID cert into a temporary keychain — GitHub's
+      # documented recipe ("Installing an Apple certificate on macOS runners"),
+      # built-in `security` only. No third-party action.
+      - name: Install Developer ID signing certificate
         env:
           CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
           CERT_P12_PASSWORD: ${{ secrets.APPLE_CERT_P12_PASSWORD }}
         run: |
-          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
-          KEYPASS="$(openssl rand -hex 16)"
-          security create-keychain -p "$KEYPASS" "$KEYCHAIN"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN"
-          security unlock-keychain -p "$KEYPASS" "$KEYCHAIN"
-          echo "$CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
-          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
-            -P "$CERT_P12_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: \
-            -s -k "$KEYPASS" "$KEYCHAIN"
-          # Put our keychain first in the search list so codesign finds the identity.
-          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 20)"
 
-      - name: Store notarytool credentials
-        run: |
-          echo "${{ secrets.APPLE_NOTARY_KEY_P8 }}" > "$RUNNER_TEMP/notary.p8"
-          xcrun notarytool store-credentials cachebay-notary \
-            --key "$RUNNER_TEMP/notary.p8" \
-            --key-id "${{ secrets.APPLE_NOTARY_KEY_ID }}" \
-            --issuer "${{ secrets.APPLE_NOTARY_ISSUER_ID }}"
+          echo -n "$CERT_P12_BASE64" | base64 --decode -o "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          security import "$CERT_PATH" -P "$CERT_P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+
+      - name: Write notary API key
+        env:
+          NOTARY_KEY_P8: ${{ secrets.APPLE_NOTARY_KEY_P8 }}
+        run: printf '%s' "$NOTARY_KEY_P8" > "$RUNNER_TEMP/notary.p8"
 
       - name: Build + sign + notarize artifact bundle
+        # notarytool takes the App Store Connect API key inline — no
+        # store-credentials / keychain-profile step needed.
         env:
           CACHEBAY_SIGN_ID: ${{ secrets.APPLE_SIGN_IDENTITY }}
-          CACHEBAY_NOTARY_PROFILE: cachebay-notary
+          CACHEBAY_NOTARY_KEY: ${{ runner.temp }}/notary.p8
+          CACHEBAY_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          CACHEBAY_NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
         run: scripts/build-cli-bundle.sh --sign
 
       - name: Pin Package.swift, move tag, publish

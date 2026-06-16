@@ -11,8 +11,8 @@
 #                → unsigned bundle for `CACHEBAY_CLI=local` builds.
 #
 #   Release CI:  CACHEBAY_SIGN_ID="Developer ID Application: …" \
-#                CACHEBAY_NOTARY_PROFILE="cachebay-notary" \
-#                scripts/build-cli-bundle.sh --sign
+#                CACHEBAY_NOTARY_KEY=AuthKey.p8 CACHEBAY_NOTARY_KEY_ID=… \
+#                CACHEBAY_NOTARY_ISSUER=… scripts/build-cli-bundle.sh --sign
 #                → codesigned + notarized, ready to upload to the GitHub Release.
 #
 set -euo pipefail
@@ -76,9 +76,15 @@ echo "==> zip"
 ( cd "$OUT" && /usr/bin/zip -qry "$(basename "$ZIP")" "$(basename "$BUNDLE")" )
 
 if [[ "$SIGN" == "1" ]]; then
-  : "${CACHEBAY_NOTARY_PROFILE:?set CACHEBAY_NOTARY_PROFILE (xcrun notarytool store-credentials)}"
+  : "${CACHEBAY_NOTARY_KEY:?path to the App Store Connect API key (.p8)}"
+  : "${CACHEBAY_NOTARY_KEY_ID:?App Store Connect API key id}"
+  : "${CACHEBAY_NOTARY_ISSUER:?App Store Connect issuer id}"
   echo "==> notarize (online ticket; a bare executable can't be stapled — Gatekeeper verifies on first run)"
-  xcrun notarytool submit "$ZIP" --keychain-profile "$CACHEBAY_NOTARY_PROFILE" --wait
+  xcrun notarytool submit "$ZIP" \
+    --key "$CACHEBAY_NOTARY_KEY" \
+    --key-id "$CACHEBAY_NOTARY_KEY_ID" \
+    --issuer "$CACHEBAY_NOTARY_ISSUER" \
+    --wait
 fi
 
 echo "==> checksum"
