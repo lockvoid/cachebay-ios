@@ -14,7 +14,7 @@ jobs:
     # Clock APIs. macos-14 ships Xcode 15.x which doesn't have Swift 6.
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Package.swift is `swift-tools-version:6.2` (Xcode 26). The runner's
       # DEFAULT Xcode is 16.x → Swift 6.1, which can't even load a 6.2 manifest
@@ -28,7 +28,7 @@ jobs:
           swift --version
 
       - name: Cache .build
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .build
           key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved', 'Package.swift') }}
@@ -46,6 +46,6 @@ jobs:
     runs-on: macos-15
     if: false  # enable once a swiftformat config is in place
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: brew install swiftformat
       - run: swiftformat --lint Sources Tests
