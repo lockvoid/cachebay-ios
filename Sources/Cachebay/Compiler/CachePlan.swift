@@ -121,6 +121,11 @@ public struct CachePlan: Hashable, Sendable {
     /// Network-safe query string (with `__typename` added, `@connection` stripped).
     public let networkQuery: String
 
+    /// SHA-256 (lowercase hex) of `networkQuery`, for Automatic Persisted
+    /// Queries. Baked by `cachebay-cli` over the exact wire string; `nil` for
+    /// runtime-compiled plans (which just send the full query — no APQ).
+    public let persistedHash: String?
+
     /// Stable numeric ID derived from the root fingerprint (FNV-1a32).
     public let id: UInt32
 

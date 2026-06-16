@@ -150,6 +150,7 @@ public extension CachePlan {
         rootTypename: String,
         root: [PlanField],
         networkQuery: String,
+        persistedHash: String? = nil,
         strictVars: [String],
         canonicalVars: [String],
         windowArgs: Set<String>
@@ -172,6 +173,7 @@ public extension CachePlan {
             root: root,
             rootSelectionMap: rootSelectionMap,
             networkQuery: networkQuery,
+            persistedHash: persistedHash,
             id: id,
             varMask: VarMask(strict: strictVars, canonical: canonicalVars),
             windowArgs: windowArgs,

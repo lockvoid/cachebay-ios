@@ -84,6 +84,9 @@ public enum Compiler {
             root: root,
             rootSelectionMap: rootMap,
             networkQuery: networkQuery,
+            // Runtime-compiled plans skip APQ — send the full query. (Hashing
+            // here would need a Swift SHA-256; codegen is the APQ path.)
+            persistedHash: nil,
             id: id,
             varMask: VarMask(strict: strictMask, canonical: canonicalMask),
             windowArgs: windowArgs,
@@ -133,6 +136,7 @@ public enum Compiler {
             root: root,
             rootSelectionMap: rootMap,
             networkQuery: networkQuery,
+            persistedHash: nil,
             id: id,
             varMask: VarMask(strict: strictMask, canonical: canonicalMask),
             windowArgs: windowArgs,

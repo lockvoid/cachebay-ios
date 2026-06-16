@@ -617,6 +617,18 @@ fn json_literal_to_swift(json: &str) -> String {
     format!("Cachebay.JSONValue.parseLiteral({:?})", json)
 }
 
+/// Lowercase-hex SHA-256 of `s`. Bakes each operation's Automatic Persisted
+/// Query hash over its wire-ready `networkQuery` at build time.
+fn sha256_hex(s: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(s.as_bytes());
+    let mut out = String::with_capacity(64);
+    for b in digest {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
+}
+
 fn render_string_literal(s: &str) -> String {
     // Swift """ multi-line literal.
     format!("\"\"\"\n{}\n\"\"\"", s)
@@ -1060,6 +1072,10 @@ fn render_typed_plan_impl(plan: &Plan, ctx: &EmitCtx) -> String {
     s.push_str("    public static let networkQuery: String = ");
     s.push_str(&render_string_literal(&plan.network_query));
     s.push_str("\n\n");
+    s.push_str(&format!(
+        "    /// SHA-256 of `networkQuery`, for Automatic Persisted Queries. Hashed at\n    /// build time over the exact wire string; stable across builds.\n    public static let persistedQueryHash: String = \"{}\"\n\n",
+        sha256_hex(&plan.network_query)
+    ));
     s.push_str("    public static let cachePlan: CachePlan = CachePlan.make(\n");
     s.push_str(&format!("        operation: {},\n", operation_kind_literal(plan.operation_kind)));
     s.push_str(&format!("        rootTypename: \"{}\",\n", plan.root_typename));
@@ -1069,6 +1085,7 @@ fn render_typed_plan_impl(plan: &Plan, ctx: &EmitCtx) -> String {
     }
     s.push_str("        ],\n");
     s.push_str("        networkQuery: networkQuery,\n");
+    s.push_str("        persistedHash: persistedQueryHash,\n");
     s.push_str(&format!("        strictVars: {},\n", render_string_list(&plan_strict_vars(plan))));
     s.push_str(&format!("        canonicalVars: {},\n", render_string_list(&plan_canonical_vars(plan))));
     s.push_str(&format!("        windowArgs: Set({})\n", render_string_list(&collect_window_args(&plan.root))));
@@ -1360,6 +1377,32 @@ mod codegen_tests {
         assert!(out.contains("public let cook: Cook"), "{out}");
         assert!(out.contains("public static let document: QueryDocument = .plan(cachePlan)"), "{out}");
         assert!(!out.contains("OperationData"), "no dict-wrapper conformance; {out}");
+    }
+
+    /// APQ: codegen ALWAYS bakes the SHA-256 of the wire `networkQuery` and feeds
+    /// it to `CachePlan.make`, so the transport can negotiate persisted queries
+    /// without any runtime hashing.
+    #[test]
+    fn typed_plan_emits_persisted_query_hash() {
+        let plan = plan_fixture("GetCook", OpKind::Query, "Query", vec![scalar("name", "String")]);
+        let out = render_typed_plan(&plan);
+        let expected = sha256_hex(&plan.network_query);
+        assert_eq!(expected.len(), 64, "sha256 is 64 hex chars");
+        assert!(
+            out.contains(&format!("public static let persistedQueryHash: String = \"{expected}\"")),
+            "must bake sha256(networkQuery): {out}"
+        );
+        assert!(out.contains("persistedHash: persistedQueryHash,"), "make() must receive it: {out}");
+    }
+
+    /// The hashing is real SHA-256 (known vector), not a placeholder.
+    #[test]
+    fn sha256_hex_matches_known_vector() {
+        assert_eq!(
+            sha256_hex("abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(sha256_hex("").len(), 64);
     }
 
     #[test]

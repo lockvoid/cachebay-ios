@@ -36,6 +36,10 @@ fragment SpellFields on Spell {
 }
 """
 
+    /// SHA-256 of `networkQuery`, for Automatic Persisted Queries. Hashed at
+    /// build time over the exact wire string; stable across builds.
+    public static let persistedQueryHash: String = "1843e3d0f062ddfec583c570f270f58d609531c03d3b07ac3a01f1ce5af34380"
+
     public static let cachePlan: CachePlan = CachePlan.make(
         operation: .fragment,
         rootTypename: "Spell",
@@ -78,6 +82,7 @@ fragment SpellFields on Spell {
             ),
         ],
         networkQuery: networkQuery,
+        persistedHash: persistedQueryHash,
         strictVars: [],
         canonicalVars: [],
         windowArgs: Set([])

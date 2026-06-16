@@ -16,10 +16,15 @@ public struct HTTPContext: Sendable {
     public let query: String
     public let variables: [String: JSONValue]
     public let operationType: OperationType
-    public init(query: String, variables: [String: JSONValue], operationType: OperationType) {
+    /// SHA-256 of `query` baked at build time, or `nil` for runtime-compiled
+    /// operations. A persisted-query-aware transport can send this instead of
+    /// (or alongside) `query`; plain transports ignore it.
+    public let persistedHash: String?
+    public init(query: String, variables: [String: JSONValue], operationType: OperationType, persistedHash: String? = nil) {
         self.query = query
         self.variables = variables
         self.operationType = operationType
+        self.persistedHash = persistedHash
     }
 }
 
@@ -29,9 +34,14 @@ public struct HTTPContext: Sendable {
 public struct WSContext: Sendable {
     public let query: String
     public let variables: [String: JSONValue]
-    public init(query: String, variables: [String: JSONValue]) {
+    /// SHA-256 of `query` baked at build time, or `nil` for runtime-compiled
+    /// operations. Available for custom subscription transports that support
+    /// persisted queries; the built-in transport ignores it.
+    public let persistedHash: String?
+    public init(query: String, variables: [String: JSONValue], persistedHash: String? = nil) {
         self.query = query
         self.variables = variables
+        self.persistedHash = persistedHash
     }
 }
 

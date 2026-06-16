@@ -92,6 +92,10 @@ query ListSpells($first: Int, $after: String, $filter: SpellFilter) {
 }
 """
 
+    /// SHA-256 of `networkQuery`, for Automatic Persisted Queries. Hashed at
+    /// build time over the exact wire string; stable across builds.
+    public static let persistedQueryHash: String = "83d9c54fd51f3e114cdc4ad8f0aa9851376f0d94620529979804ba929496cfb2"
+
     public static let cachePlan: CachePlan = CachePlan.make(
         operation: .query,
         rootTypename: "Query",
@@ -197,6 +201,7 @@ query ListSpells($first: Int, $after: String, $filter: SpellFilter) {
             ),
         ],
         networkQuery: networkQuery,
+        persistedHash: persistedQueryHash,
         strictVars: ["after", "filter", "first"],
         canonicalVars: ["filter"],
         windowArgs: Set(["after", "first"])

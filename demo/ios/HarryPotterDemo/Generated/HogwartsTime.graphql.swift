@@ -31,6 +31,10 @@ subscription HogwartsTime {
 }
 """
 
+    /// SHA-256 of `networkQuery`, for Automatic Persisted Queries. Hashed at
+    /// build time over the exact wire string; stable across builds.
+    public static let persistedQueryHash: String = "ac42dfda5c6589b133401661e5bb600df0f1271b169219c1068e73f417a53072"
+
     public static let cachePlan: CachePlan = CachePlan.make(
         operation: .subscription,
         rootTypename: "Subscription",
@@ -59,6 +63,7 @@ subscription HogwartsTime {
             ),
         ],
         networkQuery: networkQuery,
+        persistedHash: persistedQueryHash,
         strictVars: [],
         canonicalVars: [],
         windowArgs: Set([])

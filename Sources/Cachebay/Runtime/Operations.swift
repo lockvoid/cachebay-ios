@@ -223,7 +223,7 @@ public final class Operations: @unchecked Sendable {
     }
 
     private func performRequest(plan: CachePlan, options: ExecuteQueryOptions, canonicalSig: String, strictSig: String, parentSpan: CachebayProfileSpan? = nil) async -> OperationResult<JSONValue> {
-        let ctx = HTTPContext(query: plan.networkQuery, variables: options.variables, operationType: .query)
+        let ctx = HTTPContext(query: plan.networkQuery, variables: options.variables, operationType: .query, persistedHash: plan.persistedHash)
 
         // Epoch guard for staleness.
         let currentEpoch = bumpEpoch(for: canonicalSig)
@@ -293,7 +293,7 @@ public final class Operations: @unchecked Sendable {
         let clock = bumpMutationClock()
         let rootId = "@mutation.\(clock)"
 
-        let ctx = HTTPContext(query: plan.networkQuery, variables: options.variables, operationType: .mutation)
+        let ctx = HTTPContext(query: plan.networkQuery, variables: options.variables, operationType: .mutation, persistedHash: plan.persistedHash)
         do {
             // Network round-trip — excluded from the span; the server's
             // response time isn't Cachebay's work to optimise.
@@ -361,7 +361,7 @@ public final class Operations: @unchecked Sendable {
 
         return AsyncThrowingStream { continuation in
             let task = Task { @Sendable in
-                let ctx = WSContext(query: plan.networkQuery, variables: options.variables)
+                let ctx = WSContext(query: plan.networkQuery, variables: options.variables, persistedHash: plan.persistedHash)
                 let stream = ws.subscribe(ctx)
                 do {
                     for try await event in stream {

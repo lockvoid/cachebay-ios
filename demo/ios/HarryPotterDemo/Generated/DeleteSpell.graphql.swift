@@ -30,6 +30,10 @@ mutation DeleteSpell($input: DeleteSpellInput!) {
 }
 """
 
+    /// SHA-256 of `networkQuery`, for Automatic Persisted Queries. Hashed at
+    /// build time over the exact wire string; stable across builds.
+    public static let persistedQueryHash: String = "a2c265bf6df510c561a6ac493e8e7bb6b3246d01e2de48297cc522ebabd74f62"
+
     public static let cachePlan: CachePlan = CachePlan.make(
         operation: .mutation,
         rootTypename: "Mutation",
@@ -47,6 +51,7 @@ mutation DeleteSpell($input: DeleteSpellInput!) {
             ),
         ],
         networkQuery: networkQuery,
+        persistedHash: persistedQueryHash,
         strictVars: ["input"],
         canonicalVars: ["input"],
         windowArgs: Set([])

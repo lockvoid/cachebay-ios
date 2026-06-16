@@ -62,6 +62,10 @@ mutation CreateSpell($input: CreateSpellInput!) {
 }
 """
 
+    /// SHA-256 of `networkQuery`, for Automatic Persisted Queries. Hashed at
+    /// build time over the exact wire string; stable across builds.
+    public static let persistedQueryHash: String = "84745683d98031301ef1ca847f3c67c8b53dfbc9805e468e14c8d64c0c5ed0c8"
+
     public static let cachePlan: CachePlan = CachePlan.make(
         operation: .mutation,
         rootTypename: "Mutation",
@@ -127,6 +131,7 @@ mutation CreateSpell($input: CreateSpellInput!) {
             ),
         ],
         networkQuery: networkQuery,
+        persistedHash: persistedQueryHash,
         strictVars: ["input"],
         canonicalVars: ["input"],
         windowArgs: Set([])

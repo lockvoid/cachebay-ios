@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Automatic Persisted Queries (APQ) — opt-in, POST
+
+`cachebay-cli` now bakes a `persistedQueryHash` (SHA-256 of the wire-ready `networkQuery`) into every
+generated operation — always, hashed at build time, so the runtime never hashes. The built-in
+`URLSessionHTTPTransport` gains a `persistedQueries: Bool` (**default `false`**): when on, it POSTs the
+hash alone (`extensions.persistedQuery = {version: 1, sha256Hash}`, no `query`) and, on a
+`PersistedQueryNotFound` / `PersistedQueryNotSupported` reply, retries with the full query so the
+server registers it — the standard Apollo APQ negotiation.
+
+- The hash is over the **exact bytes sent** (`networkQuery`), so client hash ≡ wire query by
+  construction; the server registers the same string on the fallback round-trip.
+- `HTTPContext` / `WSContext` carry `persistedHash`, so **custom transports** can use it however they
+  like (documentId, header, etc.). Runtime-compiled plans have `nil` hash and simply send the full
+  query (APQ skipped — never broken).
+- Requires the server to have APQ enabled; until then, leave the flag `false`. POST only for now (no
+  GET/CDN variant yet).
+
 ### Nullable inputs: omit-on-nil by default, opt-in tri-state `GraphQLNullable<T>`
 
 GraphQL distinguishes an **omitted** input field (absent from the wire → "leave untouched") from an
