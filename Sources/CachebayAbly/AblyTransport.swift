@@ -56,6 +56,22 @@ public struct AblyChannelTarget: Sendable {
 /// surfaced — Ably reconnects and resumes automatically. When the consumer drops
 /// the stream, the message listener is removed and (by default) the channel is
 /// released once no subscriptions remain on it.
+///
+/// **Reconnect after continuity loss (presence backends).** Ably preserves
+/// connection + channel + presence state for up to two minutes; a blip shorter
+/// than that reattaches `resumed == true` with queued messages replayed and
+/// presence intact — nothing to do. Past two minutes the connection goes
+/// `suspended`; on recovery the channel reattaches `resumed == false` and
+/// presence continuity is lost. A presence-based server (e.g. GraphQL Pro) will
+/// have *reaped* the subscription during that window (its per-trigger
+/// `presence.get` saw an empty set), so the dead channel never delivers again.
+/// Re-entering presence can't revive a reaped record — only re-registering can.
+/// So when `maintainsPresence` is set and a channel reattaches with
+/// `resumed == false` (after its initial attach), the transport transparently
+/// re-runs `resolveChannel` to register a fresh subscription on a new channel,
+/// keeping the *same* `AsyncThrowingStream` alive. (Events the server broadcast
+/// while we were gone are not replayed by a fresh subscription — recover those
+/// app-side by refetching the backing query on reconnect.)
 public final class AblyTransport: WSTransport, @unchecked Sendable {
     private let realtime: ARTRealtime
     private let ownsRealtime: Bool
@@ -69,6 +85,13 @@ public final class AblyTransport: WSTransport, @unchecked Sendable {
     // last subscription ends.
     private let lock = NSLock()
     private var channelRefCounts: [String: Int] = [:]
+
+    /// Re-registration retry backoff bounds (continuity-loss recovery). The
+    /// first retry is fast (we only get here right after the connection
+    /// returned, so the registration POST should succeed); the cap keeps a
+    /// pathological persistent failure from busy-looping.
+    private static let reregisterInitialBackoff: UInt64 = 500_000_000      // 0.5s
+    private static let reregisterMaxBackoff: UInt64 = 30_000_000_000       // 30s
 
     /// Use an Ably client **you** own and configured (recommended — you control
     /// `authCallback`, `clientId`, and the connection lifecycle).
@@ -139,57 +162,184 @@ public final class AblyTransport: WSTransport, @unchecked Sendable {
                     let target = try await resolveChannel(context)
                     if Task.isCancelled { return }
 
-                    let channel = makeChannel(target)
-                    sub.channel = channel
-                    sub.channelName = target.name
-                    let isFirstOnChannel = retain(target.name)
-
                     // Fatal connection failure → terminate this stream. Transient
-                    // disconnect/suspend are left alone (Ably auto-recovers).
-                    sub.connectionListener = realtime.connection.on { stateChange in
+                    // disconnect/suspend are left alone (Ably auto-recovers; a
+                    // >2min suspend is handled per-channel via re-registration).
+                    // Registered once for the subscription's lifetime — it spans
+                    // channel swaps.
+                    let connListener = realtime.connection.on { stateChange in
                         guard stateChange.current == .failed else { return }
                         continuation.finish(throwing: Self.error(from: stateChange.reason, fallback: "Ably connection failed"))
                     }
-
-                    // Fatal channel failure (e.g. denied capability) → terminate.
-                    sub.channelStateListener = channel.on { stateChange in
-                        guard stateChange.current == .failed else { return }
-                        continuation.finish(throwing: Self.error(from: stateChange.reason, fallback: "Ably channel '\(target.name)' failed"))
+                    let stored = sub.withLock { () -> Bool in
+                        guard !sub.cancelled else { return false }
+                        sub.connectionListener = connListener
+                        return true
+                    }
+                    guard stored else {
+                        realtime.connection.off(connListener)
+                        return
                     }
 
-                    let onMessage: (ARTMessage) -> Void = { message in
-                        guard let frame = self.decodeMessage(message) else { return }
-                        continuation.yield(Self.result(from: frame))
-                    }
-                    if let eventName = target.eventName {
-                        sub.messageListener = channel.subscribe(eventName, callback: onMessage)
-                    } else {
-                        sub.messageListener = channel.subscribe(onMessage)
-                    }
-
-                    // Presence-based backends (e.g. GraphQL Pro) track live
-                    // subscribers via Ably presence (`still_subscribed?` →
-                    // `presence.get`); a channel with no present member is reaped
-                    // and stops delivering. When opted in, enter presence so the
-                    // server keeps the subscription alive — once per channel,
-                    // balanced by a leave in `teardown`.
-                    if maintainsPresence, isFirstOnChannel {
-                        channel.presence.enter(nil) { _ in }
-                    }
+                    attachChannel(target, sub: sub, context: context, continuation: continuation)
                 } catch {
                     continuation.finish(throwing: Self.error(from: error, fallback: "Ably subscribe failed"))
                 }
             }
-            sub.setupTask = setup
+            sub.withLock { sub.setupTask = setup }
 
-            continuation.onTermination = { [self] _ in
-                setup.cancel()
-                teardown(sub)
-            }
+            continuation.onTermination = { [self] _ in teardown(sub) }
         }
     }
 
     // MARK: - Channel plumbing
+
+    /// Establish the live wiring on `target`'s channel: message listener,
+    /// channel-state listener (fatal-failure + continuity-loss handling), and —
+    /// for presence backends — presence entry. Publishes the channel as the
+    /// subscription's current one. Used for both the initial attach and each
+    /// re-registration after continuity loss.
+    private func attachChannel(
+        _ target: AblyChannelTarget,
+        sub: Subscription,
+        context: WSContext,
+        continuation: AsyncThrowingStream<OperationResult<JSONValue>, Error>.Continuation
+    ) {
+        // Build + wire Ably objects outside the box lock so we never hold it
+        // across an Ably call. The state listener guards on channel identity, so
+        // an event arriving before we publish the channel below is simply ignored.
+        let channel = makeChannel(target)
+        let decode = self.decodeMessage
+        let onMessage: (ARTMessage) -> Void = { message in
+            guard let frame = decode(message) else { return }
+            continuation.yield(Self.result(from: frame))
+        }
+        let messageListener: ARTEventListener? = {
+            if let eventName = target.eventName {
+                return channel.subscribe(eventName, callback: onMessage)
+            }
+            return channel.subscribe(onMessage)
+        }()
+        let stateListener = channel.on { [self] stateChange in
+            handleChannelState(stateChange, channel: channel, sub: sub, context: context, continuation: continuation)
+        }
+
+        var isFirstOnChannel = false
+        let proceed = sub.withLock { () -> Bool in
+            guard !sub.cancelled else { return false }
+            isFirstOnChannel = retain(target.name)
+            sub.channel = channel
+            sub.channelName = target.name
+            sub.messageListener = messageListener
+            sub.channelStateListener = stateListener
+            // If the channel attached before this point (e.g. shared instance
+            // already up), its initial `attached` event was ignored (not yet
+            // current), so seed the flag from live state; otherwise the upcoming
+            // initial attach sets it. This makes the *next* `resumed == false`
+            // count as a real continuity loss rather than a first attach.
+            sub.reregistering = false
+            sub.hasAttachedBefore = (channel.state == .attached)
+            return true
+        }
+        guard proceed else {
+            // Raced with teardown — undo the wiring we just created.
+            if let messageListener { channel.unsubscribe(messageListener) }
+            channel.off(stateListener)
+            return
+        }
+
+        // Presence-based backends (e.g. GraphQL Pro) track live subscribers via
+        // Ably presence (`presence.get` per trigger); a channel with no present
+        // member is reaped and stops delivering. Enter presence once per channel,
+        // balanced by a leave in `detachCurrentChannel`.
+        if maintainsPresence, isFirstOnChannel {
+            channel.presence.enter(nil) { _ in }
+        }
+    }
+
+    /// Channel state callback. Terminates the stream on fatal failure; on a
+    /// presence backend, triggers re-registration when the channel reattaches
+    /// without continuity (`resumed == false`) after its first attach. Events
+    /// from a channel we've already swapped away from (identity mismatch) or
+    /// after teardown are ignored.
+    private func handleChannelState(
+        _ stateChange: ARTChannelStateChange,
+        channel: ARTRealtimeChannel,
+        sub: Subscription,
+        context: WSContext,
+        continuation: AsyncThrowingStream<OperationResult<JSONValue>, Error>.Continuation
+    ) {
+        let current = stateChange.current
+
+        enum Action { case ignore, fail(String?), reregister }
+        let action: Action = sub.withLock {
+            // Events from a channel we've swapped away from, or after teardown,
+            // are stale — ignore.
+            guard !sub.cancelled, channel === sub.channel else { return .ignore }
+            if current == .failed { return .fail(sub.channelName) }
+            guard current == .attached else { return .ignore }
+
+            let wasAttachedBefore = sub.hasAttachedBefore
+            sub.hasAttachedBefore = true
+            guard Self.shouldReregister(
+                maintainsPresence: maintainsPresence,
+                hasAttachedBefore: wasAttachedBefore,
+                current: current,
+                resumed: stateChange.resumed
+            ), !sub.reregistering else { return .ignore }
+            sub.reregistering = true
+            return .reregister
+        }
+
+        switch action {
+        case .ignore:
+            return
+        case .fail(let name):
+            continuation.finish(throwing: Self.error(from: stateChange.reason, fallback: "Ably channel '\(name ?? "?")' failed"))
+        case .reregister:
+            let task = Task { [self] in
+                await reregister(sub: sub, context: context, continuation: continuation)
+            }
+            let kept = sub.withLock { () -> Bool in
+                guard !sub.cancelled else { return false }
+                sub.reregisterTask = task
+                return true
+            }
+            if !kept { task.cancel() }
+        }
+    }
+
+    /// Re-establish a fresh subscription after continuity loss: drop the reaped
+    /// channel, then register a new one (retrying transient registration
+    /// failures with capped backoff) and attach it — all without breaking the
+    /// consumer's stream. Detach-then-attach (rather than overlapping channels)
+    /// avoids double-delivering frames into a non-idempotent consumer.
+    private func reregister(
+        sub: Subscription,
+        context: WSContext,
+        continuation: AsyncThrowingStream<OperationResult<JSONValue>, Error>.Continuation
+    ) async {
+        detachCurrentChannel(sub)
+
+        var backoff = Self.reregisterInitialBackoff
+        while !Task.isCancelled {
+            if sub.withLock({ sub.cancelled }) { return }
+            do {
+                let target = try await resolveChannel(context)
+                if Task.isCancelled { return }
+                attachChannel(target, sub: sub, context: context, continuation: continuation)
+                return
+            } catch {
+                // Transient registration failure (e.g. a flapping network right
+                // after reconnect). Back off and retry; a fatal connection
+                // `.failed` finishes the stream via the connection listener,
+                // which tears us down. Stays silent — the consumer's stream is
+                // uninterrupted and surfacing the error would end it.
+                try? await Task.sleep(nanoseconds: backoff)
+                backoff = min(backoff * 2, Self.reregisterMaxBackoff)
+            }
+        }
+    }
 
     private func makeChannel(_ target: AblyChannelTarget) -> ARTRealtimeChannel {
         guard let params = target.params else {
@@ -200,18 +350,47 @@ public final class AblyTransport: WSTransport, @unchecked Sendable {
         return realtime.channels.get(target.name, options: options)
     }
 
-    private func teardown(_ sub: Subscription) {
-        if let channel = sub.channel {
-            if let listener = sub.messageListener { channel.unsubscribe(listener) }
-            if let listener = sub.channelStateListener { channel.off(listener) }
+    /// Tear down the subscription's current channel: remove listeners, leave
+    /// presence, and release the channel once its last subscriber is gone.
+    /// Idempotent — clears the box's channel refs so a second call (teardown
+    /// racing a re-registration) is a no-op.
+    private func detachCurrentChannel(_ sub: Subscription) {
+        let (channel, name, messageListener, stateListener) = sub.withLock {
+            defer {
+                sub.channel = nil
+                sub.channelName = nil
+                sub.messageListener = nil
+                sub.channelStateListener = nil
+            }
+            return (sub.channel, sub.channelName, sub.messageListener, sub.channelStateListener)
         }
-        if let listener = sub.connectionListener { realtime.connection.off(listener) }
-        if let name = sub.channelName, releaseRef(name) {
+
+        guard let channel else { return }
+        if let messageListener { channel.unsubscribe(messageListener) }
+        if let stateListener { channel.off(stateListener) }
+        if let name, releaseRef(name) {
             // Last subscriber on this channel — leave presence (matches the enter
-            // in `subscribe`) so a presence-based server reaps the idle sub.
-            if maintainsPresence { sub.channel?.presence.leave(nil) { _ in } }
+            // in `attachChannel`) so a presence-based server reaps the idle sub.
+            if maintainsPresence { channel.presence.leave(nil) { _ in } }
             if releaseChannelWhenIdle { realtime.channels.release(name) }
         }
+    }
+
+    private func teardown(_ sub: Subscription) {
+        let (setupTask, reregisterTask, connectionListener) = sub.withLock {
+            sub.cancelled = true
+            defer {
+                sub.setupTask = nil
+                sub.reregisterTask = nil
+                sub.connectionListener = nil
+            }
+            return (sub.setupTask, sub.reregisterTask, sub.connectionListener)
+        }
+
+        setupTask?.cancel()
+        reregisterTask?.cancel()
+        if let connectionListener { realtime.connection.off(connectionListener) }
+        detachCurrentChannel(sub)
     }
 
     /// Increments the ref-count; returns `true` when this is the first reference
@@ -232,6 +411,25 @@ public final class AblyTransport: WSTransport, @unchecked Sendable {
         }
         channelRefCounts[name] = remaining
         return false
+    }
+
+    // MARK: - Reconnect decision (pure — unit-testable without Ably)
+
+    /// Whether a channel state change is a continuity-loss reattach that, on a
+    /// presence backend, requires re-registering the (now reaped) subscription.
+    ///
+    /// True only when: it's a presence backend, the channel has attached at
+    /// least once before (so this isn't the initial attach, which is always
+    /// `resumed == false`), the new state is `attached`, and continuity was lost
+    /// (`resumed == false`). A `<2min` blip reattaches `resumed == true` with
+    /// presence preserved server-side, so it's correctly excluded.
+    static func shouldReregister(
+        maintainsPresence: Bool,
+        hasAttachedBefore: Bool,
+        current: ARTRealtimeChannelState,
+        resumed: Bool
+    ) -> Bool {
+        maintainsPresence && hasAttachedBefore && current == .attached && !resumed
     }
 
     // MARK: - Frame mapping (pure — unit-testable without Ably)
@@ -285,15 +483,37 @@ public final class AblyTransport: WSTransport, @unchecked Sendable {
 
     // MARK: - Per-subscription state
 
-    /// Shared between the setup `Task` and `onTermination`. Holds Ably handles
-    /// (not `Sendable`); access is serial in practice (setup runs once, teardown
-    /// once after), so `@unchecked` is sound.
+    /// Shared between the setup `Task`, the Ably listener callbacks, the
+    /// re-registration `Task`, and `onTermination`. Holds Ably handles (not
+    /// `Sendable`); every field is guarded by `lock` because, unlike the
+    /// original one-shot setup, these actors now run concurrently (a channel
+    /// callback can fire a re-registration while teardown races it).
     private final class Subscription: @unchecked Sendable {
+        private let lock = NSLock()
+
+        /// Scoped locking. A plain `lock()`/`unlock()` pair is unavailable from
+        /// async contexts under strict concurrency (it can block the cooperative
+        /// pool); this sync wrapper is callable from both the Ably callbacks and
+        /// the async re-registration task. The body must not suspend.
+        func withLock<R>(_ body: () -> R) -> R {
+            lock.lock(); defer { lock.unlock() }
+            return body()
+        }
+
         var channel: ARTRealtimeChannel?
         var channelName: String?
         var messageListener: ARTEventListener?
         var channelStateListener: ARTEventListener?
         var connectionListener: ARTEventListener?
         var setupTask: Task<Void, Never>?
+        var reregisterTask: Task<Void, Never>?
+        /// Set on the current channel's first `attached`; distinguishes the
+        /// initial attach (always `resumed == false`) from a later reattach.
+        var hasAttachedBefore = false
+        /// A re-registration is in flight — drops duplicate continuity-loss
+        /// triggers until the fresh channel is attached.
+        var reregistering = false
+        /// The consumer dropped the stream — stop establishing new channels.
+        var cancelled = false
     }
 }
