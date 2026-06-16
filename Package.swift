@@ -24,12 +24,12 @@ let strictSettings: [SwiftSetting] = [
 // change `defaultCLIMode` to "release" and set `cliReleaseChecksum` below; the
 // plugin then "just works" for consumers with no env var. (The release workflow
 // does this edit automatically — see .github/workflows/release-cli.yml.)
-let defaultCLIMode = "off"
+let defaultCLIMode = "release"
 let cliMode = ProcessInfo.processInfo.environment["CACHEBAY_CLI"] ?? defaultCLIMode
 
 let cliRepo = "lockvoid/cachebay-ios"          // GitHub <owner>/<repo> for release assets
-let cliReleaseTag = "v1.2.0"                    // tag whose bundle we pin
-let cliReleaseChecksum = "REPLACE_AT_FIRST_RELEASE" // swift package compute-checksum output
+let cliReleaseTag = "v1.3.0"
+let cliReleaseChecksum = "009b5ac00c41484560603115ea84ce9f3c0a2e69f083c3043fd3b57f3b8a1625"
 
 var products: [Product] = [
     // Runtime client. The library every consumer imports.
