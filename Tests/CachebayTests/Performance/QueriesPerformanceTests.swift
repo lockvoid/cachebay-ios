@@ -13,11 +13,12 @@ final class QueriesPerformanceTests: XCTestCase {
 
     private func makeClient() -> (CachebayClient, MockHTTPTransport) {
         let http = MockHTTPTransport()
-        let client = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: http),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: http),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
         return (client, http)
     }
 
@@ -51,13 +52,13 @@ final class QueriesPerformanceTests: XCTestCase {
     func test_writeQuery_pagination_fiveWrites_eachIsReadable() throws {
         let (client, _) = makeClient()
         let postsQuery = """
-        query GetPosts($first: Int!, $after: String) {
-            posts(first: $first, after: $after) {
-                edges { node { id title } }
-                pageInfo { endCursor hasNextPage }
+            query GetPosts($first: Int!, $after: String) {
+                posts(first: $first, after: $after) {
+                    edges { node { id title } }
+                    pageInfo { endCursor hasNextPage }
+                }
             }
-        }
-        """
+            """
         for i in 0..<5 {
             try client.writeQuery(
                 query: postsQuery,
@@ -79,7 +80,7 @@ final class QueriesPerformanceTests: XCTestCase {
                             "__typename": "PageInfo",
                             "endCursor": .string("c\(i+1)"),
                             "hasNextPage": .bool(i < 4),
-                        ])
+                        ]),
                     ])
                 ])
             )
@@ -399,7 +400,7 @@ final class QueriesPerformanceTests: XCTestCase {
         )
         XCTAssertEqual(emissions.value.count, 1)
 
-        handle.update(["id": "1"], false) // no-op rotation, no emit
+        handle.update(["id": "1"], false)  // no-op rotation, no emit
         XCTAssertEqual(emissions.value.count, 1)
 
         try client.writeQuery(query: userQuery, variables: ["id": "1"], data: userPayload("1", name: "Bob"))

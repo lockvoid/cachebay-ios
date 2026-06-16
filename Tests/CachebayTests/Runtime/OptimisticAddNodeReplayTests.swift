@@ -16,26 +16,27 @@ import XCTest
 final class OptimisticAddNodeReplayTests: XCTestCase {
 
     private func makeClient() -> CachebayClient {
-        CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
     }
 
     private let connectionQuery = """
-    query Posts {
-        posts @connection(mode: "infinite") {
-            __typename
-            pageInfo { __typename hasNextPage }
-            edges {
+        query Posts {
+            posts @connection(mode: "infinite") {
                 __typename
-                cursor
-                node { __typename id title }
+                pageInfo { __typename hasNextPage }
+                edges {
+                    __typename
+                    cursor
+                    node { __typename id title }
+                }
             }
         }
-    }
-    """
+        """
 
     /// linkNode followed by a server-cycle write of the same entity:
     /// the server scalars win because linkNode never touched the entity.
@@ -43,16 +44,18 @@ final class OptimisticAddNodeReplayTests: XCTestCase {
         let client = makeClient()
 
         // Seed canonical via writeQuery.
-        try client.writeQuery(query: connectionQuery, variables: [:], data: .object([
-            "posts": .object([
-                "__typename": .string("PostConnection"),
-                "edges": .array([]),
-                "pageInfo": .object([
-                    "__typename": .string("PageInfo"),
-                    "hasNextPage": .bool(false),
-                ]),
-            ])
-        ]))
+        try client.writeQuery(
+            query: connectionQuery, variables: [:],
+            data: .object([
+                "posts": .object([
+                    "__typename": .string("PostConnection"),
+                    "edges": .array([]),
+                    "pageInfo": .object([
+                        "__typename": .string("PageInfo"),
+                        "hasNextPage": .bool(false),
+                    ]),
+                ])
+            ]))
 
         // Optimistic linkNode — pure structural, leaves the entity untouched.
         let canonicalKey: CacheKey = "@connection.posts({})"
@@ -72,26 +75,28 @@ final class OptimisticAddNodeReplayTests: XCTestCase {
         // `writeQuery` triggers `Canonical.updateConnection → optimistic.replay(...)`,
         // but replay only reapplies the connection op (edge insert) — there
         // was no optimistic entity write to reassert.
-        try client.writeQuery(query: connectionQuery, variables: [:], data: .object([
-            "posts": .object([
-                "__typename": .string("PostConnection"),
-                "pageInfo": .object([
-                    "__typename": .string("PageInfo"),
-                    "hasNextPage": .bool(false),
-                ]),
-                "edges": .array([
-                    .object([
-                        "__typename": .string("PostEdge"),
-                        "cursor": .string("c1"),
-                        "node": .object([
-                            "__typename": .string("Post"),
-                            "id": .string("p1"),
-                            "title": .string("ServerTitle"),
-                        ]),
+        try client.writeQuery(
+            query: connectionQuery, variables: [:],
+            data: .object([
+                "posts": .object([
+                    "__typename": .string("PostConnection"),
+                    "pageInfo": .object([
+                        "__typename": .string("PageInfo"),
+                        "hasNextPage": .bool(false),
                     ]),
-                ]),
-            ])
-        ]))
+                    "edges": .array([
+                        .object([
+                            "__typename": .string("PostEdge"),
+                            "cursor": .string("c1"),
+                            "node": .object([
+                                "__typename": .string("Post"),
+                                "id": .string("p1"),
+                                "title": .string("ServerTitle"),
+                            ]),
+                        ])
+                    ]),
+                ])
+            ]))
 
         // The server-normalized scalar is authoritative. linkNode never
         // wrote an optimistic scalar over `title`, so there's nothing to

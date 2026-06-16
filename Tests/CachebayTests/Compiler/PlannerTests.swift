@@ -38,9 +38,9 @@ final class PlannerTests: XCTestCase {
         // Two named fragments in one document — `fragmentName` is the
         // memoisation discriminator.
         let src = """
-        fragment X on Post { id }
-        fragment Z on Post { id title }
-        """
+            fragment X on Post { id }
+            fragment Z on Post { id title }
+            """
         let pX = try planner.getPlan(.source(src), fragmentName: "X")
         let pZ = try planner.getPlan(.source(src), fragmentName: "Z")
         XCTAssertNotEqual(pX, pZ)

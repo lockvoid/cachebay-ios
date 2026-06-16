@@ -91,8 +91,9 @@ final class ErrorsTests: XCTestCase {
 
     func test_cachebayError_descriptions() {
         XCTAssertEqual(CachebayError.cacheMiss("none").description, "[cache-miss] none")
-        XCTAssertEqual(CachebayError.staleResponse.description,
-                       "[stale] a newer request superseded this one")
+        XCTAssertEqual(
+            CachebayError.staleResponse.description,
+            "[stale] a newer request superseded this one")
         XCTAssertEqual(CachebayError.invalidPlan("bad").description, "[invalid-plan] bad")
         XCTAssertEqual(CachebayError.networkError("oops").description, "[network] oops")
         let g = CachebayError.graphql(messages: ["x", "y"])

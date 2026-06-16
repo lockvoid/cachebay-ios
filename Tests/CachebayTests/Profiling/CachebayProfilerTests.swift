@@ -13,12 +13,13 @@ import XCTest
 final class CachebayProfilerTests: XCTestCase {
     private func makeClient(profiler: RecordingProfiler? = nil) -> CachebayClient {
         let http = MockHTTPTransport()
-        return CachebayClient(options: CachebayOptions(
-            transport: Transport(http: http),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0,
-            profiler: profiler
-        ))
+        return CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: http),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0,
+                profiler: profiler
+            ))
     }
 
     // MARK: - Protocol shape
@@ -54,7 +55,8 @@ final class CachebayProfilerTests: XCTestCase {
         let beforeSecond = profiler.spans[0].endedAt
         span?.end()
         let afterSecond = profiler.spans[0].endedAt
-        XCTAssertEqual(beforeSecond, afterSecond,
+        XCTAssertEqual(
+            beforeSecond, afterSecond,
             "Second end() must not overwrite the first end timestamp")
     }
 
@@ -69,7 +71,8 @@ final class CachebayProfilerTests: XCTestCase {
         let rec = profiler.spans[0]
         XCTAssertEqual(rec.pauseSegments.count, 1)
         XCTAssertGreaterThan(rec.pausedDuration, 0)
-        XCTAssertLessThan(rec.pausedDuration, 0.5,
+        XCTAssertLessThan(
+            rec.pausedDuration, 0.5,
             "Paused duration should be roughly the stall, not the whole span")
     }
 
@@ -80,7 +83,8 @@ final class CachebayProfilerTests: XCTestCase {
         span.excludingHost {
             ran = true
             XCTAssertEqual(profiler.spans[0].pauseSegments.count, 1)
-            XCTAssertEqual(profiler.spans[0].pauseSegments[0].1, .infinity,
+            XCTAssertEqual(
+                profiler.spans[0].pauseSegments[0].1, .infinity,
                 "Pause should be open while inside excludingHost body")
         }
         XCTAssertTrue(ran)
@@ -106,13 +110,16 @@ final class CachebayProfilerTests: XCTestCase {
         let tx = client.modifyOptimistic { b in
             // While the builder runs, the modifyOptimistic span must
             // be in a paused region — the user's closure is host code.
-            XCTAssertTrue(profiler.activeNames.contains("cachebay.modifyOptimistic"),
+            XCTAssertTrue(
+                profiler.activeNames.contains("cachebay.modifyOptimistic"),
                 "Span is open but paused — still active in the sense of begun-not-ended")
             let span = profiler.spans.first { $0.name == "cachebay.modifyOptimistic" }
             XCTAssertNotNil(span)
-            XCTAssertEqual(span?.pauseSegments.count, 1,
+            XCTAssertEqual(
+                span?.pauseSegments.count, 1,
                 "Builder closure must be inside a pause segment (excludingHost)")
-            XCTAssertEqual(span?.pauseSegments.last?.1, .infinity,
+            XCTAssertEqual(
+                span?.pauseSegments.last?.1, .infinity,
                 "Pause segment must be open while body runs")
             builderRan.value = true
             b.patch(.key("Post:p1"), ["title": .string("v")], mode: .merge)
@@ -141,8 +148,9 @@ final class CachebayProfilerTests: XCTestCase {
     func test_writeFragment_and_readFragment_emitSpans() throws {
         let profiler = RecordingProfiler()
         let client = makeClient(profiler: profiler)
-        try client.writeFragment(id: "Post:p1", fragment: "fragment P on Post { id title }",
-                                  data: .object(["__typename": "Post", "id": "p1", "title": "x"]))
+        try client.writeFragment(
+            id: "Post:p1", fragment: "fragment P on Post { id title }",
+            data: .object(["__typename": "Post", "id": "p1", "title": "x"]))
         _ = client.readFragment(id: "Post:p1", fragment: "fragment P on Post { id title }")
 
         XCTAssertTrue(profiler.didEmit("cachebay.writeFragment"))
@@ -152,21 +160,26 @@ final class CachebayProfilerTests: XCTestCase {
     func test_normalize_and_materialize_emitSpans() throws {
         let profiler = RecordingProfiler()
         let client = makeClient(profiler: profiler)
-        try client.writeFragment(id: "Post:p1", fragment: "fragment P on Post { id title }",
-                                  data: .object(["__typename": "Post", "id": "p1", "title": "x"]))
-        XCTAssertTrue(profiler.didEmit("cachebay.documents.normalize"),
+        try client.writeFragment(
+            id: "Post:p1", fragment: "fragment P on Post { id title }",
+            data: .object(["__typename": "Post", "id": "p1", "title": "x"]))
+        XCTAssertTrue(
+            profiler.didEmit("cachebay.documents.normalize"),
             "writeFragment funnels through documents.normalize")
         _ = client.readFragment(id: "Post:p1", fragment: "fragment P on Post { id title }")
-        XCTAssertTrue(profiler.didEmit("cachebay.documents.materialize"),
+        XCTAssertTrue(
+            profiler.didEmit("cachebay.documents.materialize"),
             "readFragment funnels through materialize")
     }
 
     func test_graphFlush_emitsSpan() throws {
         let profiler = RecordingProfiler()
         let client = makeClient(profiler: profiler)
-        try client.writeFragment(id: "Post:p1", fragment: "fragment P on Post { id title }",
-                                  data: .object(["__typename": "Post", "id": "p1", "title": "x"]))
-        XCTAssertTrue(profiler.didEmit("cachebay.graph.flush"),
+        try client.writeFragment(
+            id: "Post:p1", fragment: "fragment P on Post { id title }",
+            data: .object(["__typename": "Post", "id": "p1", "title": "x"]))
+        XCTAssertTrue(
+            profiler.didEmit("cachebay.graph.flush"),
             "writeFragment triggers a graph.flush")
     }
 
@@ -175,24 +188,29 @@ final class CachebayProfilerTests: XCTestCase {
         let client = makeClient(profiler: profiler)
 
         let emissions = CaptureBox<[String]>(value: [])
-        try client.writeFragment(id: "Post:p1", fragment: "fragment P on Post { id title }",
-                                  data: .object(["__typename": "Post", "id": "p1", "title": "seed"]))
+        try client.writeFragment(
+            id: "Post:p1", fragment: "fragment P on Post { id title }",
+            data: .object(["__typename": "Post", "id": "p1", "title": "seed"]))
         let handle = try client.watchFragment(
             id: "Post:p1", fragment: "fragment P on Post { id title }",
-            options: WatchFragmentOptions(immediate: false, onData: { data in
-                emissions.withLock { $0.append(data["title"]?.string ?? "?") }
-                // While this host callback runs, the fanout span MUST
-                // have already ended (pattern B).
-                if let s = profiler.spans(named: "cachebay.watchers.fanout").last {
-                    XCTAssertTrue(s.isEnded,
-                        "Fanout span must be closed before host onData callback runs")
-                }
-            })
+            options: WatchFragmentOptions(
+                immediate: false,
+                onData: { data in
+                    emissions.withLock { $0.append(data["title"]?.string ?? "?") }
+                    // While this host callback runs, the fanout span MUST
+                    // have already ended (pattern B).
+                    if let s = profiler.spans(named: "cachebay.watchers.fanout").last {
+                        XCTAssertTrue(
+                            s.isEnded,
+                            "Fanout span must be closed before host onData callback runs")
+                    }
+                })
         )
 
         profiler.reset()
-        try client.writeFragment(id: "Post:p1", fragment: "fragment P on Post { id title }",
-                                  data: .object(["__typename": "Post", "id": "p1", "title": "v2"]))
+        try client.writeFragment(
+            id: "Post:p1", fragment: "fragment P on Post { id title }",
+            data: .object(["__typename": "Post", "id": "p1", "title": "v2"]))
         handle.unsubscribe()
 
         XCTAssertTrue(profiler.didEmit("cachebay.watchers.fanout"))
@@ -206,16 +224,20 @@ final class CachebayProfilerTests: XCTestCase {
             // Stall the "network" enough that we'd notice if it was
             // inside the parent span instead of excluded.
             Thread.sleep(forTimeInterval: 0.05)
-            return OperationResult(data: .object([
-                "touch": .object(["post": .object([
-                    "__typename": "Post", "id": "p1", "title": "v"
-                ])])
-            ]))
+            return OperationResult(
+                data: .object([
+                    "touch": .object([
+                        "post": .object([
+                            "__typename": "Post", "id": "p1", "title": "v",
+                        ])
+                    ])
+                ]))
         }
-        let client = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: http), cachePolicy: .cacheFirst,
-            suspensionTimeout: 0, profiler: profiler
-        ))
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: http), cachePolicy: .cacheFirst,
+                suspensionTimeout: 0, profiler: profiler
+            ))
 
         _ = try await client.executeMutation(
             query: "mutation { touch { post { id title } } }",
@@ -227,9 +249,11 @@ final class CachebayProfilerTests: XCTestCase {
         XCTAssertTrue(mut[0].isEnded)
         // Network was inside an excludingHost region → at least one
         // pause segment with non-trivial duration (~50 ms stall).
-        XCTAssertGreaterThanOrEqual(mut[0].pauseSegments.count, 1,
+        XCTAssertGreaterThanOrEqual(
+            mut[0].pauseSegments.count, 1,
             "Network round-trip must be in an excludingHost (paused) region")
-        XCTAssertGreaterThan(mut[0].pausedDuration, 0.02,
+        XCTAssertGreaterThan(
+            mut[0].pausedDuration, 0.02,
             "Paused duration should include the 50 ms network stall")
     }
 
@@ -240,14 +264,16 @@ final class CachebayProfilerTests: XCTestCase {
         // the planner's normalized networkQuery (the literal field).
         http.whenQueryContains("post") { _ in
             Thread.sleep(forTimeInterval: 0.05)
-            return OperationResult(data: .object([
-                "post": .object(["__typename": "Post", "id": "p1", "title": "v"])
-            ]))
+            return OperationResult(
+                data: .object([
+                    "post": .object(["__typename": "Post", "id": "p1", "title": "v"])
+                ]))
         }
-        let client = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: http), cachePolicy: .networkOnly,
-            suspensionTimeout: 0, profiler: profiler
-        ))
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: http), cachePolicy: .networkOnly,
+                suspensionTimeout: 0, profiler: profiler
+            ))
 
         _ = try await client.executeQuery(
             query: "query { post(id: \"p1\") { id title } }",
@@ -257,7 +283,8 @@ final class CachebayProfilerTests: XCTestCase {
         let q = profiler.spans(named: "cachebay.executeQuery")
         XCTAssertEqual(q.count, 1)
         XCTAssertTrue(q[0].isEnded)
-        XCTAssertGreaterThan(q[0].pausedDuration, 0.02,
+        XCTAssertGreaterThan(
+            q[0].pausedDuration, 0.02,
             "Network call inside performRequest must pause the parent span")
     }
 
@@ -267,18 +294,21 @@ final class CachebayProfilerTests: XCTestCase {
         let profiler = RecordingProfiler()
         let client = makeClient(profiler: profiler)
 
-        try client.writeFragment(id: "Post:p1", fragment: "fragment P on Post { id title likes }",
-                                  data: .object(["__typename": "Post", "id": "p1", "title": "x", "likes": 0]))
+        try client.writeFragment(
+            id: "Post:p1", fragment: "fragment P on Post { id title likes }",
+            data: .object(["__typename": "Post", "id": "p1", "title": "x", "likes": 0]))
         // Open a pending layer so the next normalize triggers replay.
         let tx = client.modifyOptimistic { b in
             b.patch(.key("Post:p1"), ["likes": .int(99)], mode: .merge)
         }
         profiler.reset()
-        try client.writeFragment(id: "Post:p1", fragment: "fragment P on Post { id title likes }",
-                                  data: .object(["__typename": "Post", "id": "p1", "title": "y", "likes": 0]))
+        try client.writeFragment(
+            id: "Post:p1", fragment: "fragment P on Post { id title likes }",
+            data: .object(["__typename": "Post", "id": "p1", "title": "y", "likes": 0]))
         tx.dispose()
 
-        XCTAssertTrue(profiler.didEmit("cachebay.optimistic.replay.entity"),
+        XCTAssertTrue(
+            profiler.didEmit("cachebay.optimistic.replay.entity"),
             "Server normalize with a pending layer must trigger replayEntityOps span")
         let span = profiler.spans(named: "cachebay.optimistic.replay.entity")[0]
         XCTAssertNotNil(span.attributes["scopeSize"])
@@ -287,9 +317,11 @@ final class CachebayProfilerTests: XCTestCase {
     func test_replayEntityOps_noSpan_whenNoLayersPending() throws {
         let profiler = RecordingProfiler()
         let client = makeClient(profiler: profiler)
-        try client.writeFragment(id: "Post:p1", fragment: "fragment P on Post { id title }",
-                                  data: .object(["__typename": "Post", "id": "p1", "title": "x"]))
-        XCTAssertFalse(profiler.didEmit("cachebay.optimistic.replay.entity"),
+        try client.writeFragment(
+            id: "Post:p1", fragment: "fragment P on Post { id title }",
+            data: .object(["__typename": "Post", "id": "p1", "title": "x"]))
+        XCTAssertFalse(
+            profiler.didEmit("cachebay.optimistic.replay.entity"),
             "Pre-lock fast path must short-circuit before entering the profiler span")
     }
 
@@ -300,22 +332,25 @@ final class CachebayProfilerTests: XCTestCase {
             .appendingPathComponent("cachebay-profiler-\(UUID().uuidString).sqlite").path
         let factory = SQLiteStorage.factory(options: .init(path: path))
         // Seed the database from a first client.
-        let seed = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst, suspensionTimeout: 0, storage: factory
-        ))
-        try seed.writeFragment(id: "Post:p1", fragment: "fragment P on Post { id title }",
-                                data: .object(["__typename": "Post", "id": "p1", "title": "persisted"]))
+        let seed = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst, suspensionTimeout: 0, storage: factory
+            ))
+        try seed.writeFragment(
+            id: "Post:p1", fragment: "fragment P on Post { id title }",
+            data: .object(["__typename": "Post", "id": "p1", "title": "persisted"]))
         try await seed.storage?.flush()
         await seed.shutdown()
 
         let profiler = RecordingProfiler()
-        let client = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst, suspensionTimeout: 0,
-            storage: SQLiteStorage.factory(options: .init(path: path)),
-            profiler: profiler
-        ))
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst, suspensionTimeout: 0,
+                storage: SQLiteStorage.factory(options: .init(path: path)),
+                profiler: profiler
+            ))
         client.warmup()
         await client.shutdown()
 
@@ -324,7 +359,8 @@ final class CachebayProfilerTests: XCTestCase {
         XCTAssertTrue(w[0].isEnded)
         XCTAssertEqual(w[0].attributes["recordCount"], "1")
         // loadSync() is wrapped in excludingHost → at least one pause segment.
-        XCTAssertGreaterThanOrEqual(w[0].pauseSegments.count, 1,
+        XCTAssertGreaterThanOrEqual(
+            w[0].pauseSegments.count, 1,
             "Disk load must be in an excludingHost region")
     }
 }

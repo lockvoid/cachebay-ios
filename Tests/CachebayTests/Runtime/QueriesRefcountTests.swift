@@ -14,11 +14,12 @@ import XCTest
 final class QueriesRefcountTests: XCTestCase {
 
     private func makeClient() -> CachebayClient {
-        CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
     }
 
     private let postQuery = "query Post($id: ID!) { post(id: $id) { id title } }"

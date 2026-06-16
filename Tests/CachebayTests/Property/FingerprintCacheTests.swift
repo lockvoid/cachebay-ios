@@ -21,11 +21,12 @@ final class FingerprintCacheTests: XCTestCase {
     private let runs = 3
 
     private func makeClient() -> CachebayClient {
-        CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
     }
 
     /// Deterministic-ish RNG seeded per run so a failure is reproducible
@@ -69,16 +70,18 @@ final class FingerprintCacheTests: XCTestCase {
         let vars: [String: JSONValue] = ["id": .string("u1")]
 
         // Initial state.
-        try client.writeQuery(query: querySource, variables: vars, data: .object([
-            "user": .object([
-                "__typename": .string("User"),
-                "id": .string("u1"),
-                "name": .string("Alice"),
-                "email": .string("alice@example.com"),
-                "age": .int(30),
-                "active": .bool(true),
-            ])
-        ]))
+        try client.writeQuery(
+            query: querySource, variables: vars,
+            data: .object([
+                "user": .object([
+                    "__typename": .string("User"),
+                    "id": .string("u1"),
+                    "name": .string("Alice"),
+                    "email": .string("alice@example.com"),
+                    "age": .int(30),
+                    "active": .bool(true),
+                ])
+            ]))
 
         let lastEmission = CaptureBox<JSONValue>(value: .undefined)
         let handle = try client.watchQuery(
@@ -116,9 +119,11 @@ final class FingerprintCacheTests: XCTestCase {
             default: continue
             }
 
-            try client.writeQuery(query: querySource, variables: vars, data: .object([
-                "user": .object(user),
-            ]))
+            try client.writeQuery(
+                query: querySource, variables: vars,
+                data: .object([
+                    "user": .object(user)
+                ]))
 
             try assertCachedEqualsFresh(client: client, plan: plan, variables: vars, cached: lastEmission.value, seed: seed, opIndex: op)
         }
@@ -142,30 +147,32 @@ final class FingerprintCacheTests: XCTestCase {
         var rng = Rng(state: seed)
 
         let querySource = """
-        query User($id: ID!) {
-          user(id: $id) {
-            id
-            name
-            profile { id bio avatar }
-          }
-        }
-        """
+            query User($id: ID!) {
+              user(id: $id) {
+                id
+                name
+                profile { id bio avatar }
+              }
+            }
+            """
         let plan = try client.planner.getPlan(.source(querySource))
         let vars: [String: JSONValue] = ["id": .string("u1")]
 
-        try client.writeQuery(query: querySource, variables: vars, data: .object([
-            "user": .object([
-                "__typename": .string("User"),
-                "id": .string("u1"),
-                "name": .string("Alice"),
-                "profile": .object([
-                    "__typename": .string("Profile"),
-                    "id": .string("p1"),
-                    "bio": .string("hi"),
-                    "avatar": .string("a.png"),
-                ]),
-            ])
-        ]))
+        try client.writeQuery(
+            query: querySource, variables: vars,
+            data: .object([
+                "user": .object([
+                    "__typename": .string("User"),
+                    "id": .string("u1"),
+                    "name": .string("Alice"),
+                    "profile": .object([
+                        "__typename": .string("Profile"),
+                        "id": .string("p1"),
+                        "bio": .string("hi"),
+                        "avatar": .string("a.png"),
+                    ]),
+                ])
+            ]))
 
         let lastEmission = CaptureBox<JSONValue>(value: .undefined)
         let handle = try client.watchQuery(
@@ -203,9 +210,11 @@ final class FingerprintCacheTests: XCTestCase {
                     ]),
                 ]
                 user["name"] = .string("name-\(rng.next())")
-                try client.writeQuery(query: querySource, variables: vars, data: .object([
-                    "user": .object(user),
-                ]))
+                try client.writeQuery(
+                    query: querySource, variables: vars,
+                    data: .object([
+                        "user": .object(user)
+                    ]))
             } else {
                 // Mutate Profile via writeFragment — bypasses the user
                 // query's normalisation but writes to the same canonical
@@ -255,4 +264,3 @@ final class FingerprintCacheTests: XCTestCase {
         )
     }
 }
-

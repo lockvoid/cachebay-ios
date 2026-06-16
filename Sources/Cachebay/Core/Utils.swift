@@ -172,9 +172,10 @@ public func recycleSnapshots(_ prev: JSONValue, _ next: JSONValue, _ prevFp: JSO
         out.reserveCapacity(na.count)
         for i in 0..<na.count {
             if let arrFp = nextArrFp, i < arrFp.count,
-               let nv = arrFp[i][CachebayConstants.fingerprintKey]?.int,
-               let matched = prevByFp[nv] {
-                out.append(matched)   // recycle the unchanged prev instance
+                let nv = arrFp[i][CachebayConstants.fingerprintKey]?.int,
+                let matched = prevByFp[nv]
+            {
+                out.append(matched)  // recycle the unchanged prev instance
             } else {
                 out.append(na[i])
             }

@@ -82,7 +82,8 @@ extension JSONValue {
                     return .ref(String(cString: p))
                 }
                 if let rs = yyjson_obj_get(val, "__refs"), yyjson_is_arr(rs),
-                   let refs = stringArray(rs) {
+                    let refs = stringArray(rs)
+                {
                     return .refList(refs)
                 }
                 // Single-key object that isn't a sentinel: fall through to a

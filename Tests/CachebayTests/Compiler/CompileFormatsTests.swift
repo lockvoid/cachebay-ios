@@ -16,13 +16,13 @@ final class CompileFormatsTests: XCTestCase {
 
     func test_accepts_a_raw_graphql_string() throws {
         let src = """
-        query User($id: ID!) {
-          user(id: $id) {
-            id
-            email
-          }
-        }
-        """
+            query User($id: ID!) {
+              user(id: $id) {
+                id
+                email
+              }
+            }
+            """
         let plan = try Compiler.compilePlan(source: src)
         XCTAssertEqual(plan.operation, .query)
         XCTAssertEqual(plan.rootTypename, "Query")
@@ -36,13 +36,13 @@ final class CompileFormatsTests: XCTestCase {
 
     func test_accepts_a_pre_parsed_document() throws {
         let src = """
-        query User($id: ID!) {
-          user(id: $id) {
-            id
-            email
-          }
-        }
-        """
+            query User($id: ID!) {
+              user(id: $id) {
+                id
+                email
+              }
+            }
+            """
         // Equivalent to `gql` in cachebay-web — feed the parsed AST directly
         // into the compiler.
         let parsed = try CachebayGraphQL.Parser.parse(src)
@@ -60,13 +60,13 @@ final class CompileFormatsTests: XCTestCase {
     func test_accepts_a_precompiled_plan_passthrough_via_planner() throws {
         let planner = Planner()
         let src = """
-        query User($id: ID!) {
-          user(id: $id) {
-            id
-            email
-          }
-        }
-        """
+            query User($id: ID!) {
+              user(id: $id) {
+                id
+                email
+              }
+            }
+            """
         let plan1 = try Compiler.compilePlan(source: src)
         let plan2 = try planner.getPlan(.plan(plan1))
 

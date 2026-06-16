@@ -29,12 +29,14 @@ final class TypeReducerTests: XCTestCase {
     func test_no_reducer_registered_behaves_identically_to_default() throws {
         let (graph, documents) = makeStack(typeReducers: [:])
         let plan = try planFor("query Q { chat { id state updatedAt } }")
-        documents.normalize(plan: plan, variables: [:], data: .object([
-            "chat": .object([
-                "__typename": "Chat", "id": "1",
-                "state": "idle", "updatedAt": "T2"
-            ])
-        ]))
+        documents.normalize(
+            plan: plan, variables: [:],
+            data: .object([
+                "chat": .object([
+                    "__typename": "Chat", "id": "1",
+                    "state": "idle", "updatedAt": "T2",
+                ])
+            ]))
         let rec = graph.getRecord("Chat:1") ?? [:]
         XCTAssertEqual(rec["state"]?.string, "idle")
         XCTAssertEqual(rec["updatedAt"]?.string, "T2")
@@ -50,12 +52,14 @@ final class TypeReducerTests: XCTestCase {
         }
         let (_, documents) = makeStack(typeReducers: ["Chat": reducer])
         let plan = try planFor("query Q { chat { id state updatedAt } }")
-        documents.normalize(plan: plan, variables: [:], data: .object([
-            "chat": .object([
-                "__typename": "Chat", "id": "1",
-                "state": "idle", "updatedAt": "T1"
-            ])
-        ]))
+        documents.normalize(
+            plan: plan, variables: [:],
+            data: .object([
+                "chat": .object([
+                    "__typename": "Chat", "id": "1",
+                    "state": "idle", "updatedAt": "T1",
+                ])
+            ]))
         let calls = box.snapshot()
         XCTAssertEqual(calls.count, 1)
         XCTAssertEqual(calls[0].id, "1")
@@ -80,23 +84,28 @@ final class TypeReducerTests: XCTestCase {
         let plan = try planFor("query Q { chat { id state updatedAt } }")
 
         // T=2 lands first (newer payload).
-        documents.normalize(plan: plan, variables: [:], data: .object([
-            "chat": .object([
-                "__typename": "Chat", "id": "1",
-                "state": "idle", "updatedAt": "T2"
-            ])
-        ]))
+        documents.normalize(
+            plan: plan, variables: [:],
+            data: .object([
+                "chat": .object([
+                    "__typename": "Chat", "id": "1",
+                    "state": "idle", "updatedAt": "T2",
+                ])
+            ]))
         XCTAssertEqual(graph.getRecord("Chat:1")?["state"]?.string, "idle")
 
         // T=1 arrives out-of-order — reducer must reject.
-        documents.normalize(plan: plan, variables: [:], data: .object([
-            "chat": .object([
-                "__typename": "Chat", "id": "1",
-                "state": "toolCalling", "updatedAt": "T1"
-            ])
-        ]))
-        XCTAssertEqual(graph.getRecord("Chat:1")?["state"]?.string, "idle",
-                       "stale write should not overwrite newer state")
+        documents.normalize(
+            plan: plan, variables: [:],
+            data: .object([
+                "chat": .object([
+                    "__typename": "Chat", "id": "1",
+                    "state": "toolCalling", "updatedAt": "T1",
+                ])
+            ]))
+        XCTAssertEqual(
+            graph.getRecord("Chat:1")?["state"]?.string, "idle",
+            "stale write should not overwrite newer state")
         XCTAssertEqual(graph.getRecord("Chat:1")?["updatedAt"]?.string, "T2")
     }
 
@@ -115,22 +124,28 @@ final class TypeReducerTests: XCTestCase {
         let (graph, documents) = makeStack(typeReducers: ["Chat": reducer])
         let plan = try planFor("query Q { chat { id state updatedAt } }")
 
-        documents.normalize(plan: plan, variables: [:], data: .object([
-            "chat": .object([
-                "__typename": "Chat", "id": "1",
-                "state": "idle", "updatedAt": "T1"
-            ])
-        ]))
-        documents.normalize(plan: plan, variables: [:], data: .object([
-            "chat": .object([
-                "__typename": "Chat", "id": "1",
-                "state": "toolCalling", "updatedAt": "T2"
-            ])
-        ]))
-        XCTAssertEqual(graph.getRecord("Chat:1")?["state"]?.string, "idle",
-                       "state field protected by custom reducer")
-        XCTAssertEqual(graph.getRecord("Chat:1")?["updatedAt"]?.string, "T2",
-                       "updatedAt field allowed through")
+        documents.normalize(
+            plan: plan, variables: [:],
+            data: .object([
+                "chat": .object([
+                    "__typename": "Chat", "id": "1",
+                    "state": "idle", "updatedAt": "T1",
+                ])
+            ]))
+        documents.normalize(
+            plan: plan, variables: [:],
+            data: .object([
+                "chat": .object([
+                    "__typename": "Chat", "id": "1",
+                    "state": "toolCalling", "updatedAt": "T2",
+                ])
+            ]))
+        XCTAssertEqual(
+            graph.getRecord("Chat:1")?["state"]?.string, "idle",
+            "state field protected by custom reducer")
+        XCTAssertEqual(
+            graph.getRecord("Chat:1")?["updatedAt"]?.string, "T2",
+            "updatedAt field allowed through")
     }
 
     // MARK: - Per-type opt-in
@@ -139,27 +154,34 @@ final class TypeReducerTests: XCTestCase {
         // Chat reducer rejects everything; User has no reducer.
         let reducer: EntityReducer = { ctx in ctx.prev ?? ctx.next }
         let (graph, documents) = makeStack(typeReducers: ["Chat": reducer])
-        let plan = try planFor("""
-            query Q {
-                chat { id state }
-                user { id name }
-            }
-        """)
-        documents.normalize(plan: plan, variables: [:], data: .object([
-            "chat": .object(["__typename": "Chat", "id": "1", "state": "first"]),
-            "user": .object(["__typename": "User", "id": "u1", "name": "alice"])
-        ]))
+        let plan = try planFor(
+            """
+                query Q {
+                    chat { id state }
+                    user { id name }
+                }
+            """)
+        documents.normalize(
+            plan: plan, variables: [:],
+            data: .object([
+                "chat": .object(["__typename": "Chat", "id": "1", "state": "first"]),
+                "user": .object(["__typename": "User", "id": "u1", "name": "alice"]),
+            ]))
         XCTAssertEqual(graph.getRecord("Chat:1")?["state"]?.string, "first")
         XCTAssertEqual(graph.getRecord("User:u1")?["name"]?.string, "alice")
 
-        documents.normalize(plan: plan, variables: [:], data: .object([
-            "chat": .object(["__typename": "Chat", "id": "1", "state": "second"]),
-            "user": .object(["__typename": "User", "id": "u1", "name": "bob"])
-        ]))
-        XCTAssertEqual(graph.getRecord("Chat:1")?["state"]?.string, "first",
-                       "Chat reducer protected the record")
-        XCTAssertEqual(graph.getRecord("User:u1")?["name"]?.string, "bob",
-                       "User write proceeded normally (no reducer registered)")
+        documents.normalize(
+            plan: plan, variables: [:],
+            data: .object([
+                "chat": .object(["__typename": "Chat", "id": "1", "state": "second"]),
+                "user": .object(["__typename": "User", "id": "u1", "name": "bob"]),
+            ]))
+        XCTAssertEqual(
+            graph.getRecord("Chat:1")?["state"]?.string, "first",
+            "Chat reducer protected the record")
+        XCTAssertEqual(
+            graph.getRecord("User:u1")?["name"]?.string, "bob",
+            "User write proceeded normally (no reducer registered)")
     }
 
     // MARK: - Reducer sees the merged candidate, not the raw partial patch
@@ -178,27 +200,33 @@ final class TypeReducerTests: XCTestCase {
         let planFull = try planFor("query Q { chat { id state updatedAt activeRole } }")
         let planPartial = try planFor("query Q { chat { id state } }")
 
-        documents.normalize(plan: planFull, variables: [:], data: .object([
-            "chat": .object([
-                "__typename": "Chat", "id": "1",
-                "state": "idle", "updatedAt": "T1", "activeRole": "user"
-            ])
-        ]))
-        documents.normalize(plan: planPartial, variables: [:], data: .object([
-            "chat": .object([
-                "__typename": "Chat", "id": "1",
-                "state": "thinking"
-            ])
-        ]))
+        documents.normalize(
+            plan: planFull, variables: [:],
+            data: .object([
+                "chat": .object([
+                    "__typename": "Chat", "id": "1",
+                    "state": "idle", "updatedAt": "T1", "activeRole": "user",
+                ])
+            ]))
+        documents.normalize(
+            plan: planPartial, variables: [:],
+            data: .object([
+                "chat": .object([
+                    "__typename": "Chat", "id": "1",
+                    "state": "thinking",
+                ])
+            ]))
         let calls = captured.snapshot()
         XCTAssertEqual(calls.count, 2)
         // Second call: prev has full record, next has merged candidate.
         XCTAssertEqual(calls[1].prev?["activeRole"]?.string, "user")
         XCTAssertEqual(calls[1].next["state"]?.string, "thinking")
-        XCTAssertEqual(calls[1].next["activeRole"]?.string, "user",
-                       "next must include fields from prev that aren't in the partial payload")
-        XCTAssertEqual(calls[1].next["updatedAt"]?.string, "T1",
-                       "next must include fields from prev that aren't in the partial payload")
+        XCTAssertEqual(
+            calls[1].next["activeRole"]?.string, "user",
+            "next must include fields from prev that aren't in the partial payload")
+        XCTAssertEqual(
+            calls[1].next["updatedAt"]?.string, "T1",
+            "next must include fields from prev that aren't in the partial payload")
     }
 
     // MARK: - Client-level: reducer-reject suppresses watcher emit
@@ -208,17 +236,20 @@ final class TypeReducerTests: XCTestCase {
             // Reject any second write — always keep prev once it exists.
             ctx.prev ?? ctx.next
         }
-        let client = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0,
-            typeReducers: ["Chat": reducer]
-        ))
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0,
+                typeReducers: ["Chat": reducer]
+            ))
 
         let q = "query GetChat($id: ID!) { chat(id: $id) { id state } }"
-        try client.writeQuery(query: q, variables: ["id": "1"], data: .object([
-            "chat": .object(["__typename": "Chat", "id": "1", "state": "idle"])
-        ]))
+        try client.writeQuery(
+            query: q, variables: ["id": "1"],
+            data: .object([
+                "chat": .object(["__typename": "Chat", "id": "1", "state": "idle"])
+            ]))
 
         let received = CaptureBox<[JSONValue]>(value: [])
         let handle = try client.watchQuery(
@@ -234,12 +265,15 @@ final class TypeReducerTests: XCTestCase {
 
         // Second wire-shaped write: reducer rejects → record unchanged →
         // watcher must NOT emit.
-        try client.writeQuery(query: q, variables: ["id": "1"], data: .object([
-            "chat": .object(["__typename": "Chat", "id": "1", "state": "toolCalling"])
-        ]))
+        try client.writeQuery(
+            query: q, variables: ["id": "1"],
+            data: .object([
+                "chat": .object(["__typename": "Chat", "id": "1", "state": "toolCalling"])
+            ]))
         try await Task.sleep(nanoseconds: 30_000_000)
-        XCTAssertEqual(received.value.count, 1,
-                       "rejected write must not produce a watcher emit")
+        XCTAssertEqual(
+            received.value.count, 1,
+            "rejected write must not produce a watcher emit")
         XCTAssertEqual(client.graph.getRecord("Chat:1")?["state"]?.string, "idle")
         handle.unsubscribe()
     }
@@ -250,32 +284,38 @@ final class TypeReducerTests: XCTestCase {
         // Reducer rejects every wire write. Optimistic patches must
         // still land because they don't go through Documents.normalize.
         let reducer: EntityReducer = { ctx in ctx.prev ?? ctx.next }
-        let client = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0,
-            typeReducers: ["Chat": reducer]
-        ))
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0,
+                typeReducers: ["Chat": reducer]
+            ))
 
         // Seed an initial state via wire write — first one passes (prev=nil).
         let q = "query Q($id: ID!) { chat(id: $id) { id state } }"
-        try client.writeQuery(query: q, variables: ["id": "1"], data: .object([
-            "chat": .object(["__typename": "Chat", "id": "1", "state": "idle"])
-        ]))
+        try client.writeQuery(
+            query: q, variables: ["id": "1"],
+            data: .object([
+                "chat": .object(["__typename": "Chat", "id": "1", "state": "idle"])
+            ]))
         XCTAssertEqual(client.graph.getRecord("Chat:1")?["state"]?.string, "idle")
 
         // Wire write rejected by reducer.
-        try client.writeQuery(query: q, variables: ["id": "1"], data: .object([
-            "chat": .object(["__typename": "Chat", "id": "1", "state": "rejected-by-reducer"])
-        ]))
+        try client.writeQuery(
+            query: q, variables: ["id": "1"],
+            data: .object([
+                "chat": .object(["__typename": "Chat", "id": "1", "state": "rejected-by-reducer"])
+            ]))
         XCTAssertEqual(client.graph.getRecord("Chat:1")?["state"]?.string, "idle")
 
         // Optimistic patch must bypass and land.
         client.modifyOptimistic { b in
             b.patch(.key("Chat:1"), ["state": .string("optimistic-state")], mode: .merge)
         }.dispose()
-        XCTAssertEqual(client.graph.getRecord("Chat:1")?["state"]?.string, "optimistic-state",
-                       "optimistic writes must bypass the type reducer")
+        XCTAssertEqual(
+            client.graph.getRecord("Chat:1")?["state"]?.string, "optimistic-state",
+            "optimistic writes must bypass the type reducer")
     }
 
     // MARK: - Fragment writes hit the reducer too

@@ -42,24 +42,27 @@ public enum Compiler {
         for f in root { rootMap[f.responseKey] = f }
 
         // Rebuild doc with __typename injected into fragments too, then strip @connection, then print.
-        let rebuilt = Document(definitions: document.definitions.map { def -> Definition in
-            switch def {
-            case .operation(let o) where o == op:
-                return .operation(OperationDefinition(
-                    operation: o.operation, name: o.name,
-                    variableDefinitions: o.variableDefinitions, directives: o.directives,
-                    selectionSet: selectionWithTypename, location: o.location
-                ))
-            case .fragment(let fr):
-                return .fragment(FragmentDefinition(
-                    name: fr.name, typeCondition: fr.typeCondition,
-                    directives: fr.directives,
-                    selectionSet: Typename.injectRecursive(fr.selectionSet),
-                    location: fr.location
-                ))
-            default: return def
-            }
-        })
+        let rebuilt = Document(
+            definitions: document.definitions.map { def -> Definition in
+                switch def {
+                case .operation(let o) where o == op:
+                    return .operation(
+                        OperationDefinition(
+                            operation: o.operation, name: o.name,
+                            variableDefinitions: o.variableDefinitions, directives: o.directives,
+                            selectionSet: selectionWithTypename, location: o.location
+                        ))
+                case .fragment(let fr):
+                    return .fragment(
+                        FragmentDefinition(
+                            name: fr.name, typeCondition: fr.typeCondition,
+                            directives: fr.directives,
+                            selectionSet: Typename.injectRecursive(fr.selectionSet),
+                            location: fr.location
+                        ))
+                default: return def
+                }
+            })
 
         let networkQuery = buildNetworkQuery(from: rebuilt)
 
@@ -107,20 +110,22 @@ public enum Compiler {
         var rootMap: [String: PlanField] = [:]
         for f in root { rootMap[f.responseKey] = f }
 
-        let rebuilt = Document(definitions: document.definitions.map { def -> Definition in
-            if case .fragment = def {
-                // re-run injection over each fragment for consistency
-                if case .fragment(let fr) = def {
-                    return .fragment(FragmentDefinition(
-                        name: fr.name, typeCondition: fr.typeCondition,
-                        directives: fr.directives,
-                        selectionSet: Typename.injectRecursive(fr.selectionSet),
-                        location: fr.location
-                    ))
+        let rebuilt = Document(
+            definitions: document.definitions.map { def -> Definition in
+                if case .fragment = def {
+                    // re-run injection over each fragment for consistency
+                    if case .fragment(let fr) = def {
+                        return .fragment(
+                            FragmentDefinition(
+                                name: fr.name, typeCondition: fr.typeCondition,
+                                directives: fr.directives,
+                                selectionSet: Typename.injectRecursive(fr.selectionSet),
+                                location: fr.location
+                            ))
+                    }
                 }
-            }
-            return def
-        })
+                return def
+            })
         let networkQuery = buildNetworkQuery(from: rebuilt)
 
         let (strictMask, canonicalMask, windowArgs) = collectMasks(
@@ -241,18 +246,20 @@ enum Typename {
         return selections.map { sel -> Selection in
             switch sel {
             case .field(let f) where !f.selectionSet.isEmpty:
-                return .field(Field(
-                    alias: f.alias, name: f.name, arguments: f.arguments,
-                    directives: f.directives,
-                    selectionSet: injectRecursive(f.selectionSet),
-                    location: f.location
-                ))
+                return .field(
+                    Field(
+                        alias: f.alias, name: f.name, arguments: f.arguments,
+                        directives: f.directives,
+                        selectionSet: injectRecursive(f.selectionSet),
+                        location: f.location
+                    ))
             case .inlineFragment(let ifr):
-                return .inlineFragment(InlineFragment(
-                    typeCondition: ifr.typeCondition, directives: ifr.directives,
-                    selectionSet: injectRecursive(ifr.selectionSet),
-                    location: ifr.location
-                ))
+                return .inlineFragment(
+                    InlineFragment(
+                        typeCondition: ifr.typeCondition, directives: ifr.directives,
+                        selectionSet: injectRecursive(ifr.selectionSet),
+                        location: ifr.location
+                    ))
             default: return sel
             }
         }
@@ -273,19 +280,23 @@ enum Typename {
                 if f.selectionSet.isEmpty {
                     out.append(.field(f))
                 } else {
-                    out.append(.field(Field(
-                        alias: f.alias, name: f.name, arguments: f.arguments,
-                        directives: f.directives,
-                        selectionSet: injectRecursive(f.selectionSet),
-                        location: f.location
-                    )))
+                    out.append(
+                        .field(
+                            Field(
+                                alias: f.alias, name: f.name, arguments: f.arguments,
+                                directives: f.directives,
+                                selectionSet: injectRecursive(f.selectionSet),
+                                location: f.location
+                            )))
                 }
             case .inlineFragment(let ifr):
-                out.append(.inlineFragment(InlineFragment(
-                    typeCondition: ifr.typeCondition, directives: ifr.directives,
-                    selectionSet: injectRecursive(ifr.selectionSet),
-                    location: ifr.location
-                )))
+                out.append(
+                    .inlineFragment(
+                        InlineFragment(
+                            typeCondition: ifr.typeCondition, directives: ifr.directives,
+                            selectionSet: injectRecursive(ifr.selectionSet),
+                            location: ifr.location
+                        )))
             default: out.append(sel)
             }
         }
@@ -303,10 +314,11 @@ func buildNetworkQuery(from document: Document) -> String {
             if f.directives.isEmpty { return .keep }
             let filtered = f.directives.filter { $0.name != CachebayConstants.connectionDirective }
             if filtered.count == f.directives.count { return .keep }
-            return .replace(Field(
-                alias: f.alias, name: f.name, arguments: f.arguments,
-                directives: filtered, selectionSet: f.selectionSet, location: f.location
-            ))
+            return .replace(
+                Field(
+                    alias: f.alias, name: f.name, arguments: f.arguments,
+                    directives: filtered, selectionSet: f.selectionSet, location: f.location
+                ))
         }
     )
     let cleaned = stripper.visit(document)

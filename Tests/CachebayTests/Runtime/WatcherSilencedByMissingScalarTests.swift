@@ -24,11 +24,12 @@ import XCTest
 final class WatcherSilencedByMissingScalarTests: XCTestCase {
 
     private func makeClient() -> CachebayClient {
-        CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
     }
 
     /// Runs the test body on a background queue with a hard deadline.
@@ -56,16 +57,16 @@ final class WatcherSilencedByMissingScalarTests: XCTestCase {
     }
 
     private let connectionQuery = """
-    query Posts($first: Int) {
-        posts(first: $first) @connection(mode: "infinite") {
-            pageInfo { endCursor hasNextPage }
-            edges {
-                cursor
-                node { id title }
+        query Posts($first: Int) {
+            posts(first: $first) @connection(mode: "infinite") {
+                pageInfo { endCursor hasNextPage }
+                edges {
+                    cursor
+                    node { id title }
+                }
             }
         }
-    }
-    """
+        """
 
     /// Seed the canonical via a normal write so all edges have proper
     /// `cursor` scalars — mirrors the steady state of the cache after a
@@ -108,77 +109,77 @@ final class WatcherSilencedByMissingScalarTests: XCTestCase {
     }
 
     func test_watcher_keeps_firing_after_addNode_without_cursor() {
-      runWithTimeout {
-        let client = self.makeClient()
-        try self.seedTwoCleanEdges(client)
+        runWithTimeout {
+            let client = self.makeClient()
+            try self.seedTwoCleanEdges(client)
 
-        let received = CaptureBox<[JSONValue]>(value: [])
-        let handle = try client.watchQuery(
-            query: self.connectionQuery,
-            options: WatchQueryOptions(
-                variables: ["first": .int(10)],
-                immediate: true,
-                onData: { received.append($0) }
+            let received = CaptureBox<[JSONValue]>(value: [])
+            let handle = try client.watchQuery(
+                query: self.connectionQuery,
+                options: WatchQueryOptions(
+                    variables: ["first": .int(10)],
+                    immediate: true,
+                    onData: { received.append($0) }
+                )
             )
-        )
 
-        // Initial materialize fires once with both clean edges.
-        XCTAssertEqual(received.value.count, 1, "initial materialize should fire on watcher creation")
+            // Initial materialize fires once with both clean edges.
+            XCTAssertEqual(received.value.count, 1, "initial materialize should fire on watcher creation")
 
-        // Now optimistically prepend a third post WITHOUT supplying
-        // `cursor` in `edge:` — exactly what the user's
-        // `b.connection(key:).linkNode(node: created, ...)` does in
-        // production. The synthetic edge gets `__typename` + `node` ref
-        // and that's it; no `cursor` scalar lands on the edge record.
-        // Entity scalars come from a separate writeFragment seed since
-        // linkNode is purely structural.
-        try client.writeFragment(
-            id: "Post:p3",
-            fragment: "fragment P on Post { id title }",
-            data: .object([
-                CachebayConstants.typenameField: .string("Post"),
-                "id": .string("p3"),
-                "title": .string("Third"),
-            ])
-        )
-        let canonicalKey: CacheKey = "@connection.posts({})"
-        client.modifyOptimistic { b in
-            b.connection(key: canonicalKey).linkNode(
-                .key("Post:p3"),
-                options: LinkNodeOptions(position: .start)
+            // Now optimistically prepend a third post WITHOUT supplying
+            // `cursor` in `edge:` — exactly what the user's
+            // `b.connection(key:).linkNode(node: created, ...)` does in
+            // production. The synthetic edge gets `__typename` + `node` ref
+            // and that's it; no `cursor` scalar lands on the edge record.
+            // Entity scalars come from a separate writeFragment seed since
+            // linkNode is purely structural.
+            try client.writeFragment(
+                id: "Post:p3",
+                fragment: "fragment P on Post { id title }",
+                data: .object([
+                    CachebayConstants.typenameField: .string("Post"),
+                    "id": .string("p3"),
+                    "title": .string("Third"),
+                ])
             )
-        }.dispose()
+            let canonicalKey: CacheKey = "@connection.posts({})"
+            client.modifyOptimistic { b in
+                b.connection(key: canonicalKey).linkNode(
+                    .key("Post:p3"),
+                    options: LinkNodeOptions(position: .start)
+                )
+            }.dispose()
 
-        // Bug: with `canonicalOK = false on scalar miss`, the materialize
-        // returns `source = .none` and the watcher never re-fires. The
-        // expected behaviour matches cachebay-web: missing scalar is a
-        // soft miss, materialize returns the data with `cursor =
-        // undefined` on the optimistic edge, watcher fires.
-        XCTAssertEqual(received.value.count, 2, "watcher must fire after optimistic linkNode even when the synthetic edge lacks a `cursor` scalar")
+            // Bug: with `canonicalOK = false on scalar miss`, the materialize
+            // returns `source = .none` and the watcher never re-fires. The
+            // expected behaviour matches cachebay-web: missing scalar is a
+            // soft miss, materialize returns the data with `cursor =
+            // undefined` on the optimistic edge, watcher fires.
+            XCTAssertEqual(received.value.count, 2, "watcher must fire after optimistic linkNode even when the synthetic edge lacks a `cursor` scalar")
 
-        // Sanity-check the shape of the second emission: 3 edges, the
-        // new node at the start, undefined cursor on the optimistic edge
-        // is acceptable.
-        guard let last = received.value.last,
-              case .object(let root) = last,
-              case .object(let posts) = root["posts"] ?? .undefined,
-              case .array(let edges) = posts["edges"] ?? .undefined
-        else {
-            XCTFail("watcher data shape unexpected: \(received.value.last ?? .undefined)")
-            return
+            // Sanity-check the shape of the second emission: 3 edges, the
+            // new node at the start, undefined cursor on the optimistic edge
+            // is acceptable.
+            guard let last = received.value.last,
+                case .object(let root) = last,
+                case .object(let posts) = root["posts"] ?? .undefined,
+                case .array(let edges) = posts["edges"] ?? .undefined
+            else {
+                XCTFail("watcher data shape unexpected: \(received.value.last ?? .undefined)")
+                return
+            }
+            XCTAssertEqual(edges.count, 3, "post-linkNode watcher payload should contain all 3 edges")
+            // Guard the per-index reads against an early-bail materialize —
+            // a `Fatal error: Index out of range` here would crash the
+            // background queue and force the deadline-exceeded fail message
+            // to swallow the actual root cause.
+            guard edges.count == 3 else { return }
+            XCTAssertEqual(edges[0]["node"]?["id"]?.string, "p3", "the optimistic edge should be at the start")
+            XCTAssertEqual(edges[1]["node"]?["id"]?.string, "p1")
+            XCTAssertEqual(edges[2]["node"]?["id"]?.string, "p2")
+
+            handle.unsubscribe()
         }
-        XCTAssertEqual(edges.count, 3, "post-linkNode watcher payload should contain all 3 edges")
-        // Guard the per-index reads against an early-bail materialize —
-        // a `Fatal error: Index out of range` here would crash the
-        // background queue and force the deadline-exceeded fail message
-        // to swallow the actual root cause.
-        guard edges.count == 3 else { return }
-        XCTAssertEqual(edges[0]["node"]?["id"]?.string, "p3", "the optimistic edge should be at the start")
-        XCTAssertEqual(edges[1]["node"]?["id"]?.string, "p1")
-        XCTAssertEqual(edges[2]["node"]?["id"]?.string, "p2")
-
-        handle.unsubscribe()
-      }
     }
 
     /// Companion test: a brand-new watcher created on a cache that
@@ -187,41 +188,41 @@ final class WatcherSilencedByMissingScalarTests: XCTestCase {
     /// list flow (close editor → projects view re-mounts → watcher
     /// re-creates) renders empty until the next network refetch.
     func test_initialMaterialize_succeedsWhenCanonicalHasOptimisticEdgeWithoutCursor() {
-      runWithTimeout {
-        let client = self.makeClient()
-        try self.seedTwoCleanEdges(client)
+        runWithTimeout {
+            let client = self.makeClient()
+            try self.seedTwoCleanEdges(client)
 
-        // Plant the optimistic-added edge before any watcher exists, so
-        // the watcher's first read sees the mixed-shape canonical.
-        try client.writeFragment(
-            id: "Post:p3",
-            fragment: "fragment P on Post { id title }",
-            data: .object([
-                CachebayConstants.typenameField: .string("Post"),
-                "id": .string("p3"),
-                "title": .string("Third"),
-            ])
-        )
-        let canonicalKey: CacheKey = "@connection.posts({})"
-        client.modifyOptimistic { b in
-            b.connection(key: canonicalKey).linkNode(
-                .key("Post:p3"),
-                options: LinkNodeOptions(position: .start)
+            // Plant the optimistic-added edge before any watcher exists, so
+            // the watcher's first read sees the mixed-shape canonical.
+            try client.writeFragment(
+                id: "Post:p3",
+                fragment: "fragment P on Post { id title }",
+                data: .object([
+                    CachebayConstants.typenameField: .string("Post"),
+                    "id": .string("p3"),
+                    "title": .string("Third"),
+                ])
             )
-        }.dispose()
+            let canonicalKey: CacheKey = "@connection.posts({})"
+            client.modifyOptimistic { b in
+                b.connection(key: canonicalKey).linkNode(
+                    .key("Post:p3"),
+                    options: LinkNodeOptions(position: .start)
+                )
+            }.dispose()
 
-        let received = CaptureBox<[JSONValue]>(value: [])
-        _ = try client.watchQuery(
-            query: self.connectionQuery,
-            options: WatchQueryOptions(
-                variables: ["first": .int(10)],
-                immediate: true,
-                onData: { received.append($0) }
+            let received = CaptureBox<[JSONValue]>(value: [])
+            _ = try client.watchQuery(
+                query: self.connectionQuery,
+                options: WatchQueryOptions(
+                    variables: ["first": .int(10)],
+                    immediate: true,
+                    onData: { received.append($0) }
+                )
             )
-        )
 
-        XCTAssertEqual(received.value.count, 1, "initial materialize must succeed even when an existing edge lacks `cursor`")
-      }
+            XCTAssertEqual(received.value.count, 1, "initial materialize must succeed even when an existing edge lacks `cursor`")
+        }
     }
 
     /// Replication of a follow-up bug observed in ferment-cuts-ios on
@@ -241,96 +242,96 @@ final class WatcherSilencedByMissingScalarTests: XCTestCase {
     /// (prefix + suffix). In leader mode no existing is kept so no
     /// dedup runs.
     func test_leaderMerge_doesNotDropIncomingThatSharesNodeWithStaleExisting() {
-      runWithTimeout {
-        let client = self.makeClient()
+        runWithTimeout {
+            let client = self.makeClient()
 
-        // Plant stale optimistic edges (no `cursor`) for the same nodes
-        // the network will later return. linkNode is purely structural,
-        // so seed the entities via writeFragment first.
-        try client.writeFragment(
-            id: "Post:p1",
-            fragment: "fragment P on Post { id title }",
-            data: .object([
-                CachebayConstants.typenameField: .string("Post"),
-                "id": .string("p1"),
-                "title": .string("Stale-1"),
-            ])
-        )
-        try client.writeFragment(
-            id: "Post:p2",
-            fragment: "fragment P on Post { id title }",
-            data: .object([
-                CachebayConstants.typenameField: .string("Post"),
-                "id": .string("p2"),
-                "title": .string("Stale-2"),
-            ])
-        )
-        let canonicalKey: CacheKey = "@connection.posts({})"
-        client.modifyOptimistic { b in
-            let c = b.connection(key: canonicalKey)
-            c.linkNode(.key("Post:p1"), options: LinkNodeOptions(position: .end))
-            c.linkNode(.key("Post:p2"), options: LinkNodeOptions(position: .end))
-        }.dispose()
-
-        // Now write a leader page (after=null) that returns the same two
-        // nodes — same ids, so the buggy dedup would treat them as
-        // duplicates of the to-be-discarded existing edges and produce
-        // an empty merged list.
-        try client.writeQuery(
-            query: self.connectionQuery,
-            variables: ["first": .int(10)],
-            data: .object([
-                "posts": .object([
-                    "__typename": .string("PostConnection"),
-                    "pageInfo": .object([
-                        "__typename": .string("PageInfo"),
-                        "endCursor": .string("c2"),
-                        "hasNextPage": .bool(false),
-                    ]),
-                    "edges": .array([
-                        .object([
-                            "__typename": .string("PostEdge"),
-                            "cursor": .string("c1"),
-                            "node": .object([
-                                "__typename": .string("Post"),
-                                "id": .string("p1"),
-                                "title": .string("Network-1"),
-                            ]),
-                        ]),
-                        .object([
-                            "__typename": .string("PostEdge"),
-                            "cursor": .string("c2"),
-                            "node": .object([
-                                "__typename": .string("Post"),
-                                "id": .string("p2"),
-                                "title": .string("Network-2"),
-                            ]),
-                        ]),
-                    ]),
+            // Plant stale optimistic edges (no `cursor`) for the same nodes
+            // the network will later return. linkNode is purely structural,
+            // so seed the entities via writeFragment first.
+            try client.writeFragment(
+                id: "Post:p1",
+                fragment: "fragment P on Post { id title }",
+                data: .object([
+                    CachebayConstants.typenameField: .string("Post"),
+                    "id": .string("p1"),
+                    "title": .string("Stale-1"),
                 ])
-            ])
-        )
-
-        // Materialize — must reflect the leader page (2 edges), not 0.
-        let received = CaptureBox<[JSONValue]>(value: [])
-        _ = try client.watchQuery(
-            query: self.connectionQuery,
-            options: WatchQueryOptions(
-                variables: ["first": .int(10)],
-                immediate: true,
-                onData: { received.append($0) }
             )
-        )
+            try client.writeFragment(
+                id: "Post:p2",
+                fragment: "fragment P on Post { id title }",
+                data: .object([
+                    CachebayConstants.typenameField: .string("Post"),
+                    "id": .string("p2"),
+                    "title": .string("Stale-2"),
+                ])
+            )
+            let canonicalKey: CacheKey = "@connection.posts({})"
+            client.modifyOptimistic { b in
+                let c = b.connection(key: canonicalKey)
+                c.linkNode(.key("Post:p1"), options: LinkNodeOptions(position: .end))
+                c.linkNode(.key("Post:p2"), options: LinkNodeOptions(position: .end))
+            }.dispose()
 
-        guard let last = received.value.last,
-              case .object(let root) = last,
-              case .object(let posts) = root["posts"] ?? .undefined,
-              case .array(let edges) = posts["edges"] ?? .undefined
-        else {
-            XCTFail("watcher data shape unexpected: \(received.value.last ?? .undefined)")
-            return
+            // Now write a leader page (after=null) that returns the same two
+            // nodes — same ids, so the buggy dedup would treat them as
+            // duplicates of the to-be-discarded existing edges and produce
+            // an empty merged list.
+            try client.writeQuery(
+                query: self.connectionQuery,
+                variables: ["first": .int(10)],
+                data: .object([
+                    "posts": .object([
+                        "__typename": .string("PostConnection"),
+                        "pageInfo": .object([
+                            "__typename": .string("PageInfo"),
+                            "endCursor": .string("c2"),
+                            "hasNextPage": .bool(false),
+                        ]),
+                        "edges": .array([
+                            .object([
+                                "__typename": .string("PostEdge"),
+                                "cursor": .string("c1"),
+                                "node": .object([
+                                    "__typename": .string("Post"),
+                                    "id": .string("p1"),
+                                    "title": .string("Network-1"),
+                                ]),
+                            ]),
+                            .object([
+                                "__typename": .string("PostEdge"),
+                                "cursor": .string("c2"),
+                                "node": .object([
+                                    "__typename": .string("Post"),
+                                    "id": .string("p2"),
+                                    "title": .string("Network-2"),
+                                ]),
+                            ]),
+                        ]),
+                    ])
+                ])
+            )
+
+            // Materialize — must reflect the leader page (2 edges), not 0.
+            let received = CaptureBox<[JSONValue]>(value: [])
+            _ = try client.watchQuery(
+                query: self.connectionQuery,
+                options: WatchQueryOptions(
+                    variables: ["first": .int(10)],
+                    immediate: true,
+                    onData: { received.append($0) }
+                )
+            )
+
+            guard let last = received.value.last,
+                case .object(let root) = last,
+                case .object(let posts) = root["posts"] ?? .undefined,
+                case .array(let edges) = posts["edges"] ?? .undefined
+            else {
+                XCTFail("watcher data shape unexpected: \(received.value.last ?? .undefined)")
+                return
+            }
+            XCTAssertEqual(edges.count, 2, "leader-mode merge must keep the network's edges, not drop them as duplicates of stale optimistic edges")
         }
-        XCTAssertEqual(edges.count, 2, "leader-mode merge must keep the network's edges, not drop them as duplicates of stale optimistic edges")
-      }
     }
 }

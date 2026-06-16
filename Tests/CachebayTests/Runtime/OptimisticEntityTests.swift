@@ -9,11 +9,12 @@ import XCTest
 final class OptimisticEntityTests: XCTestCase {
 
     private func makeClient() -> CachebayClient {
-        CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
     }
 
     // MARK: - patch via object ref (typename + id)
@@ -27,8 +28,9 @@ final class OptimisticEntityTests: XCTestCase {
         )
 
         client.modifyOptimistic { b in
-            b.patch(.object(["__typename": "Post", "id": "p1"]),
-                    ["title": .string("New")], mode: .merge)
+            b.patch(
+                .object(["__typename": "Post", "id": "p1"]),
+                ["title": .string("New")], mode: .merge)
         }.dispose()
 
         XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "New")
@@ -51,7 +53,8 @@ final class OptimisticEntityTests: XCTestCase {
             }
         }.dispose()
 
-        XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "Post 1!",
+        XCTAssertEqual(
+            client.graph.getField("Post:p1", "title")?.string, "Post 1!",
             "closure-form patch should see the cached prior snapshot")
     }
 
@@ -109,7 +112,8 @@ final class OptimisticEntityTests: XCTestCase {
         tx.dispose()
         // After commit, the record is gone permanently. revert is a no-op.
         tx.revert()
-        XCTAssertNil(client.graph.getRecord("User:9"),
+        XCTAssertNil(
+            client.graph.getRecord("User:9"),
             "revert after commit must NOT restore the record")
     }
 
@@ -129,7 +133,8 @@ final class OptimisticEntityTests: XCTestCase {
         tx.dispose()
         tx.revert()
 
-        XCTAssertEqual(client.graph.getField("User:7", "name")?.string, "New",
+        XCTAssertEqual(
+            client.graph.getField("User:7", "name")?.string, "New",
             "after commit, revert must not roll back the entity")
     }
 

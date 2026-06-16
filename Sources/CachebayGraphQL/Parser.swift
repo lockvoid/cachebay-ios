@@ -114,12 +114,14 @@ public struct Parser {
         }
 
         if !typeDefs.isEmpty || seenSchemaDef {
-            defs.append(.schema(SchemaDefinition(
-                types: typeDefs,
-                queryType: schemaQueryType,
-                mutationType: schemaMutationType,
-                subscriptionType: schemaSubscriptionType
-            )))
+            defs.append(
+                .schema(
+                    SchemaDefinition(
+                        types: typeDefs,
+                        queryType: schemaQueryType,
+                        mutationType: schemaMutationType,
+                        subscriptionType: schemaSubscriptionType
+                    )))
         }
 
         return Document(definitions: defs)
@@ -135,7 +137,7 @@ public struct Parser {
 
     private mutating func skipExtension() throws {
         // Best-effort: consume `extend` then skip one definition.
-        _ = try advance() // extend
+        _ = try advance()  // extend
         if current.kind == .name {
             switch current.value {
             case "type": _ = try? parseObjectTypeDefinition(description: nil)
@@ -150,7 +152,7 @@ public struct Parser {
     }
 
     private mutating func skipDirectiveDefinition() throws {
-        _ = try advance() // directive
+        _ = try advance()  // directive
         _ = try expect(.at)
         _ = try expect(.name)
         if current.kind == .paren(open: true) {
@@ -197,7 +199,7 @@ public struct Parser {
 
     private mutating func parseFragmentDefinition() throws -> FragmentDefinition {
         let startTok = current
-        _ = try advance() // 'fragment'
+        _ = try advance()  // 'fragment'
         let nameTok = try expect(.name)
         if nameTok.value == "on" { throw syntax("'on' is not a valid fragment name") }
         try expectName("on")
@@ -368,7 +370,7 @@ public struct Parser {
 
     private mutating func parseFragment() throws -> Selection {
         let startTok = current
-        _ = try advance() // '...'
+        _ = try advance()  // '...'
         // inline?
         if current.kind == .name && current.value == "on" {
             _ = try advance()
@@ -402,7 +404,7 @@ public struct Parser {
     struct SchemaHeaderInfo { var query: String?; var mutation: String?; var subscription: String? }
 
     private mutating func parseSchemaDefinitionHeader() throws -> SchemaHeaderInfo {
-        _ = try advance() // 'schema'
+        _ = try advance()  // 'schema'
         _ = try parseDirectives(isConst: true)
         var info = SchemaHeaderInfo()
         if current.kind == .brace(open: true) {
@@ -424,7 +426,7 @@ public struct Parser {
     }
 
     private mutating func parseObjectTypeDefinition(description: String?) throws -> ObjectTypeDefinition {
-        _ = try advance() // 'type'
+        _ = try advance()  // 'type'
         let nameTok = try expect(.name)
         var interfaces: [String] = []
         if peekName("implements") {
@@ -445,7 +447,7 @@ public struct Parser {
     }
 
     private mutating func parseInterfaceTypeDefinition(description: String?) throws -> InterfaceTypeDefinition {
-        _ = try advance() // 'interface'
+        _ = try advance()  // 'interface'
         let nameTok = try expect(.name)
         var interfaces: [String] = []
         if peekName("implements") {
@@ -505,7 +507,7 @@ public struct Parser {
     }
 
     private mutating func parseUnionTypeDefinition(description: String?) throws -> UnionTypeDefinition {
-        _ = try advance() // 'union'
+        _ = try advance()  // 'union'
         let nameTok = try expect(.name)
         let dirs = try parseDirectives(isConst: true)
         var types: [String] = []
@@ -522,7 +524,7 @@ public struct Parser {
     }
 
     private mutating func parseEnumTypeDefinition(description: String?) throws -> EnumTypeDefinition {
-        _ = try advance() // 'enum'
+        _ = try advance()  // 'enum'
         let nameTok = try expect(.name)
         let dirs = try parseDirectives(isConst: true)
         var values: [EnumValueDefinition] = []
@@ -540,14 +542,14 @@ public struct Parser {
     }
 
     private mutating func parseScalarTypeDefinition(description: String?) throws -> ScalarTypeDefinition {
-        _ = try advance() // 'scalar'
+        _ = try advance()  // 'scalar'
         let nameTok = try expect(.name)
         let dirs = try parseDirectives(isConst: true)
         return ScalarTypeDefinition(name: nameTok.value, directives: dirs, description: description)
     }
 
     private mutating func parseInputObjectTypeDefinition(description: String?) throws -> InputObjectTypeDefinition {
-        _ = try advance() // 'input'
+        _ = try advance()  // 'input'
         let nameTok = try expect(.name)
         let dirs = try parseDirectives(isConst: true)
         var fields: [InputValueDefinition] = []

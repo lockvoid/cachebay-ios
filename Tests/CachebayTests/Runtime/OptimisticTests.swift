@@ -3,18 +3,21 @@ import XCTest
 
 final class OptimisticTests: XCTestCase {
     private func makeClient() -> CachebayClient {
-        CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
     }
 
     func test_patch_replace_mode() throws {
         let client = makeClient()
-        try client.writeFragment(id: "Post:p1", fragment: "fragment P on Post { id title body }", data: .object([
-            "__typename": "Post", "id": "p1", "title": "T", "body": "B"
-        ]))
+        try client.writeFragment(
+            id: "Post:p1", fragment: "fragment P on Post { id title body }",
+            data: .object([
+                "__typename": "Post", "id": "p1", "title": "T", "body": "B",
+            ]))
         let tx = client.modifyOptimistic { b in
             b.patch(.key("Post:p1"), ["__typename": "Post", "id": "p1", "title": "Fresh"], mode: .replace)
         }
@@ -28,9 +31,11 @@ final class OptimisticTests: XCTestCase {
 
     func test_two_layers_revert_first_preserves_second() throws {
         let client = makeClient()
-        try client.writeFragment(id: "Post:p1", fragment: "fragment P on Post { id title }", data: .object([
-            "__typename": "Post", "id": "p1", "title": "A"
-        ]))
+        try client.writeFragment(
+            id: "Post:p1", fragment: "fragment P on Post { id title }",
+            data: .object([
+                "__typename": "Post", "id": "p1", "title": "A",
+            ]))
         let tx1 = client.modifyOptimistic { b in
             b.patch(.key("Post:p1"), ["title": "A-l1"], mode: .merge)
         }
@@ -47,9 +52,11 @@ final class OptimisticTests: XCTestCase {
 
     func test_delete_then_revert_restores() throws {
         let client = makeClient()
-        try client.writeFragment(id: "Post:p1", fragment: "fragment P on Post { id title }", data: .object([
-            "__typename": "Post", "id": "p1", "title": "Gone"
-        ]))
+        try client.writeFragment(
+            id: "Post:p1", fragment: "fragment P on Post { id title }",
+            data: .object([
+                "__typename": "Post", "id": "p1", "title": "Gone",
+            ]))
         let tx = client.modifyOptimistic { b in
             b.delete(.key("Post:p1"))
         }

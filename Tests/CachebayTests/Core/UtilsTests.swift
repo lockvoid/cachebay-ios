@@ -73,47 +73,53 @@ final class UtilsTests: XCTestCase {
     }
 
     func test_isDataDeepEqual_refLists() {
-        XCTAssertTrue(isDataDeepEqual(
-            .refList(["User:1", "User:2"]),
-            .refList(["User:1", "User:2"])
-        ))
+        XCTAssertTrue(
+            isDataDeepEqual(
+                .refList(["User:1", "User:2"]),
+                .refList(["User:1", "User:2"])
+            ))
     }
 
     func test_isDataDeepEqual_differentRefListContents() {
-        XCTAssertFalse(isDataDeepEqual(
-            .refList(["User:1", "User:2"]),
-            .refList(["User:1", "User:3"])
-        ))
+        XCTAssertFalse(
+            isDataDeepEqual(
+                .refList(["User:1", "User:2"]),
+                .refList(["User:1", "User:3"])
+            ))
     }
 
     func test_isDataDeepEqual_differentRefListLengths() {
-        XCTAssertFalse(isDataDeepEqual(
-            .refList(["User:1", "User:2"]),
-            .refList(["User:1"])
-        ))
+        XCTAssertFalse(
+            isDataDeepEqual(
+                .refList(["User:1", "User:2"]),
+                .refList(["User:1"])
+            ))
     }
 
     // MARK: - isDataDeepEqual: arrays
 
     func test_isDataDeepEqual_arrays_recursive() {
-        XCTAssertTrue(isDataDeepEqual(
-            .array([.int(1), .int(2), .int(3)]),
-            .array([.int(1), .int(2), .int(3)])
-        ))
+        XCTAssertTrue(
+            isDataDeepEqual(
+                .array([.int(1), .int(2), .int(3)]),
+                .array([.int(1), .int(2), .int(3)])
+            ))
     }
 
     func test_isDataDeepEqual_differentArrayLengths() {
-        XCTAssertFalse(isDataDeepEqual(
-            .array([.int(1), .int(2)]),
-            .array([.int(1), .int(2), .int(3)])
-        ))
+        XCTAssertFalse(
+            isDataDeepEqual(
+                .array([.int(1), .int(2)]),
+                .array([.int(1), .int(2), .int(3)])
+            ))
     }
 
     func test_isDataDeepEqual_differentArrayElements() {
-        XCTAssertFalse(isDataDeepEqual(
-            .array([.int(1), .int(2), .int(3)]),
-            .array([.int(1), .int(2), .int(4)])
-        ))
+        XCTAssertFalse(
+            isDataDeepEqual(
+                .array([.int(1), .int(2), .int(3)]),
+                .array([.int(1), .int(2), .int(4)])
+            ))
     }
 
     // MARK: - isDataDeepEqual: objects
@@ -347,12 +353,14 @@ final class UtilsTests: XCTestCase {
     /// check is reached, `isDataDeepEqual` has already proven the data differs.
     func test_recycleSnapshots_fingerprintCollisionButDataDiffers_reflectsNext() {
         let prev: JSONValue = .object(["edges": .array([])])
-        let next: JSONValue = .object(["edges": .array([
-            .object(["node": .object(["id": .string("a")])]),
-            .object(["node": .object(["id": .string("b")])]),
-        ])])
+        let next: JSONValue = .object([
+            "edges": .array([
+                .object(["node": .object(["id": .string("a")])]),
+                .object(["node": .object(["id": .string("b")])]),
+            ])
+        ])
         let prevFp: JSONValue = .object([CachebayConstants.fingerprintKey: .int(7)])
-        let nextFp: JSONValue = .object([CachebayConstants.fingerprintKey: .int(7)]) // collide
+        let nextFp: JSONValue = .object([CachebayConstants.fingerprintKey: .int(7)])  // collide
         let result = recycleSnapshots(prev, next, prevFp, nextFp)
         guard case .object(let o) = result, case .array(let e)? = o["edges"] else {
             XCTFail("unexpected shape: \(result)"); return
@@ -430,15 +438,16 @@ final class UtilsTests: XCTestCase {
         // prevFp not an array → nothing recyclable → every item is next's.
         let prev: JSONValue = .array([.object(["v": .string("A")])])
         let next: JSONValue = .array([.object(["v": .string("B")])])
-        XCTAssertEqual(recycleSnapshots(prev, next, .undefined, .array([fp(1)])),
-                       .array([.object(["v": .string("B")])]))
+        XCTAssertEqual(
+            recycleSnapshots(prev, next, .undefined, .array([fp(1)])),
+            .array([.object(["v": .string("B")])]))
     }
 
     func test_recycleArray_nextFpShorterThanData() {
         // next item beyond nextFp's length has no fingerprint → uses next.
         let prev: JSONValue = .array([.object(["v": .string("A")])])
         let next: JSONValue = .array([.object(["v": .string("A")]), .object(["v": .string("C")])])
-        let result = recycleSnapshots(prev, next, .array([fp(1)]), .array([fp(1)])) // nextFp has 1 entry
+        let result = recycleSnapshots(prev, next, .array([fp(1)]), .array([fp(1)]))  // nextFp has 1 entry
         // next[0] fp1 → prev[0]={A}; next[1] no fp → next {C}
         XCTAssertEqual(result, .array([.object(["v": .string("A")]), .object(["v": .string("C")])]))
     }
@@ -450,8 +459,9 @@ final class UtilsTests: XCTestCase {
         let next: JSONValue = .array([.object(["v": .string("B")])])
         let prevFp: JSONValue = .array([.object([CachebayConstants.fingerprintKey: .double(7.0)])])
         let nextFp: JSONValue = .array([.object([CachebayConstants.fingerprintKey: .int(7)])])
-        XCTAssertEqual(recycleSnapshots(prev, next, prevFp, nextFp),
-                       .array([.object(["v": .string("A")])]))  // recycled prev
+        XCTAssertEqual(
+            recycleSnapshots(prev, next, prevFp, nextFp),
+            .array([.object(["v": .string("A")])]))  // recycled prev
     }
 
     // Reproducible PRNG so any failure is debuggable.
@@ -470,11 +480,15 @@ final class UtilsTests: XCTestCase {
         var out: [JSONValue] = []
         for i in 0..<na.count {
             let nItem = na[i]
-            let nItemFp: JSONValue = { if case .array(let a) = nextFp, i < a.count { return a[i] }; return .undefined }()
+            let nItemFp: JSONValue = {
+                if case .array(let a) = nextFp, i < a.count { return a[i] }; return .undefined
+            }()
             if let nv = nItemFp[CachebayConstants.fingerprintKey]?.int {
                 var matched: JSONValue? = nil
                 for j in 0..<pa.count {
-                    let pItemFp: JSONValue = { if case .array(let a) = prevFp, j < a.count { return a[j] }; return .undefined }()
+                    let pItemFp: JSONValue = {
+                        if case .array(let a) = prevFp, j < a.count { return a[j] }; return .undefined
+                    }()
                     if let pv = pItemFp[CachebayConstants.fingerprintKey]?.int, pv == nv { matched = pa[j]; break }
                 }
                 if let m = matched { out.append(m); continue }
@@ -496,16 +510,18 @@ final class UtilsTests: XCTestCase {
             var pa: [JSONValue] = [], pfp: [JSONValue] = []
             for k in 0..<pn {
                 pa.append(.object(["id": .int(Int64(k)), "gen": .int(0)]))
-                pfp.append(Int.random(in: 0...4, using: &rng) == 0
-                    ? .object([:])  // ~20% missing fingerprint
-                    : .object([CachebayConstants.fingerprintKey: .int(Int64(Int.random(in: 0...5, using: &rng)))]))
+                pfp.append(
+                    Int.random(in: 0...4, using: &rng) == 0
+                        ? .object([:])  // ~20% missing fingerprint
+                        : .object([CachebayConstants.fingerprintKey: .int(Int64(Int.random(in: 0...5, using: &rng)))]))
             }
             var na: [JSONValue] = [], nfp: [JSONValue] = []
             for k in 0..<nn {
                 na.append(.object(["id": .int(Int64(k)), "gen": .int(1)]))
-                nfp.append(Int.random(in: 0...4, using: &rng) == 0
-                    ? .object([:])
-                    : .object([CachebayConstants.fingerprintKey: .int(Int64(Int.random(in: 0...5, using: &rng)))]))
+                nfp.append(
+                    Int.random(in: 0...4, using: &rng) == 0
+                        ? .object([:])
+                        : .object([CachebayConstants.fingerprintKey: .int(Int64(Int.random(in: 0...5, using: &rng)))]))
             }
             // Occasionally make fp arrays length-mismatched or non-array.
             func sideChannel(_ arr: [JSONValue]) -> JSONValue {

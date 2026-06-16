@@ -30,11 +30,12 @@ import XCTest
 final class OptimisticTransactionLifetimeTests: XCTestCase {
 
     private func makeClient() -> CachebayClient {
-        CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
     }
 
     private func seedBaseline(_ client: CachebayClient, title: String = "Baseline") throws {
@@ -82,7 +83,8 @@ final class OptimisticTransactionLifetimeTests: XCTestCase {
             var tx: OptimisticTransaction? = client.modifyOptimistic { b in
                 b.patch(.key("Post:p1"), ["title": .string("Optimistic")], mode: .merge)
             }
-            XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "Optimistic",
+            XCTAssertEqual(
+                client.graph.getField("Post:p1", "title")?.string, "Optimistic",
                 "optimistic patch is visible while tx is held")
             tx = nil
             _ = tx
@@ -92,7 +94,8 @@ final class OptimisticTransactionLifetimeTests: XCTestCase {
         // re-apply title="Optimistic", clobbering "ServerValue".
         // Post-fix: layer was auto-disposed, no replay, server wins.
         try normalizeServerValue(client, title: "ServerValue")
-        XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "ServerValue",
+        XCTAssertEqual(
+            client.graph.getField("Post:p1", "title")?.string, "ServerValue",
             "after dropped tx auto-disposes, the next server-normalize wins clean (no phantom replay)")
     }
 
@@ -119,7 +122,8 @@ final class OptimisticTransactionLifetimeTests: XCTestCase {
 
         // Let the Task start + apply its optimistic patch.
         try await Task.sleep(nanoseconds: 30_000_000)
-        XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "Optimistic",
+        XCTAssertEqual(
+            client.graph.getField("Post:p1", "title")?.string, "Optimistic",
             "tx is live; optimistic patch visible")
 
         task.cancel()
@@ -128,7 +132,8 @@ final class OptimisticTransactionLifetimeTests: XCTestCase {
         // After the cancelled Task's frame unwound, tx was released
         // → auto-dispose → no replay on next normalize.
         try normalizeServerValue(client, title: "ServerValue")
-        XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "ServerValue",
+        XCTAssertEqual(
+            client.graph.getField("Post:p1", "title")?.string, "ServerValue",
             "task-cancellation-released tx must auto-dispose")
     }
 
@@ -157,7 +162,8 @@ final class OptimisticTransactionLifetimeTests: XCTestCase {
         }
 
         try normalizeServerValue(client, title: "ServerValue")
-        XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "ServerValue",
+        XCTAssertEqual(
+            client.graph.getField("Post:p1", "title")?.string, "ServerValue",
             "thrown error released tx via stack unwind; layer auto-disposed")
     }
 
@@ -188,7 +194,8 @@ final class OptimisticTransactionLifetimeTests: XCTestCase {
         }
         XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "Second")
         tx2.revert()
-        XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "Optimistic",
+        XCTAssertEqual(
+            client.graph.getField("Post:p1", "title")?.string, "Optimistic",
             "post-double-dispose state intact; tx2's baseline = post-dispose state ('Optimistic')")
     }
 
@@ -216,9 +223,11 @@ final class OptimisticTransactionLifetimeTests: XCTestCase {
             // we'd see commitRuns == 2. With idempotency, it's 1.
         }
 
-        XCTAssertEqual(commitRuns.value, 1,
+        XCTAssertEqual(
+            commitRuns.value, 1,
             "commit closure must run exactly once even when deinit fires after explicit commit")
-        XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "Committed",
+        XCTAssertEqual(
+            client.graph.getField("Post:p1", "title")?.string, "Committed",
             "graph reflects the committed write, not a phantom re-run")
     }
 
@@ -246,9 +255,11 @@ final class OptimisticTransactionLifetimeTests: XCTestCase {
             b.patch(.key("Post:p1"), ["title": .string("Second")], mode: .merge)
         }
 
-        XCTAssertEqual(commitRuns.value, 1,
+        XCTAssertEqual(
+            commitRuns.value, 1,
             "commit-after-commit must be a no-op; second closure must not run")
-        XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "First",
+        XCTAssertEqual(
+            client.graph.getField("Post:p1", "title")?.string, "First",
             "graph holds the first commit's value; second commit's writes never landed")
     }
 
@@ -276,7 +287,8 @@ final class OptimisticTransactionLifetimeTests: XCTestCase {
         }
 
         try normalizeServerValue(client, title: "ServerValue")
-        XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "ServerValue",
+        XCTAssertEqual(
+            client.graph.getField("Post:p1", "title")?.string, "ServerValue",
             "Holder release cascaded to OptimisticTransaction deinit → layer auto-disposed")
     }
 }

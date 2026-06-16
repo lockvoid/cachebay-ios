@@ -13,52 +13,55 @@ import XCTest
 final class QueriesWatcherTests: XCTestCase {
 
     private func makeClient() -> CachebayClient {
-        CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
     }
 
     private let userQuery = "query GetUser($id: ID!) { user(id: $id) { id name email } }"
     private let userWithProfile = """
-    query GetUserWithProfile($id: ID!) {
-        user(id: $id) { id name profile { id bio avatar } }
-    }
-    """
+        query GetUserWithProfile($id: ID!) {
+            user(id: $id) { id name profile { id bio avatar } }
+        }
+        """
     private let userWithPosts = """
-    query GetUserPosts($id: ID!) {
-        user(id: $id) { id posts { id title content } }
-    }
-    """
+        query GetUserPosts($id: ID!) {
+            user(id: $id) { id posts { id title content } }
+        }
+        """
     private let deeplyNested = """
-    query GetUserNested($id: ID!) {
-        user(id: $id) {
-            id name
-            profile {
-                id bio
-                settings {
-                    id theme
-                    notifications { id email push }
+        query GetUserNested($id: ID!) {
+            user(id: $id) {
+                id name
+                profile {
+                    id bio
+                    settings {
+                        id theme
+                        notifications { id email push }
+                    }
                 }
             }
         }
-    }
-    """
+        """
 
     // MARK: - readQuery / writeQuery
 
     /// Mirrors web `readQuery / writeQuery: writes and reads query data`.
     func test_writeQuery_then_readQuery_roundtrips_full_object() throws {
         let client = makeClient()
-        try client.writeQuery(query: userQuery, variables: ["id": "1"], data: .object([
-            "user": .object([
-                "__typename": "User",
-                "id": "1",
-                "name": "Alice",
-                "email": "alice@example.com",
-            ])
-        ]))
+        try client.writeQuery(
+            query: userQuery, variables: ["id": "1"],
+            data: .object([
+                "user": .object([
+                    "__typename": "User",
+                    "id": "1",
+                    "name": "Alice",
+                    "email": "alice@example.com",
+                ])
+            ]))
 
         let read = client.readQuery(query: userQuery, variables: ["id": "1"])
         XCTAssertEqual(read?["user"]?["id"]?.string, "1")
@@ -83,19 +86,21 @@ final class QueriesWatcherTests: XCTestCase {
     /// nested key so a write to `Profile:p1` triggers the user query.
     func test_watcher_fires_when_nested_entity_updated() async throws {
         let client = makeClient()
-        try client.writeQuery(query: userWithProfile, variables: ["id": "1"], data: .object([
-            "user": .object([
-                "__typename": "User",
-                "id": "1",
-                "name": "Alice",
-                "profile": .object([
-                    "__typename": "Profile",
-                    "id": "p1",
-                    "bio": "Original bio",
-                    "avatar": "avatar1.jpg",
+        try client.writeQuery(
+            query: userWithProfile, variables: ["id": "1"],
+            data: .object([
+                "user": .object([
+                    "__typename": "User",
+                    "id": "1",
+                    "name": "Alice",
+                    "profile": .object([
+                        "__typename": "Profile",
+                        "id": "p1",
+                        "bio": "Original bio",
+                        "avatar": "avatar1.jpg",
+                    ]),
                 ])
-            ])
-        ]))
+            ]))
 
         let captured = CaptureBox<[JSONValue]>(value: [])
         let handle = try client.watchQuery(
@@ -110,12 +115,14 @@ final class QueriesWatcherTests: XCTestCase {
         XCTAssertEqual(captured.value[0]["user"]?["profile"]?["bio"]?.string, "Original bio")
 
         // Update only the Profile entity directly via low-level putRecord.
-        client.graph.putRecord("Profile:p1", [
-            "__typename": "Profile",
-            "id": "p1",
-            "bio": "Updated bio",
-            "avatar": "avatar2.jpg",
-        ])
+        client.graph.putRecord(
+            "Profile:p1",
+            [
+                "__typename": "Profile",
+                "id": "p1",
+                "bio": "Updated bio",
+                "avatar": "avatar2.jpg",
+            ])
         client.graph.flush()
         try await Task.sleep(nanoseconds: 20_000_000)
 
@@ -133,12 +140,14 @@ final class QueriesWatcherTests: XCTestCase {
     /// against the User entity must propagate to the user watcher.
     func test_watcher_fires_when_root_entity_putRecord_updated() async throws {
         let client = makeClient()
-        try client.writeQuery(query: userQuery, variables: ["id": "1"], data: .object([
-            "user": .object([
-                "__typename": "User", "id": "1",
-                "name": "Alice", "email": "a@x.com",
-            ])
-        ]))
+        try client.writeQuery(
+            query: userQuery, variables: ["id": "1"],
+            data: .object([
+                "user": .object([
+                    "__typename": "User", "id": "1",
+                    "name": "Alice", "email": "a@x.com",
+                ])
+            ]))
 
         let received = CaptureBox<[JSONValue]>(value: [])
         let handle = try client.watchQuery(
@@ -152,10 +161,12 @@ final class QueriesWatcherTests: XCTestCase {
         XCTAssertEqual(received.value.count, 1)
 
         // Bypass the query API: directly mutate the record.
-        client.graph.putRecord("User:1", [
-            "__typename": "User", "id": "1",
-            "name": "Bob", "email": "a@x.com",
-        ])
+        client.graph.putRecord(
+            "User:1",
+            [
+                "__typename": "User", "id": "1",
+                "name": "Bob", "email": "a@x.com",
+            ])
         client.graph.flush()
         try await Task.sleep(nanoseconds: 20_000_000)
 
@@ -171,12 +182,14 @@ final class QueriesWatcherTests: XCTestCase {
     /// watcher.
     func test_watcher_fires_when_writeQuery_updates_entity() async throws {
         let client = makeClient()
-        try client.writeQuery(query: userQuery, variables: ["id": "1"], data: .object([
-            "user": .object([
-                "__typename": "User", "id": "1",
-                "name": "Alice", "email": "alice@example.com",
-            ])
-        ]))
+        try client.writeQuery(
+            query: userQuery, variables: ["id": "1"],
+            data: .object([
+                "user": .object([
+                    "__typename": "User", "id": "1",
+                    "name": "Alice", "email": "alice@example.com",
+                ])
+            ]))
 
         let received = CaptureBox<[JSONValue]>(value: [])
         let handle = try client.watchQuery(
@@ -192,10 +205,10 @@ final class QueriesWatcherTests: XCTestCase {
         // Simulated mutation payload: writeQuery against an "updateUser"
         // operation which still resolves to User:1 in the graph.
         let updateUserMutation = """
-        mutation UpdateUser($id: ID!, $name: String!, $email: String!) {
-            updateUser(id: $id, name: $name, email: $email) { id name email }
-        }
-        """
+            mutation UpdateUser($id: ID!, $name: String!, $email: String!) {
+                updateUser(id: $id, name: $name, email: $email) { id name email }
+            }
+            """
         try client.writeQuery(
             query: updateUserMutation,
             variables: ["id": "1", "name": "Alice Updated", "email": "alice.u@example.com"],
@@ -225,12 +238,14 @@ final class QueriesWatcherTests: XCTestCase {
     /// render the entire watcher subtree.
     func test_watcher_doesNotEmit_whenDataStructurallyIdentical() async throws {
         let client = makeClient()
-        try client.writeQuery(query: userQuery, variables: ["id": "1"], data: .object([
-            "user": .object([
-                "__typename": "User", "id": "1",
-                "name": "Alice", "email": "alice@example.com",
-            ])
-        ]))
+        try client.writeQuery(
+            query: userQuery, variables: ["id": "1"],
+            data: .object([
+                "user": .object([
+                    "__typename": "User", "id": "1",
+                    "name": "Alice", "email": "alice@example.com",
+                ])
+            ]))
 
         let received = CaptureBox<[JSONValue]>(value: [])
         let handle = try client.watchQuery(
@@ -244,12 +259,14 @@ final class QueriesWatcherTests: XCTestCase {
         XCTAssertEqual(received.value.count, 1)
 
         // Re-write the same data — must not emit.
-        try client.writeQuery(query: userQuery, variables: ["id": "1"], data: .object([
-            "user": .object([
-                "__typename": "User", "id": "1",
-                "name": "Alice", "email": "alice@example.com",
-            ])
-        ]))
+        try client.writeQuery(
+            query: userQuery, variables: ["id": "1"],
+            data: .object([
+                "user": .object([
+                    "__typename": "User", "id": "1",
+                    "name": "Alice", "email": "alice@example.com",
+                ])
+            ]))
         try await Task.sleep(nanoseconds: 20_000_000)
 
         XCTAssertEqual(received.value.count, 1, "no emission for structurally-identical write")
@@ -263,15 +280,17 @@ final class QueriesWatcherTests: XCTestCase {
     /// shallow analog of `test_watcher_recycles_deeplyNested...`.
     func test_watcher_recyclesUnchangedNestedObject_whenSiblingFieldChanges() async throws {
         let client = makeClient()
-        try client.writeQuery(query: userWithProfile, variables: ["id": "1"], data: .object([
-            "user": .object([
-                "__typename": "User", "id": "1", "name": "Alice",
-                "profile": .object([
-                    "__typename": "Profile", "id": "p1",
-                    "bio": "Software Engineer", "avatar": "avatar1.jpg",
+        try client.writeQuery(
+            query: userWithProfile, variables: ["id": "1"],
+            data: .object([
+                "user": .object([
+                    "__typename": "User", "id": "1", "name": "Alice",
+                    "profile": .object([
+                        "__typename": "Profile", "id": "p1",
+                        "bio": "Software Engineer", "avatar": "avatar1.jpg",
+                    ]),
                 ])
-            ])
-        ]))
+            ]))
 
         let received = CaptureBox<[JSONValue]>(value: [])
         let handle = try client.watchQuery(
@@ -314,21 +333,23 @@ final class QueriesWatcherTests: XCTestCase {
     /// substructures must structurally match the previous snapshot.
     func test_watcher_recycles_deeplyNested_unchangedSubtrees_uponShallowChange() async throws {
         let client = makeClient()
-        try client.writeQuery(query: deeplyNested, variables: ["id": "1"], data: .object([
-            "user": .object([
-                "__typename": "User", "id": "1", "name": "Alice",
-                "profile": .object([
-                    "__typename": "Profile", "id": "p1", "bio": "Engineer",
-                    "settings": .object([
-                        "__typename": "Settings", "id": "s1", "theme": "dark",
-                        "notifications": .object([
-                            "__typename": "Notifications", "id": "n1",
-                            "email": .bool(true), "push": .bool(false),
-                        ])
-                    ])
+        try client.writeQuery(
+            query: deeplyNested, variables: ["id": "1"],
+            data: .object([
+                "user": .object([
+                    "__typename": "User", "id": "1", "name": "Alice",
+                    "profile": .object([
+                        "__typename": "Profile", "id": "p1", "bio": "Engineer",
+                        "settings": .object([
+                            "__typename": "Settings", "id": "s1", "theme": "dark",
+                            "notifications": .object([
+                                "__typename": "Notifications", "id": "n1",
+                                "email": .bool(true), "push": .bool(false),
+                            ]),
+                        ]),
+                    ]),
                 ])
-            ])
-        ]))
+            ]))
 
         let received = CaptureBox<[JSONValue]>(value: [])
         let handle = try client.watchQuery(
@@ -379,16 +400,18 @@ final class QueriesWatcherTests: XCTestCase {
     /// would force a full re-render on every node update.
     func test_watcher_recyclesUnchangedArrayElements_whenSingleElementChanges() async throws {
         let client = makeClient()
-        try client.writeQuery(query: userWithPosts, variables: ["id": "1"], data: .object([
-            "user": .object([
-                "__typename": "User", "id": "1",
-                "posts": .array([
-                    .object(["__typename": "Post", "id": "p1", "title": "Post 1", "content": "Content 1"]),
-                    .object(["__typename": "Post", "id": "p2", "title": "Post 2", "content": "Content 2"]),
-                    .object(["__typename": "Post", "id": "p3", "title": "Post 3", "content": "Content 3"]),
+        try client.writeQuery(
+            query: userWithPosts, variables: ["id": "1"],
+            data: .object([
+                "user": .object([
+                    "__typename": "User", "id": "1",
+                    "posts": .array([
+                        .object(["__typename": "Post", "id": "p1", "title": "Post 1", "content": "Content 1"]),
+                        .object(["__typename": "Post", "id": "p2", "title": "Post 2", "content": "Content 2"]),
+                        .object(["__typename": "Post", "id": "p3", "title": "Post 3", "content": "Content 3"]),
+                    ]),
                 ])
-            ])
-        ]))
+            ]))
 
         let received = CaptureBox<[JSONValue]>(value: [])
         let handle = try client.watchQuery(
@@ -435,13 +458,13 @@ final class QueriesWatcherTests: XCTestCase {
     func test_watcher_update_rotatesToDifferentPaginationPage() throws {
         let client = makeClient()
         let pagedQuery = """
-        query GetPosts($first: Int!, $after: String) {
-            posts(first: $first, after: $after) {
-                edges { cursor node { id title } }
-                pageInfo { hasNextPage endCursor }
+            query GetPosts($first: Int!, $after: String) {
+                posts(first: $first, after: $after) {
+                    edges { cursor node { id title } }
+                    pageInfo { hasNextPage endCursor }
+                }
             }
-        }
-        """
+            """
 
         // Page 1
         try client.writeQuery(
@@ -464,7 +487,7 @@ final class QueriesWatcherTests: XCTestCase {
                         "__typename": "PageInfo",
                         "hasNextPage": true,
                         "endCursor": "c2",
-                    ])
+                    ]),
                 ])
             ])
         )
@@ -490,7 +513,7 @@ final class QueriesWatcherTests: XCTestCase {
                         "__typename": "PageInfo",
                         "hasNextPage": false,
                         "endCursor": "c4",
-                    ])
+                    ]),
                 ])
             ])
         )
@@ -527,12 +550,14 @@ final class QueriesWatcherTests: XCTestCase {
     /// a stale materialize cache.
     func test_lastUnsubscribe_invalidatesMaterializeCache() async throws {
         let client = makeClient()
-        try client.writeQuery(query: userQuery, variables: ["id": "1"], data: .object([
-            "user": .object([
-                "__typename": "User", "id": "1",
-                "name": "Alice", "email": "a@x.com",
-            ])
-        ]))
+        try client.writeQuery(
+            query: userQuery, variables: ["id": "1"],
+            data: .object([
+                "user": .object([
+                    "__typename": "User", "id": "1",
+                    "name": "Alice", "email": "a@x.com",
+                ])
+            ]))
 
         let handle = try client.watchQuery(
             query: userQuery,
@@ -549,10 +574,12 @@ final class QueriesWatcherTests: XCTestCase {
         // Mutate the underlying record directly. If the materialize
         // cache wasn't invalidated, readQuery would return the stale
         // pre-mutation snapshot.
-        client.graph.putRecord("User:1", [
-            "__typename": "User", "id": "1",
-            "name": "Alice Mutated", "email": "a@x.com",
-        ])
+        client.graph.putRecord(
+            "User:1",
+            [
+                "__typename": "User", "id": "1",
+                "name": "Alice Mutated", "email": "a@x.com",
+            ])
         client.graph.flush()
 
         let read = client.readQuery(query: userQuery, variables: ["id": "1"])
@@ -565,12 +592,14 @@ final class QueriesWatcherTests: XCTestCase {
     /// are observed via dep fanout).
     func test_unsubscribeOneOfTwoSiblings_secondStillReceivesUpdates() async throws {
         let client = makeClient()
-        try client.writeQuery(query: userQuery, variables: ["id": "1"], data: .object([
-            "user": .object([
-                "__typename": "User", "id": "1",
-                "name": "Alice", "email": "a@x.com",
-            ])
-        ]))
+        try client.writeQuery(
+            query: userQuery, variables: ["id": "1"],
+            data: .object([
+                "user": .object([
+                    "__typename": "User", "id": "1",
+                    "name": "Alice", "email": "a@x.com",
+                ])
+            ]))
 
         let r1 = CaptureBox<[JSONValue]>(value: [])
         let r2 = CaptureBox<[JSONValue]>(value: [])
@@ -587,12 +616,14 @@ final class QueriesWatcherTests: XCTestCase {
 
         h1.unsubscribe()
         // Mutate via writeQuery — h2 must still receive the update.
-        try client.writeQuery(query: userQuery, variables: ["id": "1"], data: .object([
-            "user": .object([
-                "__typename": "User", "id": "1",
-                "name": "Bob", "email": "a@x.com",
-            ])
-        ]))
+        try client.writeQuery(
+            query: userQuery, variables: ["id": "1"],
+            data: .object([
+                "user": .object([
+                    "__typename": "User", "id": "1",
+                    "name": "Bob", "email": "a@x.com",
+                ])
+            ]))
         try await Task.sleep(nanoseconds: 20_000_000)
 
         XCTAssertEqual(r1.value.count, 1, "h1 must not fire after unsubscribe")

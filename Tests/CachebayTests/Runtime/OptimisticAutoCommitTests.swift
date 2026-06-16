@@ -21,11 +21,12 @@ import XCTest
 final class OptimisticAutoCommitTests: XCTestCase {
 
     private func makeClient() -> CachebayClient {
-        CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
     }
 
     /// AutoCommit runs the closure exactly once, applying ops directly
@@ -66,11 +67,13 @@ final class OptimisticAutoCommitTests: XCTestCase {
         let client = makeClient()
 
         client.modifyOptimistic(autoCommit: true) { b in
-            b.patch(.key("Project:42"), [
-                CachebayConstants.typenameField: .string("Project"),
-                "id": .string("42"),
-                "name": .string("From autoCommit"),
-            ], mode: .merge)
+            b.patch(
+                .key("Project:42"),
+                [
+                    CachebayConstants.typenameField: .string("Project"),
+                    "id": .string("42"),
+                    "name": .string("From autoCommit"),
+                ], mode: .merge)
         }
 
         let rec = client.graph.getRecord("Project:42")
@@ -87,20 +90,24 @@ final class OptimisticAutoCommitTests: XCTestCase {
 
         // Establish an unrelated layer so we can revert it later.
         let unrelated = client.modifyOptimistic { b in
-            b.patch(.key("Project:99"), [
-                CachebayConstants.typenameField: .string("Project"),
-                "id": .string("99"),
-                "name": .string("Unrelated optimistic"),
-            ], mode: .merge)
+            b.patch(
+                .key("Project:99"),
+                [
+                    CachebayConstants.typenameField: .string("Project"),
+                    "id": .string("99"),
+                    "name": .string("Unrelated optimistic"),
+                ], mode: .merge)
         }
 
         // AutoCommit a separate write.
         client.modifyOptimistic(autoCommit: true) { b in
-            b.patch(.key("Project:42"), [
-                CachebayConstants.typenameField: .string("Project"),
-                "id": .string("42"),
-                "name": .string("From autoCommit"),
-            ], mode: .merge)
+            b.patch(
+                .key("Project:42"),
+                [
+                    CachebayConstants.typenameField: .string("Project"),
+                    "id": .string("42"),
+                    "name": .string("From autoCommit"),
+                ], mode: .merge)
         }
         XCTAssertEqual(client.graph.getRecord("Project:42")?["name"]?.string, "From autoCommit")
         XCTAssertEqual(client.graph.getRecord("Project:99")?["name"]?.string, "Unrelated optimistic")
@@ -108,10 +115,12 @@ final class OptimisticAutoCommitTests: XCTestCase {
         // Revert the unrelated layer — Project:99 should disappear,
         // Project:42 (autoCommitted, never recorded) must survive.
         unrelated.revert()
-        XCTAssertNil(client.graph.getRecord("Project:99"),
-                     "unrelated optimistic layer revert should remove Project:99")
-        XCTAssertEqual(client.graph.getRecord("Project:42")?["name"]?.string, "From autoCommit",
-                       "autoCommit writes must NOT be reverted by an unrelated layer's revert — proves no layer was recorded")
+        XCTAssertNil(
+            client.graph.getRecord("Project:99"),
+            "unrelated optimistic layer revert should remove Project:99")
+        XCTAssertEqual(
+            client.graph.getRecord("Project:42")?["name"]?.string, "From autoCommit",
+            "autoCommit writes must NOT be reverted by an unrelated layer's revert — proves no layer was recorded")
     }
 
     /// AutoCommit + `b.connection(...).linkNode(...)` writes the new
@@ -124,16 +133,20 @@ final class OptimisticAutoCommitTests: XCTestCase {
 
         // Pre-seed an empty canonical so linkNode has somewhere to
         // attach the edge.
-        client.graph.replaceRecord("\(canonicalKey).pageInfo", [
-            CachebayConstants.typenameField: .string("PageInfo"),
-            "hasNextPage": .bool(false),
-            "hasPreviousPage": .bool(false),
-        ])
-        client.graph.replaceRecord(canonicalKey, [
-            CachebayConstants.typenameField: .string("PostConnection"),
-            CachebayConstants.connectionEdgesField: .refList([]),
-            CachebayConstants.connectionPageInfoField: .ref("\(canonicalKey).pageInfo"),
-        ])
+        client.graph.replaceRecord(
+            "\(canonicalKey).pageInfo",
+            [
+                CachebayConstants.typenameField: .string("PageInfo"),
+                "hasNextPage": .bool(false),
+                "hasPreviousPage": .bool(false),
+            ])
+        client.graph.replaceRecord(
+            canonicalKey,
+            [
+                CachebayConstants.typenameField: .string("PostConnection"),
+                CachebayConstants.connectionEdgesField: .refList([]),
+                CachebayConstants.connectionPageInfoField: .ref("\(canonicalKey).pageInfo"),
+            ])
         client.graph.flush()
 
         // Seed the entity record explicitly — linkNode is purely structural
@@ -161,4 +174,3 @@ final class OptimisticAutoCommitTests: XCTestCase {
         XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "From server")
     }
 }
-

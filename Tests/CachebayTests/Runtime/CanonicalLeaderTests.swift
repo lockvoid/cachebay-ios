@@ -16,15 +16,15 @@ final class CanonicalLeaderTests: XCTestCase {
     }
 
     private let postsQuery = """
-    query Posts($first: Int, $after: String) {
-        posts(first: $first, after: $after) @connection(mode: "infinite") {
-            __typename
-            totalCount
-            pageInfo { __typename startCursor endCursor hasPreviousPage hasNextPage }
-            edges { __typename cursor node { __typename id title } }
+        query Posts($first: Int, $after: String) {
+            posts(first: $first, after: $after) @connection(mode: "infinite") {
+                __typename
+                totalCount
+                pageInfo { __typename startCursor endCursor hasPreviousPage hasNextPage }
+                edges { __typename cursor node { __typename id title } }
+            }
         }
-    }
-    """
+        """
 
     private func buildConnection(
         ids: [String],
@@ -38,7 +38,7 @@ final class CanonicalLeaderTests: XCTestCase {
             .object([
                 "__typename": "PostEdge",
                 "cursor": .string(id),
-                "node": .object(["__typename": "Post", "id": .string(id), "title": .string(id)])
+                "node": .object(["__typename": "Post", "id": .string(id), "title": .string(id)]),
             ])
         }
         var pageInfo: [String: JSONValue] = [
@@ -48,7 +48,7 @@ final class CanonicalLeaderTests: XCTestCase {
             "hasPreviousPage": .bool(hasPrev),
             "hasNextPage": .bool(hasNext),
         ]
-        _ = pageInfo // silence unused warning for some compilers
+        _ = pageInfo  // silence unused warning for some compilers
         var conn: [String: JSONValue] = [
             "__typename": "PostConnection",
             "pageInfo": .object(pageInfo),
@@ -74,10 +74,12 @@ final class CanonicalLeaderTests: XCTestCase {
         let (graph, planner, _, docs) = makeStack()
         let plan = try planner.getPlan(.source(postsQuery))
 
-        docs.normalize(plan: plan, variables: ["first": 3], data: buildConnection(
-            ids: ["p1", "p2", "p3"],
-            startCursor: "p1", endCursor: "p3", hasPrev: false, hasNext: true
-        ))
+        docs.normalize(
+            plan: plan, variables: ["first": 3],
+            data: buildConnection(
+                ids: ["p1", "p2", "p3"],
+                startCursor: "p1", endCursor: "p3", hasPrev: false, hasNext: true
+            ))
 
         let canonicalKey: CacheKey = "@connection.posts({})"
         XCTAssertNotNil(graph.getRecord(canonicalKey))
@@ -99,18 +101,24 @@ final class CanonicalLeaderTests: XCTestCase {
         let canonicalKey: CacheKey = "@connection.posts({})"
 
         // First leader page + a forward page extends the canonical.
-        docs.normalize(plan: plan, variables: ["first": 3], data: buildConnection(
-            ids: ["p1", "p2", "p3"], startCursor: "p1", endCursor: "p3", hasNext: true
-        ))
-        docs.normalize(plan: plan, variables: ["first": 3, "after": "p3"], data: buildConnection(
-            ids: ["p4", "p5", "p6"], startCursor: "p4", endCursor: "p6", hasPrev: true, hasNext: false
-        ))
+        docs.normalize(
+            plan: plan, variables: ["first": 3],
+            data: buildConnection(
+                ids: ["p1", "p2", "p3"], startCursor: "p1", endCursor: "p3", hasNext: true
+            ))
+        docs.normalize(
+            plan: plan, variables: ["first": 3, "after": "p3"],
+            data: buildConnection(
+                ids: ["p4", "p5", "p6"], startCursor: "p4", endCursor: "p6", hasPrev: true, hasNext: false
+            ))
         XCTAssertEqual(canonicalNodeIds(graph, canonicalKey), ["p1", "p2", "p3", "p4", "p5", "p6"])
 
         // Leader refetch with the same page must reset the canonical to just leader.
-        docs.normalize(plan: plan, variables: ["first": 3], data: buildConnection(
-            ids: ["p1", "p2", "p3"], startCursor: "p1", endCursor: "p3", hasNext: true
-        ))
+        docs.normalize(
+            plan: plan, variables: ["first": 3],
+            data: buildConnection(
+                ids: ["p1", "p2", "p3"], startCursor: "p1", endCursor: "p3", hasNext: true
+            ))
         XCTAssertEqual(canonicalNodeIds(graph, canonicalKey), ["p1", "p2", "p3"])
 
         let pageInfoKey = "\(canonicalKey).pageInfo"
@@ -125,11 +133,13 @@ final class CanonicalLeaderTests: XCTestCase {
         let (graph, planner, _, docs) = makeStack()
         let plan = try planner.getPlan(.source(postsQuery))
 
-        docs.normalize(plan: plan, variables: ["first": 3], data: buildConnection(
-            ids: ["p1", "p2", "p3"],
-            startCursor: "p1", endCursor: "p3", hasNext: true,
-            totalCount: 100
-        ))
+        docs.normalize(
+            plan: plan, variables: ["first": 3],
+            data: buildConnection(
+                ids: ["p1", "p2", "p3"],
+                startCursor: "p1", endCursor: "p3", hasNext: true,
+                totalCount: 100
+            ))
 
         let canonicalKey: CacheKey = "@connection.posts({})"
         XCTAssertEqual(graph.getField(canonicalKey, "totalCount")?.int, 100)
@@ -146,7 +156,7 @@ final class CanonicalLeaderTests: XCTestCase {
             .object([
                 "__typename": "PostEdge",
                 "cursor": .string(id),
-                "node": .object(["__typename": "Post", "id": .string(id), "title": .string(id)])
+                "node": .object(["__typename": "Post", "id": .string(id), "title": .string(id)]),
             ])
         }
         let payload: JSONValue = .object([

@@ -12,14 +12,14 @@ import XCTest
 final class TypedAPIDocumentRoutingTests: XCTestCase {
 
     private static let fullSource = """
-    query BugReproPosts {
-        posts @connection(mode: "infinite") {
-            __typename
-            pageInfo { __typename hasNextPage }
-            edges { __typename cursor node { __typename id title } }
+        query BugReproPosts {
+            posts @connection(mode: "infinite") {
+                __typename
+                pageInfo { __typename hasNextPage }
+                edges { __typename cursor node { __typename id title } }
+            }
         }
-    }
-    """
+        """
     private static let strippedNetworkQuery: String = {
         let parsed = try! Parser.parse(fullSource)
         return buildNetworkQuery(from: parsed)
@@ -54,15 +54,16 @@ final class TypedAPIDocumentRoutingTests: XCTestCase {
     }
 
     private static let mutationPlan: CachePlan = {
-        try! Compiler.compilePlan(source: """
-        mutation BugReproRefresh {
-            posts @connection(mode: "infinite") {
-                __typename
-                pageInfo { __typename hasNextPage }
-                edges { __typename cursor node { __typename id title } }
-            }
-        }
-        """)
+        try! Compiler.compilePlan(
+            source: """
+                mutation BugReproRefresh {
+                    posts @connection(mode: "infinite") {
+                        __typename
+                        pageInfo { __typename hasNextPage }
+                        edges { __typename cursor node { __typename id title } }
+                    }
+                }
+                """)
     }()
     private struct BugReproRefresh: CachebayOperation {
         typealias Variables = EmptyVariables
@@ -71,15 +72,16 @@ final class TypedAPIDocumentRoutingTests: XCTestCase {
     }
 
     private static let subscriptionPlan: CachePlan = {
-        try! Compiler.compilePlan(source: """
-        subscription BugReproStream {
-            posts @connection(mode: "infinite") {
-                __typename
-                pageInfo { __typename hasNextPage }
-                edges { __typename cursor node { __typename id title } }
-            }
-        }
-        """)
+        try! Compiler.compilePlan(
+            source: """
+                subscription BugReproStream {
+                    posts @connection(mode: "infinite") {
+                        __typename
+                        pageInfo { __typename hasNextPage }
+                        edges { __typename cursor node { __typename id title } }
+                    }
+                }
+                """)
     }()
     private struct BugReproStream: CachebayOperation {
         typealias Variables = EmptyVariables
@@ -95,7 +97,7 @@ final class TypedAPIDocumentRoutingTests: XCTestCase {
                 .object([
                     "__typename": .string("PostEdge"), "cursor": .string("c1"),
                     "node": .object(["__typename": .string("Post"), "id": .string("p1"), "title": .string("First")]),
-                ]),
+                ])
             ]),
         ])
     ])
@@ -111,16 +113,19 @@ final class TypedAPIDocumentRoutingTests: XCTestCase {
     // INTEGRATION: typed watch + optimistic linkNode against the canonical re-fires.
     func test_integration_typedWatch_thenOptimisticAddNode_firesWatcher() async throws {
         let http = MockHTTPTransport()
-        http.whenQueryContains("BugReproPosts", respondWith: .object([
-            "posts": .object([
-                "__typename": .string("PostConnection"),
-                "edges": .array([]),
-                "pageInfo": .object(["__typename": .string("PageInfo"), "hasNextPage": .bool(false)]),
-            ])
-        ]))
-        let client = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: http), cachePolicy: .cacheAndNetwork, suspensionTimeout: 0
-        ))
+        http.whenQueryContains(
+            "BugReproPosts",
+            respondWith: .object([
+                "posts": .object([
+                    "__typename": .string("PostConnection"),
+                    "edges": .array([]),
+                    "pageInfo": .object(["__typename": .string("PageInfo"), "hasNextPage": .bool(false)]),
+                ])
+            ]))
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: http), cachePolicy: .cacheAndNetwork, suspensionTimeout: 0
+            ))
 
         let received = CaptureBox<[PostsData]>(value: [])
         _ = try client.watch(BugReproPosts.self, variables: .init(), immediate: true) { data in received.value.append(data) }
@@ -138,7 +143,8 @@ final class TypedAPIDocumentRoutingTests: XCTestCase {
             b.connection(key: "@connection.posts({})").linkNode(.key("Post:p1"), options: LinkNodeOptions(position: .start))
         }.dispose()
 
-        XCTAssertGreaterThan(received.value.count, countAfterNetwork,
+        XCTAssertGreaterThan(
+            received.value.count, countAfterNetwork,
             "watcher must re-fire after the optimistic linkNode against the canonical")
         XCTAssertEqual(received.value.last?.posts.edges.count, 1)
         XCTAssertEqual(received.value.last?.posts.edges.first?.node.id, "p1")
@@ -148,9 +154,10 @@ final class TypedAPIDocumentRoutingTests: XCTestCase {
     func test_typedExecuteMutation_normalizesConnectionResponseIntoCanonical() async throws {
         let http = MockHTTPTransport()
         http.whenQueryContains("BugReproRefresh", respondWith: Self.connectionResponse)
-        let client = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: http), cachePolicy: .cacheAndNetwork, suspensionTimeout: 0
-        ))
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: http), cachePolicy: .cacheAndNetwork, suspensionTimeout: 0
+            ))
         _ = try await client.execute(mutation: BugReproRefresh.self, variables: .init())
 
         let connectionRecords = client.graph.keysList().filter { $0.hasPrefix("@connection.") && $0.contains(".posts(") }
@@ -161,9 +168,10 @@ final class TypedAPIDocumentRoutingTests: XCTestCase {
     // Subscription frame with a @connection field normalizes into the canonical.
     func test_typedExecuteSubscription_normalizesConnectionFrameIntoCanonical() async throws {
         let ws = MockWSTransport(frames: [Self.connectionResponse])
-        let client = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport(), ws: ws), cachePolicy: .cacheAndNetwork, suspensionTimeout: 0
-        ))
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport(), ws: ws), cachePolicy: .cacheAndNetwork, suspensionTimeout: 0
+            ))
         let stream = try client.executeSubscription(BugReproStream.self, variables: .init())
         for try await _ in stream { break }
 

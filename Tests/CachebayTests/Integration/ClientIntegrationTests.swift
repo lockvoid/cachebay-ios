@@ -4,25 +4,28 @@ import XCTest
 final class ClientIntegrationTests: XCTestCase {
     private func makeClient(http: MockHTTPTransport? = nil, ws: MockWSTransport? = nil) -> (CachebayClient, MockHTTPTransport) {
         let transport = http ?? MockHTTPTransport()
-        let client = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: transport, ws: ws),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: transport, ws: ws),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
         return (client, transport)
     }
 
     func test_executeQuery_cacheFirst_misses_then_hits() async throws {
         let http = MockHTTPTransport()
-        http.whenQueryContains("post", respondWith: .object([
-            "post": .object([
-                "__typename": "Post", "id": "p1", "title": "Hello"
-            ])
-        ]))
+        http.whenQueryContains(
+            "post",
+            respondWith: .object([
+                "post": .object([
+                    "__typename": "Post", "id": "p1", "title": "Hello",
+                ])
+            ]))
         let (client, _) = makeClient(http: http)
         let q = """
-        query Post($id: ID!) { post(id: $id) { id title } }
-        """
+            query Post($id: ID!) { post(id: $id) { id title } }
+            """
 
         let first = try await client.executeQuery(query: q, variables: ["id": "p1"])
         XCTAssertEqual(first.meta?.source, .network)
@@ -43,27 +46,33 @@ final class ClientIntegrationTests: XCTestCase {
 
     func test_readQuery_writeQuery_roundtrip() throws {
         let (client, _) = makeClient()
-        try client.writeQuery(query: "query { me { id name } }", data: .object([
-            "me": .object(["__typename": "User", "id": "u1", "name": "Alice"])
-        ]))
+        try client.writeQuery(
+            query: "query { me { id name } }",
+            data: .object([
+                "me": .object(["__typename": "User", "id": "u1", "name": "Alice"])
+            ]))
         let read = client.readQuery(query: "query { me { id name } }")
         XCTAssertEqual(read?["me"]?["name"]?.string, "Alice")
     }
 
     func test_watchQuery_emits_initial_and_updates() async throws {
         let http = MockHTTPTransport()
-        http.whenQueryContains("post", respondWith: .object([
-            "post": .object(["__typename": "Post", "id": "p1", "title": "Hello"])
-        ]))
+        http.whenQueryContains(
+            "post",
+            respondWith: .object([
+                "post": .object(["__typename": "Post", "id": "p1", "title": "Hello"])
+            ]))
         let (client, _) = makeClient(http: http)
         let q = "query Post($id: ID!) { post(id: $id) { id title } }"
 
         let captured = CaptureBox<[JSONValue]>(value: [])
-        let handle = try client.watchQuery(query: q, options: WatchQueryOptions(
-            variables: ["id": "p1"],
-            immediate: true,
-            onData: { data in captured.append(data) }
-        ))
+        let handle = try client.watchQuery(
+            query: q,
+            options: WatchQueryOptions(
+                variables: ["id": "p1"],
+                immediate: true,
+                onData: { data in captured.append(data) }
+            ))
 
         let first = try await client.executeQuery(query: q, variables: ["id": "p1"])
         XCTAssertEqual(first.data?["post"]?["title"]?.string, "Hello")
@@ -72,9 +81,11 @@ final class ClientIntegrationTests: XCTestCase {
         try await Task.sleep(nanoseconds: 20_000_000)
 
         // writeFragment should trigger the watcher via dep tracking.
-        try client.writeFragment(id: "Post:p1", fragment: "fragment P on Post { title }", data: .object([
-            "__typename": "Post", "id": "p1", "title": "Updated"
-        ]))
+        try client.writeFragment(
+            id: "Post:p1", fragment: "fragment P on Post { title }",
+            data: .object([
+                "__typename": "Post", "id": "p1", "title": "Updated",
+            ]))
         try await Task.sleep(nanoseconds: 30_000_000)
         handle.unsubscribe()
 
@@ -85,20 +96,25 @@ final class ClientIntegrationTests: XCTestCase {
 
     func test_writeFragment_then_readFragment() throws {
         let (client, _) = makeClient()
-        try client.writeFragment(id: "Post:p1", fragment: """
-        fragment PostFields on Post { id title }
-        """, data: .object([
-            "__typename": "Post", "id": "p1", "title": "Hello"
-        ]))
+        try client.writeFragment(
+            id: "Post:p1",
+            fragment: """
+                fragment PostFields on Post { id title }
+                """,
+            data: .object([
+                "__typename": "Post", "id": "p1", "title": "Hello",
+            ]))
         let read = client.readFragment(id: "Post:p1", fragment: "fragment PostFields on Post { id title }")
         XCTAssertEqual(read?["title"]?.string, "Hello")
     }
 
     func test_optimistic_patch_and_revert() throws {
         let (client, _) = makeClient()
-        try client.writeFragment(id: "Post:p1", fragment: "fragment P on Post { id title }", data: .object([
-            "__typename": "Post", "id": "p1", "title": "Original"
-        ]))
+        try client.writeFragment(
+            id: "Post:p1", fragment: "fragment P on Post { id title }",
+            data: .object([
+                "__typename": "Post", "id": "p1", "title": "Original",
+            ]))
 
         let tx = client.modifyOptimistic { builder in
             builder.patch(.key("Post:p1"), ["title": "Optimistic"], mode: .merge)

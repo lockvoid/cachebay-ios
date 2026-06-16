@@ -45,7 +45,7 @@ final class TypedDecodePerfTests: XCTestCase {
 
         let t0 = CFAbsoluteTimeGetCurrent()
         var a = 0
-        for _ in 0..<m { for msg in msgs { a &+= Int(msg.score) } }   // direct field load
+        for _ in 0..<m { for msg in msgs { a &+= Int(msg.score) } }  // direct field load
         let eager = CFAbsoluteTimeGetCurrent() - t0
 
         let t1 = CFAbsoluteTimeGetCurrent()
@@ -57,7 +57,9 @@ final class TypedDecodePerfTests: XCTestCase {
         // Informational (wall-clock asserts are flaky in CI). The number is the
         // gate-wk6 deliverable: eager field reads beat lazy dict reads, and the
         // bigger wins are pay-once-at-materialize + free synthesized Equatable.
-        print(String(format: "[perf] read-ratio N=%d M=%d (%d reads): eager=%.2fms lazy=%.2fms speedup=%.1fx",
-                     n, m, n * m, eager * 1000, lazy * 1000, lazy / max(eager, 1e-9)))
+        print(
+            String(
+                format: "[perf] read-ratio N=%d M=%d (%d reads): eager=%.2fms lazy=%.2fms speedup=%.1fx",
+                n, m, n * m, eager * 1000, lazy * 1000, lazy / max(eager, 1e-9)))
     }
 }

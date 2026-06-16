@@ -12,14 +12,16 @@ final class NormalizeMaterializeTests: XCTestCase {
 
     func test_simple_entity_roundtrip() throws {
         let (_, planner, _, documents) = makeStack()
-        let plan = try planner.getPlan(.source("""
-        query Q($id: ID!) {
-            post(id: $id) {
-                id
-                title
-            }
-        }
-        """))
+        let plan = try planner.getPlan(
+            .source(
+                """
+                query Q($id: ID!) {
+                    post(id: $id) {
+                        id
+                        title
+                    }
+                }
+                """))
         let data: JSONValue = .object([
             "post": .object([
                 "__typename": "Post",
@@ -41,14 +43,16 @@ final class NormalizeMaterializeTests: XCTestCase {
 
     func test_array_of_entities() throws {
         let (_, planner, _, documents) = makeStack()
-        let plan = try planner.getPlan(.source("""
-        query Q {
-            posts {
-                id
-                title
-            }
-        }
-        """))
+        let plan = try planner.getPlan(
+            .source(
+                """
+                query Q {
+                    posts {
+                        id
+                        title
+                    }
+                }
+                """))
         let data: JSONValue = .object([
             "posts": .array([
                 .object(["__typename": "Post", "id": "p1", "title": "A"]),
@@ -67,14 +71,16 @@ final class NormalizeMaterializeTests: XCTestCase {
 
     func test_connection_infinite_first_page() throws {
         let (_, planner, _, documents) = makeStack()
-        let plan = try planner.getPlan(.source("""
-        query Posts($first: Int, $after: String) {
-            posts(first: $first, after: $after) @connection(mode: "infinite") {
-                pageInfo { endCursor hasNextPage }
-                edges { cursor node { id title } }
-            }
-        }
-        """))
+        let plan = try planner.getPlan(
+            .source(
+                """
+                query Posts($first: Int, $after: String) {
+                    posts(first: $first, after: $after) @connection(mode: "infinite") {
+                        pageInfo { endCursor hasNextPage }
+                        edges { cursor node { id title } }
+                    }
+                }
+                """))
         let vars: [String: JSONValue] = ["first": 2, "after": .null]
         let data: JSONValue = .object([
             "posts": .object([
@@ -88,12 +94,12 @@ final class NormalizeMaterializeTests: XCTestCase {
                     .object([
                         "__typename": "PostEdge",
                         "cursor": "c1",
-                        "node": .object(["__typename": "Post", "id": "p1", "title": "A"])
+                        "node": .object(["__typename": "Post", "id": "p1", "title": "A"]),
                     ]),
                     .object([
                         "__typename": "PostEdge",
                         "cursor": "c2",
-                        "node": .object(["__typename": "Post", "id": "p2", "title": "B"])
+                        "node": .object(["__typename": "Post", "id": "p2", "title": "B"]),
                     ]),
                 ]),
             ])
@@ -116,14 +122,16 @@ final class NormalizeMaterializeTests: XCTestCase {
 
     func test_connection_infinite_append_next_page_dedup() throws {
         let (_, planner, _, documents) = makeStack()
-        let plan = try planner.getPlan(.source("""
-        query Posts($first: Int, $after: String) {
-            posts(first: $first, after: $after) @connection(mode: "infinite") {
-                pageInfo { endCursor hasNextPage }
-                edges { cursor node { id title } }
-            }
-        }
-        """))
+        let plan = try planner.getPlan(
+            .source(
+                """
+                query Posts($first: Int, $after: String) {
+                    posts(first: $first, after: $after) @connection(mode: "infinite") {
+                        pageInfo { endCursor hasNextPage }
+                        edges { cursor node { id title } }
+                    }
+                }
+                """))
         let firstVars: [String: JSONValue] = ["first": 2, "after": .null]
         let firstData: JSONValue = .object([
             "posts": .object([
@@ -170,37 +178,43 @@ final class NormalizeMaterializeTests: XCTestCase {
 
     func test_connection_page_mode_replace() throws {
         let (_, planner, _, documents) = makeStack()
-        let plan = try planner.getPlan(.source("""
-        query Posts($first: Int, $after: String) {
-            posts(first: $first, after: $after) @connection(mode: "page") {
-                pageInfo { endCursor hasNextPage }
-                edges { cursor node { id title } }
-            }
-        }
-        """))
+        let plan = try planner.getPlan(
+            .source(
+                """
+                query Posts($first: Int, $after: String) {
+                    posts(first: $first, after: $after) @connection(mode: "page") {
+                        pageInfo { endCursor hasNextPage }
+                        edges { cursor node { id title } }
+                    }
+                }
+                """))
         let vars1: [String: JSONValue] = ["first": 2, "after": .null]
-        documents.normalize(plan: plan, variables: vars1, data: .object([
-            "posts": .object([
-                "__typename": "PostConnection",
-                "pageInfo": .object(["__typename": "PageInfo", "endCursor": "c2", "hasNextPage": true]),
-                "edges": .array([
-                    .object(["__typename": "PostEdge", "cursor": "c1", "node": .object(["__typename": "Post", "id": "p1", "title": "A"])]),
-                    .object(["__typename": "PostEdge", "cursor": "c2", "node": .object(["__typename": "Post", "id": "p2", "title": "B"])]),
-                ]),
-            ])
-        ]))
+        documents.normalize(
+            plan: plan, variables: vars1,
+            data: .object([
+                "posts": .object([
+                    "__typename": "PostConnection",
+                    "pageInfo": .object(["__typename": "PageInfo", "endCursor": "c2", "hasNextPage": true]),
+                    "edges": .array([
+                        .object(["__typename": "PostEdge", "cursor": "c1", "node": .object(["__typename": "Post", "id": "p1", "title": "A"])]),
+                        .object(["__typename": "PostEdge", "cursor": "c2", "node": .object(["__typename": "Post", "id": "p2", "title": "B"])]),
+                    ]),
+                ])
+            ]))
 
         let vars2: [String: JSONValue] = ["first": 2, "after": "c2"]
-        documents.normalize(plan: plan, variables: vars2, data: .object([
-            "posts": .object([
-                "__typename": "PostConnection",
-                "pageInfo": .object(["__typename": "PageInfo", "endCursor": "c4", "hasNextPage": false]),
-                "edges": .array([
-                    .object(["__typename": "PostEdge", "cursor": "c3", "node": .object(["__typename": "Post", "id": "p3", "title": "C"])]),
-                    .object(["__typename": "PostEdge", "cursor": "c4", "node": .object(["__typename": "Post", "id": "p4", "title": "D"])]),
-                ]),
-            ])
-        ]))
+        documents.normalize(
+            plan: plan, variables: vars2,
+            data: .object([
+                "posts": .object([
+                    "__typename": "PostConnection",
+                    "pageInfo": .object(["__typename": "PageInfo", "endCursor": "c4", "hasNextPage": false]),
+                    "edges": .array([
+                        .object(["__typename": "PostEdge", "cursor": "c3", "node": .object(["__typename": "Post", "id": "p3", "title": "C"])]),
+                        .object(["__typename": "PostEdge", "cursor": "c4", "node": .object(["__typename": "Post", "id": "p4", "title": "D"])]),
+                    ]),
+                ])
+            ]))
 
         let result = documents.materialize(plan: plan, variables: vars2)
         let edges = result.data["posts"]?["edges"]?.array ?? []

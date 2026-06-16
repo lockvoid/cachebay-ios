@@ -16,13 +16,13 @@ final class GeneratedSmokeTests: XCTestCase {
                 "category": .string("Charm"),
                 "effect": .string("Creates light"),
                 // creator / light / imageUrl / wikiUrl omitted -> optionals
-            ]),
+            ])
         ]
         let data = SpellDetail.Data(_dataDict: dict)
         XCTAssertEqual(data?.spell?.name, "Lumos")
         XCTAssertEqual(data?.spell?.category, "Charm")
-        XCTAssertNil(data?.spell?.creator)        // optional, absent
-        XCTAssertEqual(data?.spell?.id, "s1")     // Identifiable via lifted id
+        XCTAssertNil(data?.spell?.creator)  // optional, absent
+        XCTAssertEqual(data?.spell?.id, "s1")  // Identifiable via lifted id
     }
 
     func test_generated_fragment_typename_guard() {
@@ -58,11 +58,11 @@ final class GeneratedSmokeTests: XCTestCase {
                 "__typename": .string("Spell"),
                 "id": .string("s1"),
                 "name": .string("Lumos"),
-                "kind": .string("CHARM"),          // known -> .known(.charm)
-                "mood": .string("NOSUCHMOOD"),     // unknown nullable enum -> .unknown
-                "state": .string("active"),        // plain String! — stays String
+                "kind": .string("CHARM"),  // known -> .known(.charm)
+                "mood": .string("NOSUCHMOOD"),  // unknown nullable enum -> .unknown
+                "state": .string("active"),  // plain String! — stays String
                 "tags": .array([.string("OFFENSIVE"), .string("MYSTERY"), .string("UTILITY")]),
-            ]),
+            ])
         ]
         let spell = SpellEnumDetail.Data(_dataDict: dict)?.spell
         XCTAssertNotNil(spell)
@@ -102,10 +102,10 @@ final class GeneratedSmokeTests: XCTestCase {
         // Unrecognized typename -> .unknown(Shared); the hoisted shared `derivatives`
         // is still carried (proving Shared and the hoisted type compose).
         let pdf: [String: JSONValue] = [
-            "__typename": .string("PdfElement"),   // not narrowed in this fragment
+            "__typename": .string("PdfElement"),  // not narrowed in this fragment
             "id": .string("e9"),
             "derivatives": .array([
-                .object(["__typename": .string("Cook"), "id": .string("c9"), "key": .string("k9")]),
+                .object(["__typename": .string("Cook"), "id": .string("c9"), "key": .string("k9")])
             ]),
         ]
         let e = ElementFields.Data(_dataDict: pdf)
@@ -127,9 +127,10 @@ final class GeneratedSmokeTests: XCTestCase {
     // server-shaped payload, round-trip, and confirm GraphQLEnum (known + unknown)
     // survives. SpellEnumDetail.Data + .Spell are concrete → Codable.
     func test_generated_codable_roundTrip() throws {
-        let json = Data(#"""
-        {"spell":{"__typename":"Spell","id":"s1","name":"Lumos","kind":"CHARM","mood":"HEX","state":"active","tags":["OFFENSIVE","MYSTERY"]}}
-        """#.utf8)
+        let json = Data(
+            #"""
+            {"spell":{"__typename":"Spell","id":"s1","name":"Lumos","kind":"CHARM","mood":"HEX","state":"active","tags":["OFFENSIVE","MYSTERY"]}}
+            """#.utf8)
         let data = try JSONDecoder().decode(SpellEnumDetail.Data.self, from: json)
         XCTAssertEqual(data.spell?.name, "Lumos")
         XCTAssertEqual(data.spell?.kind, .known(.charm))
@@ -149,11 +150,11 @@ final class GeneratedSmokeTests: XCTestCase {
                 "__typename": .string("Spell"),
                 "id": .string("s1"),
                 "name": .string("Lumos"),
-                "kind": .string("PORTAL"),         // server added a case this build doesn't know
+                "kind": .string("PORTAL"),  // server added a case this build doesn't know
                 "state": .string("active"),
                 "tags": .array([]),
                 // mood omitted -> optional nil
-            ]),
+            ])
         ]
         let spell = SpellEnumDetail.Data(_dataDict: dict)?.spell
         XCTAssertNotNil(spell, "unknown value on a non-null enum must NOT fail the record")

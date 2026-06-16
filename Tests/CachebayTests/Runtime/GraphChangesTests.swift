@@ -141,15 +141,19 @@ final class GraphChangesTests: XCTestCase {
     func test_object_sameStructure_doesNotEmit() {
         let count = CaptureBox<Int>(value: 0)
         let g = makeGraph { _ in count.withLock { $0 += 1 } }
-        g.putRecord("User:u1", [
-            "__typename": .string("User"),
-            "id": .string("u1"),
-            "address": .object(["city": .string("NYC"), "country": .string("USA")]),
-        ])
+        g.putRecord(
+            "User:u1",
+            [
+                "__typename": .string("User"),
+                "id": .string("u1"),
+                "address": .object(["city": .string("NYC"), "country": .string("USA")]),
+            ])
         g.flush()
-        g.putRecord("User:u1", [
-            "address": .object(["city": .string("NYC"), "country": .string("USA")]),
-        ])
+        g.putRecord(
+            "User:u1",
+            [
+                "address": .object(["city": .string("NYC"), "country": .string("USA")])
+            ])
         g.flush()
         XCTAssertEqual(count.value, 1)
     }
@@ -157,15 +161,19 @@ final class GraphChangesTests: XCTestCase {
     func test_object_contentChange_emits() {
         let count = CaptureBox<Int>(value: 0)
         let g = makeGraph { _ in count.withLock { $0 += 1 } }
-        g.putRecord("User:u1", [
-            "__typename": .string("User"),
-            "id": .string("u1"),
-            "address": .object(["city": .string("NYC")]),
-        ])
+        g.putRecord(
+            "User:u1",
+            [
+                "__typename": .string("User"),
+                "id": .string("u1"),
+                "address": .object(["city": .string("NYC")]),
+            ])
         g.flush()
-        g.putRecord("User:u1", [
-            "address": .object(["city": .string("LA")]),
-        ])
+        g.putRecord(
+            "User:u1",
+            [
+                "address": .object(["city": .string("LA")])
+            ])
         g.flush()
         XCTAssertEqual(count.value, 2)
     }
@@ -173,11 +181,13 @@ final class GraphChangesTests: XCTestCase {
     func test_array_sameContent_doesNotEmit() {
         let count = CaptureBox<Int>(value: 0)
         let g = makeGraph { _ in count.withLock { $0 += 1 } }
-        g.putRecord("User:u1", [
-            "__typename": .string("User"),
-            "id": .string("u1"),
-            "tags": .array([.string("a"), .string("b")]),
-        ])
+        g.putRecord(
+            "User:u1",
+            [
+                "__typename": .string("User"),
+                "id": .string("u1"),
+                "tags": .array([.string("a"), .string("b")]),
+            ])
         g.flush()
         g.putRecord("User:u1", ["tags": .array([.string("a"), .string("b")])])
         g.flush()
@@ -187,11 +197,13 @@ final class GraphChangesTests: XCTestCase {
     func test_array_lengthChange_emits() {
         let count = CaptureBox<Int>(value: 0)
         let g = makeGraph { _ in count.withLock { $0 += 1 } }
-        g.putRecord("User:u1", [
-            "__typename": .string("User"),
-            "id": .string("u1"),
-            "tags": .array([.string("a")]),
-        ])
+        g.putRecord(
+            "User:u1",
+            [
+                "__typename": .string("User"),
+                "id": .string("u1"),
+                "tags": .array([.string("a")]),
+            ])
         g.flush()
         g.putRecord("User:u1", ["tags": .array([.string("a"), .string("b")])])
         g.flush()
@@ -293,9 +305,10 @@ final class GraphChangesTests: XCTestCase {
 
     func test_onChange_notifiesListenerOnFlush() {
         let changes = CaptureBox<[Set<CacheKey>]>(value: [])
-        let g = Graph(options: GraphOptions(onChange: { touched in
-            changes.withLock { $0.append(touched) }
-        }))
+        let g = Graph(
+            options: GraphOptions(onChange: { touched in
+                changes.withLock { $0.append(touched) }
+            }))
         g.putRecord("User:u1", ["__typename": .string("User"), "id": .string("u1"), "name": .string("John")])
         g.flush()
         XCTAssertEqual(changes.value.count, 1)
@@ -304,9 +317,10 @@ final class GraphChangesTests: XCTestCase {
 
     func test_onChange_batchesMultipleChanges() {
         let changes = CaptureBox<[Set<CacheKey>]>(value: [])
-        let g = Graph(options: GraphOptions(onChange: { touched in
-            changes.withLock { $0.append(touched) }
-        }))
+        let g = Graph(
+            options: GraphOptions(onChange: { touched in
+                changes.withLock { $0.append(touched) }
+            }))
         g.putRecord("User:u1", ["__typename": .string("User"), "id": .string("u1"), "name": .string("John")])
         g.putRecord("User:u2", ["__typename": .string("User"), "id": .string("u2"), "name": .string("Jane")])
         g.putRecord("Post:p1", ["__typename": .string("Post"), "id": .string("p1"), "title": .string("T")])
@@ -319,9 +333,10 @@ final class GraphChangesTests: XCTestCase {
 
     func test_onChange_rootIDFanout_emitsFieldDeps() {
         let changes = CaptureBox<[Set<CacheKey>]>(value: [])
-        let g = Graph(options: GraphOptions(onChange: { touched in
-            changes.withLock { $0.append(touched) }
-        }))
+        let g = Graph(
+            options: GraphOptions(onChange: { touched in
+                changes.withLock { $0.append(touched) }
+            }))
         g.putRecord(CachebayConstants.rootID, ["users": .ref("User:u1")])
         g.flush()
         XCTAssertEqual(changes.value.count, 1)
@@ -331,9 +346,10 @@ final class GraphChangesTests: XCTestCase {
 
     func test_onChange_notifiesOnRemove() {
         let changes = CaptureBox<[Set<CacheKey>]>(value: [])
-        let g = Graph(options: GraphOptions(onChange: { touched in
-            changes.withLock { $0.append(touched) }
-        }))
+        let g = Graph(
+            options: GraphOptions(onChange: { touched in
+                changes.withLock { $0.append(touched) }
+            }))
         g.putRecord("User:u1", ["__typename": .string("User"), "id": .string("u1"), "name": .string("John")])
         g.flush()
         changes.withLock { $0.removeAll() }
@@ -345,9 +361,10 @@ final class GraphChangesTests: XCTestCase {
 
     func test_onChange_notNotified_whenNoChanges() {
         let changes = CaptureBox<[Set<CacheKey>]>(value: [])
-        let g = Graph(options: GraphOptions(onChange: { touched in
-            changes.withLock { $0.append(touched) }
-        }))
+        let g = Graph(
+            options: GraphOptions(onChange: { touched in
+                changes.withLock { $0.append(touched) }
+            }))
         g.putRecord("User:u1", ["__typename": .string("User"), "id": .string("u1"), "name": .string("John")])
         g.flush()
         changes.withLock { $0.removeAll() }
@@ -360,18 +377,20 @@ final class GraphChangesTests: XCTestCase {
 
     func test_flush_doesNothing_whenNoPending() {
         let changes = CaptureBox<[Set<CacheKey>]>(value: [])
-        let g = Graph(options: GraphOptions(onChange: { touched in
-            changes.withLock { $0.append(touched) }
-        }))
+        let g = Graph(
+            options: GraphOptions(onChange: { touched in
+                changes.withLock { $0.append(touched) }
+            }))
         g.flush()
         XCTAssertEqual(changes.value.count, 0)
     }
 
     func test_flush_clearsPending_afterCall() {
         let changes = CaptureBox<[Set<CacheKey>]>(value: [])
-        let g = Graph(options: GraphOptions(onChange: { touched in
-            changes.withLock { $0.append(touched) }
-        }))
+        let g = Graph(
+            options: GraphOptions(onChange: { touched in
+                changes.withLock { $0.append(touched) }
+            }))
         g.putRecord("User:u1", ["__typename": .string("User"), "id": .string("u1"), "name": .string("John")])
         g.flush()
         XCTAssertEqual(changes.value.count, 1)
@@ -382,9 +401,10 @@ final class GraphChangesTests: XCTestCase {
 
     func test_flush_callableManyTimes_safely() {
         let changes = CaptureBox<[Set<CacheKey>]>(value: [])
-        let g = Graph(options: GraphOptions(onChange: { touched in
-            changes.withLock { $0.append(touched) }
-        }))
+        let g = Graph(
+            options: GraphOptions(onChange: { touched in
+                changes.withLock { $0.append(touched) }
+            }))
         g.flush()
         g.flush()
         g.flush()
@@ -393,9 +413,10 @@ final class GraphChangesTests: XCTestCase {
 
     func test_flush_allowsNewChanges_afterFlush() {
         let changes = CaptureBox<[Set<CacheKey>]>(value: [])
-        let g = Graph(options: GraphOptions(onChange: { touched in
-            changes.withLock { $0.append(touched) }
-        }))
+        let g = Graph(
+            options: GraphOptions(onChange: { touched in
+                changes.withLock { $0.append(touched) }
+            }))
         g.putRecord("User:u1", ["__typename": .string("User"), "id": .string("u1"), "name": .string("John")])
         g.flush()
         XCTAssertEqual(changes.value.count, 1)

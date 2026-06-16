@@ -12,8 +12,8 @@ import Cachebay
 /// interface (`videoElement` selected, `audioElement` not).
 @CachebayInterface
 enum ExhaustiveElement: Identifiable, Sendable, Hashable, CachebayValue {
-    case videoElement(VideoElement)   // selected: carries a variant-only field
-    case audioElement(AudioElement)   // NOT selected: interface fields only
+    case videoElement(VideoElement)  // selected: carries a variant-only field
+    case audioElement(AudioElement)  // NOT selected: interface fields only
     case unknown(Shared)
 
     @CachebayData(typename: "")

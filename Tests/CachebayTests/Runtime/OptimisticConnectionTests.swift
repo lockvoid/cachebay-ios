@@ -14,11 +14,12 @@ import XCTest
 final class OptimisticConnectionTests: XCTestCase {
 
     private func makeClient() -> CachebayClient {
-        CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
     }
 
     private let canonicalKey: CacheKey = "@connection.posts({})"
@@ -33,16 +34,20 @@ final class OptimisticConnectionTests: XCTestCase {
     private func seedTwoEdges(_ client: CachebayClient) {
         // Seed entity records via direct graph writes — linkNode is purely
         // structural and does not write entity scalars.
-        client.graph.replaceRecord("Post:p1", [
-            CachebayConstants.typenameField: .string("Post"),
-            "id": .string("p1"),
-            "title": .string("A"),
-        ])
-        client.graph.replaceRecord("Post:p2", [
-            CachebayConstants.typenameField: .string("Post"),
-            "id": .string("p2"),
-            "title": .string("B"),
-        ])
+        client.graph.replaceRecord(
+            "Post:p1",
+            [
+                CachebayConstants.typenameField: .string("Post"),
+                "id": .string("p1"),
+                "title": .string("A"),
+            ])
+        client.graph.replaceRecord(
+            "Post:p2",
+            [
+                CachebayConstants.typenameField: .string("Post"),
+                "id": .string("p2"),
+                "title": .string("B"),
+            ])
         client.graph.flush()
         let selector = ConnectionSelector(parent: .key("Query"), key: "posts")
         client.modifyOptimistic { b in
@@ -154,8 +159,8 @@ final class OptimisticConnectionTests: XCTestCase {
         let selector = ConnectionSelector(parent: .key("Query"), key: "posts")
         client.modifyOptimistic { b in
             b.connection(selector).unlinkNode(.key("Post:p1"))
-            b.connection(selector).unlinkNode(.key("Post:p1"))     // again — must not throw / bork the list
-            b.connection(selector).unlinkNode(.key("Post:p1"))     // and again
+            b.connection(selector).unlinkNode(.key("Post:p1"))  // again — must not throw / bork the list
+            b.connection(selector).unlinkNode(.key("Post:p1"))  // and again
         }.dispose()
 
         XCTAssertEqual(nodeIds(client), ["Post:p2"])

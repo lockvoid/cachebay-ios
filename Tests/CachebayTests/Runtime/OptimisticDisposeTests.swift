@@ -16,11 +16,12 @@ import XCTest
 final class OptimisticDisposeTests: XCTestCase {
 
     private func makeClient() -> CachebayClient {
-        CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
     }
 
     /// The bug-driving case: optimistic patches one field; server
@@ -30,12 +31,14 @@ final class OptimisticDisposeTests: XCTestCase {
     func test_dispose_preservesServerUpdates_thatLandedAfterOptimisticPhase() {
         let client = makeClient()
         // Pre-seed Project:42 with two fields.
-        client.graph.replaceRecord("Project:42", [
-            CachebayConstants.typenameField: .string("Project"),
-            "id": .string("42"),
-            "name": .string("Original"),
-            "clips": .refList(["TimelineClip:c1"]),
-        ])
+        client.graph.replaceRecord(
+            "Project:42",
+            [
+                CachebayConstants.typenameField: .string("Project"),
+                "id": .string("42"),
+                "name": .string("Original"),
+                "clips": .refList(["TimelineClip:c1"]),
+            ])
         client.graph.flush()
 
         // Optimistic phase: only patch `name`.
@@ -48,21 +51,25 @@ final class OptimisticDisposeTests: XCTestCase {
         // Simulate server-cycle normalize landing BETWEEN optimistic
         // and dispose: server updated `name` to its authoritative
         // value AND added a new clip to the refList.
-        client.graph.putRecord("Project:42", [
-            "name": .string("ServerName"),
-            "clips": .refList(["TimelineClip:c1", "TimelineClip:c2-cloned"]),
-        ])
+        client.graph.putRecord(
+            "Project:42",
+            [
+                "name": .string("ServerName"),
+                "clips": .refList(["TimelineClip:c1", "TimelineClip:c2-cloned"]),
+            ])
         client.graph.flush()
 
         // Dispose — drop layer, don't revert anything.
         tx.dispose()
 
         // Both fields keep the server-authoritative values.
-        XCTAssertEqual(client.graph.getField("Project:42", "name")?.string, "ServerName",
-                       "dispose must NOT restore pre-optimistic 'name' = Original; server's value must survive")
-        XCTAssertEqual(client.graph.getField("Project:42", "clips")?.refList,
-                       ["TimelineClip:c1", "TimelineClip:c2-cloned"],
-                       "dispose must NOT restore pre-optimistic 'clips' refList; server-added clip must survive")
+        XCTAssertEqual(
+            client.graph.getField("Project:42", "name")?.string, "ServerName",
+            "dispose must NOT restore pre-optimistic 'name' = Original; server's value must survive")
+        XCTAssertEqual(
+            client.graph.getField("Project:42", "clips")?.refList,
+            ["TimelineClip:c1", "TimelineClip:c2-cloned"],
+            "dispose must NOT restore pre-optimistic 'clips' refList; server-added clip must survive")
     }
 
     /// Disposing a layer that touches a different record than other
@@ -80,16 +87,20 @@ final class OptimisticDisposeTests: XCTestCase {
     /// matches the single-layer-per-mutation pattern in production.)
     func test_dispose_layer_doesNotAffectUnrelatedLayers() {
         let client = makeClient()
-        client.graph.replaceRecord("Project:42", [
-            CachebayConstants.typenameField: .string("Project"),
-            "id": .string("42"),
-            "name": .string("Original"),
-        ])
-        client.graph.replaceRecord("Project:99", [
-            CachebayConstants.typenameField: .string("Project"),
-            "id": .string("99"),
-            "name": .string("Other"),
-        ])
+        client.graph.replaceRecord(
+            "Project:42",
+            [
+                CachebayConstants.typenameField: .string("Project"),
+                "id": .string("42"),
+                "name": .string("Original"),
+            ])
+        client.graph.replaceRecord(
+            "Project:99",
+            [
+                CachebayConstants.typenameField: .string("Project"),
+                "id": .string("99"),
+                "name": .string("Other"),
+            ])
         client.graph.flush()
 
         let l1 = client.modifyOptimistic { b in
@@ -109,8 +120,9 @@ final class OptimisticDisposeTests: XCTestCase {
         // L2 is still revertible — its own baseline (Project:99 →
         // "Other") is intact.
         l2.revert()
-        XCTAssertEqual(client.graph.getField("Project:99", "name")?.string, "Other",
-                       "L2.revert restores its own baseline; dispose of L1 doesn't affect L2's revert path")
+        XCTAssertEqual(
+            client.graph.getField("Project:99", "name")?.string, "Other",
+            "L2.revert restores its own baseline; dispose of L1 doesn't affect L2's revert path")
     }
 
     /// Dispose drops the baseline only when no other layer touches
@@ -118,11 +130,13 @@ final class OptimisticDisposeTests: XCTestCase {
     /// see a stale baseline after dispose.
     func test_dispose_dropsBaselineOnly_whenNoOtherLayerTouches() {
         let client = makeClient()
-        client.graph.replaceRecord("Project:42", [
-            CachebayConstants.typenameField: .string("Project"),
-            "id": .string("42"),
-            "name": .string("Original"),
-        ])
+        client.graph.replaceRecord(
+            "Project:42",
+            [
+                CachebayConstants.typenameField: .string("Project"),
+                "id": .string("42"),
+                "name": .string("Original"),
+            ])
         client.graph.flush()
 
         let l1 = client.modifyOptimistic { b in
@@ -140,7 +154,8 @@ final class OptimisticDisposeTests: XCTestCase {
         // After L2 revert, name should be "L1" (the state when L2
         // started capturing baseline) — NOT "Original" (L1's old
         // baseline). Proves L1's baseline was dropped on dispose.
-        XCTAssertEqual(client.graph.getField("Project:42", "name")?.string, "L1",
-                       "dispose dropped L1's baseline; L2's baseline = current state ('L1'); L2.revert() restores 'L1', not 'Original'")
+        XCTAssertEqual(
+            client.graph.getField("Project:42", "name")?.string, "L1",
+            "dispose dropped L1's baseline; L2's baseline = current state ('L1'); L2.revert() restores 'L1', not 'Original'")
     }
 }

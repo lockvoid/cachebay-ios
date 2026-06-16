@@ -27,11 +27,12 @@ final class OperationsSubscriptionTests: XCTestCase {
     /// injection so each frame can be normalised.
     func test_executeSubscription_sendsNetworkQueryWithTypename_toTransport() async throws {
         let recorder = QueryRecordingWSTransport()
-        let client = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport(), ws: recorder),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport(), ws: recorder),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
         _ = try client.executeSubscription(query: messageAdded)
         // Wait until subscribe has been invoked (stream gets its
         // continuation in subscribe()).
@@ -59,25 +60,27 @@ final class OperationsSubscriptionTests: XCTestCase {
     /// collision).
     func test_subscription_independentTopics_bothNormalize() async throws {
         let posts = MockWSTransport(frames: [
-            .object(["messageAdded": .object(["__typename": "Message", "id": "m1", "text": "Hello"])]),
+            .object(["messageAdded": .object(["__typename": "Message", "id": "m1", "text": "Hello"])])
         ])
         let users = MockWSTransport(frames: [
-            .object(["userUpdated": .object(["__typename": "User", "id": "u1", "name": "Alice"])]),
+            .object(["userUpdated": .object(["__typename": "User", "id": "u1", "name": "Alice"])])
         ])
 
         // Two clients to drive two distinct streams concurrently — the
         // alternative would be a stage-driven mock; one client per
         // subscription is simpler and equivalent for this assertion.
-        let postsClient = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport(), ws: posts),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
-        let usersClient = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport(), ws: users),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        let postsClient = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport(), ws: posts),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
+        let usersClient = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport(), ws: users),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
 
         let postsStream = try postsClient.executeSubscription(query: messageAdded)
         let usersStream = try usersClient.executeSubscription(query: userUpdated)
@@ -111,11 +114,12 @@ final class OperationsSubscriptionTests: XCTestCase {
             .object(["messageAdded": .object(["__typename": "Message", "id": "m2", "text": "Second"])]),
             .object(["messageAdded": .object(["__typename": "Message", "id": "m3", "text": "Third"])]),
         ])
-        let client = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport(), ws: ws),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport(), ws: ws),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
 
         var collected: [String] = []
         let stream = try client.executeSubscription(query: messageAdded)
@@ -143,11 +147,12 @@ final class OperationsSubscriptionTests: XCTestCase {
             .object(["messageAdded": .object(["__typename": "Message", "id": "m1", "text": "v2"])]),
             .object(["messageAdded": .object(["__typename": "Message", "id": "m1", "text": "v3"])]),
         ])
-        let client = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport(), ws: ws),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport(), ws: ws),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
 
         // Seed the entity so the watcher's initial materialize is OK.
         try client.writeQuery(
@@ -194,11 +199,12 @@ final class OperationsSubscriptionTests: XCTestCase {
     /// the stream consumer as an error frame, NOT a data frame.
     func test_subscription_errorFrame_yieldsErrorFrame() async throws {
         let staged = StagedWSTransport()
-        let client = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport(), ws: staged),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport(), ws: staged),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
 
         let stream = try client.executeSubscription(query: messageAdded)
 
@@ -212,7 +218,7 @@ final class OperationsSubscriptionTests: XCTestCase {
                     if event.error != nil { sawError = true }
                     if event.data != nil { sawData = true }
                 }
-            } catch { /* benign */ }
+            } catch { /* benign */  }
             return (sawError, sawData)
         }
         // Wait for subscriber to register the continuation.
@@ -242,11 +248,12 @@ final class OperationsSubscriptionTests: XCTestCase {
     /// missing scalars and source = .canonical.
     func test_subscription_materializationFailure_yieldsErrorFrame_thenContinues() async throws {
         let staged = StagedWSTransport()
-        let client = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport(), ws: staged),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport(), ws: staged),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
 
         let stream = try client.executeSubscription(query: messageAdded)
         let task = Task { @Sendable in
@@ -257,7 +264,7 @@ final class OperationsSubscriptionTests: XCTestCase {
                     if let t = event.data?["messageAdded"]?["text"]?.string { dataTexts.append(t) }
                     if let e = event.error?.networkError { errorMessages.append(e) }
                 }
-            } catch { /* OK */ }
+            } catch { /* OK */  }
             return (dataTexts, errorMessages)
         }
         try await staged.awaitSubscribed()
@@ -265,13 +272,15 @@ final class OperationsSubscriptionTests: XCTestCase {
         // Normalize writes nothing for messageAdded → materialize hard-misses
         // on the entity ref → source = .none → executeSubscription yields
         // an error frame.
-        staged.emit(.object([
-            "garbage": .int(1)
-        ]))
+        staged.emit(
+            .object([
+                "garbage": .int(1)
+            ]))
         // Frame 2: well-formed — stream must continue and deliver this.
-        staged.emit(.object([
-            "messageAdded": .object(["__typename": "Message", "id": "m2", "text": "Recovered"])
-        ]))
+        staged.emit(
+            .object([
+                "messageAdded": .object(["__typename": "Message", "id": "m2", "text": "Recovered"])
+            ]))
         staged.finish()
         let (dataTexts, errorMessages) = await task.value
         XCTAssertTrue(
@@ -291,11 +300,12 @@ final class OperationsSubscriptionTests: XCTestCase {
     /// the `for try await` loop must exit without throwing.
     func test_subscription_serverFinish_closesStreamCleanly() async throws {
         let staged = StagedWSTransport()
-        let client = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport(), ws: staged),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport(), ws: staged),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
 
         let stream = try client.executeSubscription(query: messageAdded)
         let task = Task { @Sendable in
@@ -310,9 +320,10 @@ final class OperationsSubscriptionTests: XCTestCase {
             return (seen, "")
         }
         try await staged.awaitSubscribed()
-        staged.emit(.object([
-            "messageAdded": .object(["__typename": "Message", "id": "x1", "text": "Bye"])
-        ]))
+        staged.emit(
+            .object([
+                "messageAdded": .object(["__typename": "Message", "id": "x1", "text": "Bye"])
+            ]))
         staged.finish()
         let (seen, errMsg) = await task.value
         if seen == -1 {
@@ -329,11 +340,12 @@ final class OperationsSubscriptionTests: XCTestCase {
     /// graph.
     func test_subscription_taskCancel_terminatesStream() async throws {
         let staged = StagedWSTransport()
-        let client = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport(), ws: staged),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport(), ws: staged),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
 
         let stream = try client.executeSubscription(query: messageAdded)
         let consumer = Task { @Sendable in
@@ -343,13 +355,14 @@ final class OperationsSubscriptionTests: XCTestCase {
                     if event.data != nil { n += 1 }
                     if n == 1 { break }
                 }
-            } catch { /* OK */ }
+            } catch { /* OK */  }
             return n
         }
         try await staged.awaitSubscribed()
-        staged.emit(.object([
-            "messageAdded": .object(["__typename": "Message", "id": "k1", "text": "T1"])
-        ]))
+        staged.emit(
+            .object([
+                "messageAdded": .object(["__typename": "Message", "id": "k1", "text": "T1"])
+            ]))
         let consumed = await consumer.value
         XCTAssertEqual(consumed, 1)
 

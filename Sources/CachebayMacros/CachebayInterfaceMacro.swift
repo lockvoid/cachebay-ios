@@ -76,7 +76,8 @@ enum CachebayEnumExpansion {
         }
 
         let unknown = variants.first(where: { $0.isUnknown })
-        let sharedProps: [CachebayProperty] = unknown
+        let sharedProps: [CachebayProperty] =
+            unknown
             .flatMap { nestedStructs[$0.typeName] }
             .map { CachebayDataMacro.storedProperties(of: $0) } ?? []
 
@@ -101,12 +102,12 @@ enum CachebayEnumExpansion {
                 "case .\(v.caseName)(let v): return v.\(p.name)"
             }.joined(separator: "\n")
             return """
-            public var \(raw: p.name): \(raw: p.type.trimmedDescription) {
-            switch self {
-            \(raw: arms)
-            }
-            }
-            """
+                public var \(raw: p.name): \(raw: p.type.trimmedDescription) {
+                switch self {
+                \(raw: arms)
+                }
+                }
+                """
         }
     }
 
@@ -129,10 +130,10 @@ enum CachebayEnumExpansion {
         }
         let body = lines.joined(separator: "\n")
         return """
-        @_spi(Cachebay) public init?(_dataDict dict: [String: Cachebay.JSONValue]) {
-        \(raw: body)
-        }
-        """
+            @_spi(Cachebay) public init?(_dataDict dict: [String: Cachebay.JSONValue]) {
+            \(raw: body)
+            }
+            """
     }
 
     static func makeDataDict(variants: [Variant]) -> DeclSyntax {
@@ -140,12 +141,12 @@ enum CachebayEnumExpansion {
             "case .\(v.caseName)(let v): return v.__dataDict()"
         }.joined(separator: "\n")
         return """
-        @_spi(Cachebay) public func __dataDict() -> [String: Cachebay.JSONValue] {
-        switch self {
-        \(raw: arms)
-        }
-        }
-        """
+            @_spi(Cachebay) public func __dataDict() -> [String: Cachebay.JSONValue] {
+            switch self {
+            \(raw: arms)
+            }
+            }
+            """
     }
 
     static func makeConformance() -> [DeclSyntax] {

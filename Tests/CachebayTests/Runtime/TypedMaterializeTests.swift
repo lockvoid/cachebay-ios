@@ -56,21 +56,21 @@ private enum Element: Identifiable, Sendable, Hashable, CachebayValue {
 }
 
 private let cookQuerySource = """
-query GetCook($id: ID!) {
-  cook(id: $id) {
-    __typename
-    id
-    title
-    elements {
-      __typename
-      id
-      ... on VideoElement { url duration }
-      ... on AudioElement { waveformURL }
-      ... on ImageElement { thumbnailURL }
+    query GetCook($id: ID!) {
+      cook(id: $id) {
+        __typename
+        id
+        title
+        elements {
+          __typename
+          id
+          ... on VideoElement { url duration }
+          ... on AudioElement { waveformURL }
+          ... on ImageElement { thumbnailURL }
+        }
+      }
     }
-  }
-}
-"""
+    """
 
 private struct GetCook: CachebayOperation {
     struct Variables: OperationVariables {
@@ -83,10 +83,11 @@ private struct GetCook: CachebayOperation {
 
 final class TypedMaterializeTests: XCTestCase {
     private func makeStack() -> (Graph, Documents) {
-        let graph = Graph(options: GraphOptions(
-            keys: [:],
-            interfaces: ["Element": ["VideoElement", "AudioElement", "ImageElement"]]
-        ))
+        let graph = Graph(
+            options: GraphOptions(
+                keys: [:],
+                interfaces: ["Element": ["VideoElement", "AudioElement", "ImageElement"]]
+            ))
         let documents = Documents(graph: graph, planner: Planner(), canonical: Canonical(graph: graph))
         return (graph, documents)
     }
@@ -94,25 +95,35 @@ final class TypedMaterializeTests: XCTestCase {
     private static let query = cookQuerySource
 
     private func seedCook(_ graph: Graph) {
-        graph.putRecord("VideoElement:v1", [
-            "__typename": .string("VideoElement"), "id": .string("v1"),
-            "url": .string("https://x.com/v1.mp4"), "duration": .double(12.5),
-        ])
-        graph.putRecord("AudioElement:a1", [
-            "__typename": .string("AudioElement"), "id": .string("a1"),
-            "waveformURL": .string("https://x.com/a1.wav"),
-        ])
+        graph.putRecord(
+            "VideoElement:v1",
+            [
+                "__typename": .string("VideoElement"), "id": .string("v1"),
+                "url": .string("https://x.com/v1.mp4"), "duration": .double(12.5),
+            ])
+        graph.putRecord(
+            "AudioElement:a1",
+            [
+                "__typename": .string("AudioElement"), "id": .string("a1"),
+                "waveformURL": .string("https://x.com/a1.wav"),
+            ])
         // PdfElement is NOT narrowed in the query -> interface-level fields only.
-        graph.putRecord("PdfElement:p1", [
-            "__typename": .string("PdfElement"), "id": .string("p1"),
-        ])
-        graph.putRecord("Cook:c1", [
-            "__typename": .string("Cook"), "id": .string("c1"), "title": .string("Pasta"),
-            "elements": .refList(["VideoElement:v1", "AudioElement:a1", "PdfElement:p1"]),
-        ])
-        graph.putRecord(CachebayConstants.rootID, [
-            "cook({\"id\":\"c1\"})": .ref("Cook:c1"),
-        ])
+        graph.putRecord(
+            "PdfElement:p1",
+            [
+                "__typename": .string("PdfElement"), "id": .string("p1"),
+            ])
+        graph.putRecord(
+            "Cook:c1",
+            [
+                "__typename": .string("Cook"), "id": .string("c1"), "title": .string("Pasta"),
+                "elements": .refList(["VideoElement:v1", "AudioElement:a1", "PdfElement:p1"]),
+            ])
+        graph.putRecord(
+            CachebayConstants.rootID,
+            [
+                "cook({\"id\":\"c1\"})": .ref("Cook:c1")
+            ])
     }
 
     func test_typedDecode_interface_list_and_unknown() throws {
@@ -159,14 +170,18 @@ final class TypedMaterializeTests: XCTestCase {
         // (putRecord merges, so we can't drop a field by re-writing).
         let (graph, documents) = makeStack()
         let plan = try Compiler.compilePlan(source: Self.query)
-        graph.putRecord("VideoElement:v1", [
-            "__typename": .string("VideoElement"), "id": .string("v1"),
-            "duration": .double(1),   // no url
-        ])
-        graph.putRecord("Cook:c1", [
-            "__typename": .string("Cook"), "id": .string("c1"), "title": .string("Pasta"),
-            "elements": .refList(["VideoElement:v1"]),
-        ])
+        graph.putRecord(
+            "VideoElement:v1",
+            [
+                "__typename": .string("VideoElement"), "id": .string("v1"),
+                "duration": .double(1),  // no url
+            ])
+        graph.putRecord(
+            "Cook:c1",
+            [
+                "__typename": .string("Cook"), "id": .string("c1"), "title": .string("Pasta"),
+                "elements": .refList(["VideoElement:v1"]),
+            ])
         graph.putRecord(CachebayConstants.rootID, ["cook({\"id\":\"c1\"})": .ref("Cook:c1")])
 
         let result = documents.materialize(plan: plan, variables: ["id": .string("c1")])
@@ -178,10 +193,11 @@ final class TypedMaterializeTests: XCTestCase {
 
     // The public typed client API: client.read(_:variables:) -> Op.Data?.
     func test_client_read_typedOperation() {
-        let client = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            interfaces: ["Element": ["VideoElement", "AudioElement", "ImageElement"]]
-        ))
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                interfaces: ["Element": ["VideoElement", "AudioElement", "ImageElement"]]
+            ))
         seedCook(client.graph)
 
         let data = client.read(GetCook.self, variables: .init(id: "c1"))
@@ -197,22 +213,29 @@ final class TypedMaterializeTests: XCTestCase {
     // eagerly-decoded typed data.
     func test_client_execute_network_typed() async throws {
         let http = MockHTTPTransport()
-        http.whenQueryContains("cook", respondWith: .object([
-            "cook": .object([
-                "__typename": .string("Cook"), "id": .string("c1"), "title": .string("Pasta"),
-                "elements": .array([
-                    .object(["__typename": .string("VideoElement"), "id": .string("v1"),
-                             "url": .string("https://x.com/v1.mp4"), "duration": .double(12.5)]),
-                    .object(["__typename": .string("AudioElement"), "id": .string("a1"),
-                             "waveformURL": .string("https://x.com/a1.wav")]),
-                    .object(["__typename": .string("PdfElement"), "id": .string("p1")]),
-                ]),
-            ]),
-        ]))
-        let client = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: http),
-            interfaces: ["Element": ["VideoElement", "AudioElement", "ImageElement"]]
-        ))
+        http.whenQueryContains(
+            "cook",
+            respondWith: .object([
+                "cook": .object([
+                    "__typename": .string("Cook"), "id": .string("c1"), "title": .string("Pasta"),
+                    "elements": .array([
+                        .object([
+                            "__typename": .string("VideoElement"), "id": .string("v1"),
+                            "url": .string("https://x.com/v1.mp4"), "duration": .double(12.5),
+                        ]),
+                        .object([
+                            "__typename": .string("AudioElement"), "id": .string("a1"),
+                            "waveformURL": .string("https://x.com/a1.wav"),
+                        ]),
+                        .object(["__typename": .string("PdfElement"), "id": .string("p1")]),
+                    ]),
+                ])
+            ]))
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: http),
+                interfaces: ["Element": ["VideoElement", "AudioElement", "ImageElement"]]
+            ))
 
         let result = try await client.execute(GetCook.self, variables: .init(id: "c1"))
         XCTAssertNil(result.error)

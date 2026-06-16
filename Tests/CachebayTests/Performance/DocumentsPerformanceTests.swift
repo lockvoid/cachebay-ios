@@ -30,9 +30,11 @@ final class DocumentsPerformanceTests: XCTestCase {
     func test_secondCall_isHot_andEqualToFirst() throws {
         let (_, documents) = makeStack()
         let p = try plan("query GetUser($id: ID!) { user(id: $id) { id name } }")
-        documents.normalize(plan: p, variables: ["id": "1"], data: .object([
-            "user": .object(["__typename": "User", "id": "1", "name": "Alice"])
-        ]))
+        documents.normalize(
+            plan: p, variables: ["id": "1"],
+            data: .object([
+                "user": .object(["__typename": "User", "id": "1", "name": "Alice"])
+            ]))
 
         let opts = MaterializeOptions(canonical: true, fingerprint: true, preferCache: true, updateCache: true)
         let r1 = documents.materialize(plan: p, variables: ["id": "1"], options: opts)
@@ -51,9 +53,11 @@ final class DocumentsPerformanceTests: XCTestCase {
     func test_preferCacheFalse_bypassesCache_alwaysCold() throws {
         let (_, documents) = makeStack()
         let p = try plan("query GetUser($id: ID!) { user(id: $id) { id name } }")
-        documents.normalize(plan: p, variables: ["id": "1"], data: .object([
-            "user": .object(["__typename": "User", "id": "1", "name": "Alice"])
-        ]))
+        documents.normalize(
+            plan: p, variables: ["id": "1"],
+            data: .object([
+                "user": .object(["__typename": "User", "id": "1", "name": "Alice"])
+            ]))
 
         let force = MaterializeOptions(canonical: true, fingerprint: true, preferCache: false, updateCache: true)
         let r1 = documents.materialize(plan: p, variables: ["id": "1"], options: force)
@@ -69,12 +73,16 @@ final class DocumentsPerformanceTests: XCTestCase {
     func test_differentVariables_haveSeparateCacheEntries() throws {
         let (_, documents) = makeStack()
         let p = try plan("query GetUser($id: ID!) { user(id: $id) { id name } }")
-        documents.normalize(plan: p, variables: ["id": "1"], data: .object([
-            "user": .object(["__typename": "User", "id": "1", "name": "Alice"])
-        ]))
-        documents.normalize(plan: p, variables: ["id": "2"], data: .object([
-            "user": .object(["__typename": "User", "id": "2", "name": "Bob"])
-        ]))
+        documents.normalize(
+            plan: p, variables: ["id": "1"],
+            data: .object([
+                "user": .object(["__typename": "User", "id": "1", "name": "Alice"])
+            ]))
+        documents.normalize(
+            plan: p, variables: ["id": "2"],
+            data: .object([
+                "user": .object(["__typename": "User", "id": "2", "name": "Bob"])
+            ]))
 
         let opts = MaterializeOptions(preferCache: true, updateCache: true)
         let r1a = documents.materialize(plan: p, variables: ["id": "1"], options: opts)
@@ -95,9 +103,11 @@ final class DocumentsPerformanceTests: XCTestCase {
     func test_canonicalAndStrict_haveSeparateCacheEntries() throws {
         let (_, documents) = makeStack()
         let p = try plan("query GetUser($id: ID!) { user(id: $id) { id name } }")
-        documents.normalize(plan: p, variables: ["id": "1"], data: .object([
-            "user": .object(["__typename": "User", "id": "1", "name": "Alice"])
-        ]))
+        documents.normalize(
+            plan: p, variables: ["id": "1"],
+            data: .object([
+                "user": .object(["__typename": "User", "id": "1", "name": "Alice"])
+            ]))
 
         let canonOpts = MaterializeOptions(canonical: true, preferCache: true, updateCache: true)
         let strictOpts = MaterializeOptions(canonical: false, preferCache: true, updateCache: true)
@@ -144,9 +154,11 @@ final class DocumentsPerformanceTests: XCTestCase {
     func test_dataChangeWithForce_updatesCacheForFutureHits() throws {
         let (_, documents) = makeStack()
         let p = try plan("query GetUser($id: ID!) { user(id: $id) { id name } }")
-        documents.normalize(plan: p, variables: ["id": "1"], data: .object([
-            "user": .object(["__typename": "User", "id": "1", "name": "Alice"])
-        ]))
+        documents.normalize(
+            plan: p, variables: ["id": "1"],
+            data: .object([
+                "user": .object(["__typename": "User", "id": "1", "name": "Alice"])
+            ]))
 
         let prefer = MaterializeOptions(preferCache: true, updateCache: true)
         let force = MaterializeOptions(preferCache: false, updateCache: true)
@@ -157,9 +169,11 @@ final class DocumentsPerformanceTests: XCTestCase {
         XCTAssertEqual(r1.data["user"]?["name"]?.string, "Alice")
 
         // Update underlying graph data.
-        documents.normalize(plan: p, variables: ["id": "1"], data: .object([
-            "user": .object(["__typename": "User", "id": "1", "name": "Alice Updated"])
-        ]))
+        documents.normalize(
+            plan: p, variables: ["id": "1"],
+            data: .object([
+                "user": .object(["__typename": "User", "id": "1", "name": "Alice Updated"])
+            ]))
 
         // preferCache returns OLD cached result.
         let r2 = documents.materialize(plan: p, variables: ["id": "1"], options: prefer)
@@ -185,13 +199,15 @@ final class DocumentsPerformanceTests: XCTestCase {
         let (_, documents) = makeStack()
         let p = try plan("query GetUser($id: ID!) { user(id: $id) { id name } }")
         for i in 1...10 {
-            documents.normalize(plan: p, variables: ["id": .string(String(i))], data: .object([
-                "user": .object([
-                    "__typename": "User",
-                    "id": .string(String(i)),
-                    "name": .string("User \(i)"),
-                ])
-            ]))
+            documents.normalize(
+                plan: p, variables: ["id": .string(String(i))],
+                data: .object([
+                    "user": .object([
+                        "__typename": "User",
+                        "id": .string(String(i)),
+                        "name": .string("User \(i)"),
+                    ])
+                ]))
         }
 
         let opts = MaterializeOptions(preferCache: true, updateCache: true)
@@ -233,11 +249,13 @@ final class DocumentsPerformanceTests: XCTestCase {
     func test_emptyVariables_areCachedOnce() throws {
         let (_, documents) = makeStack()
         let p = try plan("query GetAllUsers { users { id name } }")
-        documents.normalize(plan: p, variables: [:], data: .object([
-            "users": .array([
-                .object(["__typename": "User", "id": "1", "name": "Alice"]),
-            ])
-        ]))
+        documents.normalize(
+            plan: p, variables: [:],
+            data: .object([
+                "users": .array([
+                    .object(["__typename": "User", "id": "1", "name": "Alice"])
+                ])
+            ]))
 
         let opts = MaterializeOptions(preferCache: true, updateCache: true)
         let r1 = documents.materialize(plan: p, variables: [:], options: opts)
@@ -254,9 +272,11 @@ final class DocumentsPerformanceTests: XCTestCase {
     func test_fingerprintTrue_andFalse_haveSeparateCacheEntries() throws {
         let (_, documents) = makeStack()
         let p = try plan("query GetUser($id: ID!) { user(id: $id) { id name } }")
-        documents.normalize(plan: p, variables: ["id": "1"], data: .object([
-            "user": .object(["__typename": "User", "id": "1", "name": "Alice"])
-        ]))
+        documents.normalize(
+            plan: p, variables: ["id": "1"],
+            data: .object([
+                "user": .object(["__typename": "User", "id": "1", "name": "Alice"])
+            ]))
 
         let fpOn = MaterializeOptions(fingerprint: true, preferCache: true, updateCache: true)
         let fpOff = MaterializeOptions(fingerprint: false, preferCache: true, updateCache: true)
@@ -273,7 +293,8 @@ final class DocumentsPerformanceTests: XCTestCase {
 
         // fingerprint:true emits __version on the fingerprints tree.
         if case .object(let o) = r1.fingerprints,
-           case .int(let v) = o[CachebayConstants.fingerprintKey] ?? .undefined {
+            case .int(let v) = o[CachebayConstants.fingerprintKey] ?? .undefined
+        {
             XCTAssertGreaterThan(v, 0)
         } else {
             XCTFail("fingerprint:true must populate root __version")

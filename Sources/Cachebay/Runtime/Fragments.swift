@@ -117,8 +117,7 @@ public final class Fragments: @unchecked Sendable {
         for d in w.deps {
             if var set = depIndex[d] {
                 set.remove(id)
-                if set.isEmpty { depIndex.removeValue(forKey: d) }
-                else { depIndex[d] = set }
+                if set.isEmpty { depIndex.removeValue(forKey: d) } else { depIndex[d] = set }
             }
         }
         if var set = signatureToWatchers[w.signature] {
@@ -239,8 +238,7 @@ public final class Fragments: @unchecked Sendable {
         for d in old where !next.contains(d) {
             if var set = depIndex[d] {
                 set.remove(id)
-                if set.isEmpty { depIndex.removeValue(forKey: d) }
-                else { depIndex[d] = set }
+                if set.isEmpty { depIndex.removeValue(forKey: d) } else { depIndex[d] = set }
             }
         }
         for d in next where !old.contains(d) {

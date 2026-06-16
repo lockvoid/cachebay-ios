@@ -19,11 +19,12 @@ final class OperationsCachePolicyTests: XCTestCase {
         suspensionTimeout: TimeInterval = 0,
         http: MockHTTPTransport = MockHTTPTransport()
     ) -> (CachebayClient, MockHTTPTransport) {
-        let client = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: http),
-            cachePolicy: defaultPolicy,
-            suspensionTimeout: suspensionTimeout
-        ))
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: http),
+                cachePolicy: defaultPolicy,
+                suspensionTimeout: suspensionTimeout
+            ))
         return (client, http)
     }
 
@@ -401,26 +402,26 @@ final class OperationsCachePolicyTests: XCTestCase {
     func test_suspensionWindow_doesNotReuseAcrossDifferentStrictSignatures() async throws {
         let (client, http) = makeClient(suspensionTimeout: 1.0)
         let pagedQuery = """
-        query GetPosts($first: Int!, $after: String) {
-            posts(first: $first, after: $after) {
-                edges { cursor node { id title } }
-                pageInfo { hasNextPage endCursor }
+            query GetPosts($first: Int!, $after: String) {
+                posts(first: $first, after: $after) {
+                    edges { cursor node { id title } }
+                    pageInfo { hasNextPage endCursor }
+                }
             }
-        }
-        """
+            """
         let firstPage: JSONValue = .object([
             "posts": .object([
                 "__typename": "PostConnection",
                 "edges": .array([
                     .object([
                         "__typename": "PostEdge", "cursor": "c1",
-                        "node": .object(["__typename": "Post", "id": "1", "title": "First"])
+                        "node": .object(["__typename": "Post", "id": "1", "title": "First"]),
                     ])
                 ]),
                 "pageInfo": .object([
                     "__typename": "PageInfo",
-                    "hasNextPage": true, "endCursor": "c1"
-                ])
+                    "hasNextPage": true, "endCursor": "c1",
+                ]),
             ])
         ])
         let secondPage: JSONValue = .object([
@@ -429,13 +430,13 @@ final class OperationsCachePolicyTests: XCTestCase {
                 "edges": .array([
                     .object([
                         "__typename": "PostEdge", "cursor": "c2",
-                        "node": .object(["__typename": "Post", "id": "2", "title": "Second"])
+                        "node": .object(["__typename": "Post", "id": "2", "title": "Second"]),
                     ])
                 ]),
                 "pageInfo": .object([
                     "__typename": "PageInfo",
-                    "hasNextPage": false, "endCursor": "c2"
-                ])
+                    "hasNextPage": false, "endCursor": "c2",
+                ]),
             ])
         ])
         http.whenQueryContains("posts") { vars in
@@ -490,9 +491,11 @@ final class OperationsCachePolicyTests: XCTestCase {
     /// arg) — keeps signature/canonicalisation deterministic.
     func test_executeQuery_missingVariables_defaultsToEmptyDict() async throws {
         let (client, http) = makeClient()
-        http.whenQueryContains("me", respondWith: .object([
-            "me": .object(["__typename": "User", "id": "u1", "name": "Alice"])
-        ]))
+        http.whenQueryContains(
+            "me",
+            respondWith: .object([
+                "me": .object(["__typename": "User", "id": "u1", "name": "Alice"])
+            ]))
         _ = try await client.executeQuery(query: "query { me { id name } }", cachePolicy: .networkOnly)
 
         XCTAssertEqual(http.calls.count, 1)

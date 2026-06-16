@@ -60,12 +60,13 @@ final class EvictAllStorageTests: XCTestCase {
         let recorder = RecordingStorage()
         let factory: StorageAdapterFactory = { _ in recorder }
 
-        let client = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0,
-            storage: factory
-        ))
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0,
+                storage: factory
+            ))
 
         // Pre-condition: storage hasn't been evicted yet.
         XCTAssertEqual(recorder.evictAllCallCount, 0)

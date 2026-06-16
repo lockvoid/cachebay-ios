@@ -30,38 +30,38 @@ final class ReadQueryPerfTests: XCTestCase {
     static let itemsPerProject = 140
 
     static let projectsQuery = """
-    query ProjectsQuery($orderBy: String!) {
-      projects(orderBy: $orderBy) @connection(key: "projects", filter: ["orderBy"]) {
-        edges {
-          cursor
-          node {
-            __typename
-            id
-            title
-            body
-            author
-            likes
-            count
-            items {
+        query ProjectsQuery($orderBy: String!) {
+          projects(orderBy: $orderBy) @connection(key: "projects", filter: ["orderBy"]) {
+            edges {
+              cursor
+              node {
+                __typename
+                id
+                title
+                body
+                author
+                likes
+                count
+                items {
+                  __typename
+                  id
+                  title
+                  body
+                  author
+                  likes
+                  rank
+                  tag
+                }
+              }
+            }
+            pageInfo {
               __typename
-              id
-              title
-              body
-              author
-              likes
-              rank
-              tag
+              hasNextPage
+              hasPreviousPage
             }
           }
         }
-        pageInfo {
-          __typename
-          hasNextPage
-          hasPreviousPage
-        }
-      }
-    }
-    """
+        """
 
     static func vars() -> [String: JSONValue] {
         ["orderBy": .string("UPDATED_AT")]
@@ -76,51 +76,54 @@ final class ReadQueryPerfTests: XCTestCase {
             var items: [JSONValue] = []
             items.reserveCapacity(itemsPerProject)
             for i in 0..<itemsPerProject {
-                items.append(.object([
-                    "__typename": .string("Item"),
-                    "id":         .string("p\(p)-i\(i)"),
-                    "title":      .string("Item title \(p)-\(i)"),
-                    "body":       .string("Item body  \(p)-\(i)"),
-                    "author":     .string("Author \(p)"),
-                    "likes":      .int(Int64(i)),
-                    "rank":       .int(Int64(i % 10)),
-                    "tag":        .string("tag-\(i % 5)"),
-                ]))
+                items.append(
+                    .object([
+                        "__typename": .string("Item"),
+                        "id": .string("p\(p)-i\(i)"),
+                        "title": .string("Item title \(p)-\(i)"),
+                        "body": .string("Item body  \(p)-\(i)"),
+                        "author": .string("Author \(p)"),
+                        "likes": .int(Int64(i)),
+                        "rank": .int(Int64(i % 10)),
+                        "tag": .string("tag-\(i % 5)"),
+                    ]))
             }
-            edges.append(.object([
-                "__typename": .string("ProjectEdge"),
-                "cursor":     .string("c-p\(p)"),
-                "node": .object([
-                    "__typename": .string("Project"),
-                    "id":         .string("p\(p)"),
-                    "title":      .string("Project \(p)"),
-                    "body":       .string("Description for project \(p)"),
-                    "author":     .string("Author \(p)"),
-                    "likes":      .int(Int64(p * 10)),
-                    "count":      .int(Int64(itemsPerProject)),
-                    "items":      .array(items),
-                ]),
-            ]))
+            edges.append(
+                .object([
+                    "__typename": .string("ProjectEdge"),
+                    "cursor": .string("c-p\(p)"),
+                    "node": .object([
+                        "__typename": .string("Project"),
+                        "id": .string("p\(p)"),
+                        "title": .string("Project \(p)"),
+                        "body": .string("Description for project \(p)"),
+                        "author": .string("Author \(p)"),
+                        "likes": .int(Int64(p * 10)),
+                        "count": .int(Int64(itemsPerProject)),
+                        "items": .array(items),
+                    ]),
+                ]))
         }
         return .object([
             "projects": .object([
                 "__typename": .string("ProjectConnection"),
-                "edges":      .array(edges),
+                "edges": .array(edges),
                 "pageInfo": .object([
-                    "__typename":      .string("PageInfo"),
-                    "hasNextPage":     .bool(false),
+                    "__typename": .string("PageInfo"),
+                    "hasNextPage": .bool(false),
                     "hasPreviousPage": .bool(false),
                 ]),
-            ]),
+            ])
         ])
     }
 
     private func makeClient() -> CachebayClient {
-        CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
     }
 
     /// Self-timed harness — mirrors the cachebay-native ReadQueryPerfTests
@@ -138,7 +141,7 @@ final class ReadQueryPerfTests: XCTestCase {
             let t0 = CFAbsoluteTimeGetCurrent()
             body()
             let t1 = CFAbsoluteTimeGetCurrent()
-            samples.append((t1 - t0) * 1_000_000) // microseconds
+            samples.append((t1 - t0) * 1_000_000)  // microseconds
         }
         samples.sort()
         let minV = samples.first ?? 0
@@ -146,14 +149,15 @@ final class ReadQueryPerfTests: XCTestCase {
         let p99 = samples[Int(Double(samples.count) * 0.99)]
         let maxV = samples.last ?? 0
         let mean = samples.reduce(0, +) / Double(samples.count)
-        print("""
-        ⏱  \(label) (n=\(iterations))
-            min:    \(String(format: "%.2f", minV)) µs
-            median: \(String(format: "%.2f", median)) µs
-            mean:   \(String(format: "%.2f", mean)) µs
-            p99:    \(String(format: "%.2f", p99)) µs
-            max:    \(String(format: "%.2f", maxV)) µs
-        """)
+        print(
+            """
+            ⏱  \(label) (n=\(iterations))
+                min:    \(String(format: "%.2f", minV)) µs
+                median: \(String(format: "%.2f", median)) µs
+                mean:   \(String(format: "%.2f", mean)) µs
+                p99:    \(String(format: "%.2f", p99)) µs
+                max:    \(String(format: "%.2f", maxV)) µs
+            """)
     }
 
     // MARK: - 1. Warm read — seeded once, tight readQuery loop
@@ -181,10 +185,12 @@ final class ReadQueryPerfTests: XCTestCase {
             // the JSONValue tree on every call — that's not part of the
             // readQuery cost we want to measure (and the Rust
             // criterion bench doesn't have it either).
-            guard case .object? = client.readQuery(
-                query: Self.projectsQuery,
-                variables: Self.vars()
-            ) else {
+            guard
+                case .object? = client.readQuery(
+                    query: Self.projectsQuery,
+                    variables: Self.vars()
+                )
+            else {
                 XCTFail("readQuery returned nil")
                 return
             }
@@ -255,10 +261,12 @@ final class ReadQueryPerfTests: XCTestCase {
         )
 
         benchmark("readQuery projected 5×140", iterations: 200) {
-            guard let r = client.readQuery(
-                query: Self.projectsQuery,
-                variables: Self.vars()
-            ) else {
+            guard
+                let r = client.readQuery(
+                    query: Self.projectsQuery,
+                    variables: Self.vars()
+                )
+            else {
                 XCTFail("readQuery returned nil")
                 return
             }

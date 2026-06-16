@@ -124,7 +124,8 @@ public extension JSONValue {
     /// emitted directly and never hit this path.
     static func parseLiteral(_ fragment: String) -> JSONValue {
         guard let data = fragment.data(using: .utf8),
-              let value = try? JSONValue.from(json: data) else { return .null }
+            let value = try? JSONValue.from(json: data)
+        else { return .null }
         return value
     }
 

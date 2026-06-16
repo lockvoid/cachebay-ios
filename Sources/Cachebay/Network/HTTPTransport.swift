@@ -1,6 +1,6 @@
 import Foundation
 #if canImport(FoundationNetworking)
-import FoundationNetworking
+    import FoundationNetworking
 #endif
 
 /// Minimal HTTPTransport backed by `URLSession`. Sends GraphQL requests as
@@ -149,8 +149,8 @@ public struct URLSessionHTTPTransport: HTTPTransport {
             if case .array(let a) = o["locations"] ?? .null {
                 locations = a.compactMap {
                     guard case .object(let l) = $0,
-                          let line = l["line"]?.int,
-                          let col = l["column"]?.int
+                        let line = l["line"]?.int,
+                        let col = l["column"]?.int
                     else { return nil }
                     return .init(line: Int(line), column: Int(col))
                 }
@@ -164,19 +164,19 @@ public struct URLSessionHTTPTransport: HTTPTransport {
 }
 
 #if canImport(FoundationNetworking)
-// Linux/Foundation stubs URLSession.data(for:); provide a bridge when necessary.
-extension URLSession {
-    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
-        try await withCheckedThrowingContinuation { cont in
-            let task = self.dataTask(with: request) { data, response, error in
-                if let error { cont.resume(throwing: error); return }
-                guard let data, let response else {
-                    cont.resume(throwing: URLError(.badServerResponse)); return
+    // Linux/Foundation stubs URLSession.data(for:); provide a bridge when necessary.
+    extension URLSession {
+        func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+            try await withCheckedThrowingContinuation { cont in
+                let task = self.dataTask(with: request) { data, response, error in
+                    if let error { cont.resume(throwing: error); return }
+                    guard let data, let response else {
+                        cont.resume(throwing: URLError(.badServerResponse)); return
+                    }
+                    cont.resume(returning: (data, response))
                 }
-                cont.resume(returning: (data, response))
+                task.resume()
             }
-            task.resume()
         }
     }
-}
 #endif

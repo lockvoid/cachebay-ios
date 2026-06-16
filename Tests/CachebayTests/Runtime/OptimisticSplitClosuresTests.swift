@@ -31,11 +31,12 @@ import XCTest
 final class OptimisticSplitClosuresTests: XCTestCase {
 
     private func makeClient() -> CachebayClient {
-        CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
     }
 
     // MARK: - Optimistic closure runs immediately, no `ctx` parameter
@@ -85,15 +86,18 @@ final class OptimisticSplitClosuresTests: XCTestCase {
         // restored, then surviving layers' OPS replay on top.
         tx2.commit { _ in }
 
-        XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "L1",
+        XCTAssertEqual(
+            client.graph.getField("Post:p1", "title")?.string, "L1",
             "tx1's recorded op must replay after tx2 commits")
-        XCTAssertEqual(tx1Runs.value, 1,
+        XCTAssertEqual(
+            tx1Runs.value, 1,
             "tx1's optimistic closure runs ONCE (at modifyOptimistic time); replay uses recorded ops, not closure re-execution. got \(tx1Runs.value)")
 
         // Revert tx1 → baseline restored, no survivors → "Original".
         tx1.revert()
         XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "Original")
-        XCTAssertEqual(tx1Runs.value, 1,
+        XCTAssertEqual(
+            tx1Runs.value, 1,
             "revert does not re-run the closure either")
     }
 
@@ -120,12 +124,14 @@ final class OptimisticSplitClosuresTests: XCTestCase {
         // ctx.data, no JSONValue unwrap, no generic parameter.
         tx.commit { b in
             commitRuns.value += 1
-            b.patch(.key("Post:\(response.id)"),
-                    ["title": .string(response.title)], mode: .merge)
+            b.patch(
+                .key("Post:\(response.id)"),
+                ["title": .string(response.title)], mode: .merge)
         }
 
         XCTAssertEqual(commitRuns.value, 1, "commit closure runs exactly once")
-        XCTAssertEqual(optRuns.value, 1,
+        XCTAssertEqual(
+            optRuns.value, 1,
             "committed layer's OPTIMISTIC closure must NOT re-run (the layer is gone)")
 
         // Real-id record carries the server data.
@@ -133,7 +139,8 @@ final class OptimisticSplitClosuresTests: XCTestCase {
 
         // Temp record was baseline-restored to nil (it didn't exist
         // before the optimistic phase, so baseline is "no record").
-        XCTAssertNil(client.graph.getRecord("Post:temp"),
+        XCTAssertNil(
+            client.graph.getRecord("Post:temp"),
             "temp-id record must be gone after commit — baseline-restore drops it")
     }
 
@@ -157,11 +164,13 @@ final class OptimisticSplitClosuresTests: XCTestCase {
         XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "L2")
 
         tx2.revert()
-        XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "L1",
+        XCTAssertEqual(
+            client.graph.getField("Post:p1", "title")?.string, "L1",
             "after tx2 revert, tx1 must replay")
 
         tx1.revert()
-        XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "Original",
+        XCTAssertEqual(
+            client.graph.getField("Post:p1", "title")?.string, "Original",
             "after both revert, baseline restored")
     }
 
@@ -175,7 +184,8 @@ final class OptimisticSplitClosuresTests: XCTestCase {
         XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "Optimistic")
 
         tx.dispose()
-        XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "Optimistic",
+        XCTAssertEqual(
+            client.graph.getField("Post:p1", "title")?.string, "Optimistic",
             "dispose() must NOT restore baseline — graph keeps optimistic value")
     }
 
@@ -192,16 +202,18 @@ final class OptimisticSplitClosuresTests: XCTestCase {
         let tempId = "temp-\(UUID().uuidString)"
         let tx = client.modifyOptimistic { b in
             // Bootstrap the temp entity (optimistic-create flow).
-            b.patch(.key("Post:\(tempId)"),
-                    [
-                        "__typename": .string("Post"),
-                        "id": .string(tempId),
-                        "title": .string("Drafting…"),
-                    ],
-                    mode: .merge)
+            b.patch(
+                .key("Post:\(tempId)"),
+                [
+                    "__typename": .string("Post"),
+                    "id": .string(tempId),
+                    "title": .string("Drafting…"),
+                ],
+                mode: .merge)
             b.connection(ConnectionSelector(key: "posts"))
-                .linkNode(.key("Post:\(tempId)"),
-                          options: LinkNodeOptions(position: .start))
+                .linkNode(
+                    .key("Post:\(tempId)"),
+                    options: LinkNodeOptions(position: .start))
         }
 
         // Optimistic edge in place.
@@ -211,23 +223,26 @@ final class OptimisticSplitClosuresTests: XCTestCase {
         // Commit: write real entity + link real id; baseline-restore
         // drops the temp entity AND the temp edge automatically.
         tx.commit { b in
-            b.patch(.key("Post:\(realId)"),
-                    [
-                        "__typename": .string("Post"),
-                        "id": .string(realId),
-                        "title": .string(realTitle),
-                    ],
-                    mode: .merge)
+            b.patch(
+                .key("Post:\(realId)"),
+                [
+                    "__typename": .string("Post"),
+                    "id": .string(realId),
+                    "title": .string(realTitle),
+                ],
+                mode: .merge)
             b.connection(ConnectionSelector(key: "posts"))
-                .linkNode(.key("Post:\(realId)"),
-                          options: LinkNodeOptions(position: .start))
+                .linkNode(
+                    .key("Post:\(realId)"),
+                    options: LinkNodeOptions(position: .start))
         }
 
         // Final connection has exactly one edge — the real one.
         let edgesFinal = client.graph.getField(canonicalKey, CachebayConstants.connectionEdgesField)?.refList ?? []
         XCTAssertEqual(edgesFinal.count, 1)
         let nodeRef = edgesFinal.first.flatMap { client.graph.getField($0, "node")?.ref }
-        XCTAssertEqual(nodeRef, "Post:\(realId)",
+        XCTAssertEqual(
+            nodeRef, "Post:\(realId)",
             "after commit, the only edge must point at the real entity")
 
         // Temp record gone (baseline-restored).
@@ -278,4 +293,3 @@ final class OptimisticSplitClosuresTests: XCTestCase {
         XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "Final")
     }
 }
-

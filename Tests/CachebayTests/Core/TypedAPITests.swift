@@ -137,11 +137,12 @@ final class TypedAPITests: XCTestCase {
     private func makeClient(http: MockHTTPTransport? = nil, ws: MockWSTransport? = nil) -> (CachebayClient, MockHTTPTransport, MockWSTransport) {
         let httpT = http ?? MockHTTPTransport()
         let wsT = ws ?? MockWSTransport()
-        let client = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: httpT, ws: wsT),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: httpT, ws: wsT),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
         return (client, httpT, wsT)
     }
 
@@ -224,12 +225,13 @@ final class TypedAPITests: XCTestCase {
     func test_typedPatch_variantFragment_routesViaInterfaceCanonicalKey() throws {
         // Configure interfaces: SpeechClip implements TimelineClip.
         let transport = MockHTTPTransport()
-        let client = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: transport, ws: nil),
-            cachePolicy: .cacheFirst,
-            interfaces: ["TimelineClip": ["SpeechClip", "VideoClip", "MusicClip"]],
-            suspensionTimeout: 0
-        ))
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: transport, ws: nil),
+                cachePolicy: .cacheFirst,
+                interfaces: ["TimelineClip": ["SpeechClip", "VideoClip", "MusicClip"]],
+                suspensionTimeout: 0
+            ))
 
         // Seed the canonical record under the interface key.
         let seed: [String: JSONValue] = [
@@ -253,7 +255,8 @@ final class TypedAPITests: XCTestCase {
         let canonical = client.graph.getRecord("TimelineClip:c1")
         XCTAssertEqual(canonical?["muted"]?.bool, true)
         XCTAssertEqual(canonical?["volume"]?.double, 0.5)
-        XCTAssertNil(client.graph.getRecord("SpeechClip:c1"),
+        XCTAssertNil(
+            client.graph.getRecord("SpeechClip:c1"),
             "variant fragment must NOT create a parallel record at the concrete typename key")
     }
 
@@ -305,7 +308,7 @@ final class TypedAPITests: XCTestCase {
         let tx = client.modifyOptimistic { b in
             b.writeFragment(fragment: TestPostFields.self, id: "tmp:1", data: .init(id: "tmp:1", title: "Drafting…"))
             b.connection(ConnectionSelector(key: "posts"))
-             .linkNode(fragment: TestPostFields.self, id: "tmp:1", options: LinkNodeOptions(position: .start))
+                .linkNode(fragment: TestPostFields.self, id: "tmp:1", options: LinkNodeOptions(position: .start))
         }
         _ = tx
 
@@ -342,7 +345,7 @@ final class TypedAPITests: XCTestCase {
         // Baseline: one committed node already in the canonical.
         let baseline = client.modifyOptimistic { b in
             b.connection(ConnectionSelector(key: "posts"))
-             .linkNode(.object(["__typename": "Post", "id": "p2"]), options: LinkNodeOptions(position: .end))
+                .linkNode(.object(["__typename": "Post", "id": "p2"]), options: LinkNodeOptions(position: .end))
         }
         baseline.dispose()
 
@@ -354,7 +357,7 @@ final class TypedAPITests: XCTestCase {
         let tx = client.modifyOptimistic { b in
             b.writeFragment(fragment: TestPostFields.self, id: "tmp:rollback", data: .init(id: "tmp:rollback", title: "won't survive"))
             b.connection(ConnectionSelector(key: "posts"))
-             .linkNode(fragment: TestPostFields.self, id: "tmp:rollback", options: LinkNodeOptions(position: .start))
+                .linkNode(fragment: TestPostFields.self, id: "tmp:rollback", options: LinkNodeOptions(position: .start))
         }
         XCTAssertEqual(client.graph.getField(canonicalKey, CachebayConstants.connectionEdgesField)?.refList?.count, 2)
 
@@ -369,13 +372,15 @@ final class TypedAPITests: XCTestCase {
 
     func test_typedExecuteQuery_decodesNetworkResponse() async throws {
         let http = MockHTTPTransport()
-        http.whenQueryContains("TestPost", respondWith: .object([
-            "post": .object([
-                "__typename": .string("Post"),
-                "id": .string("p1"),
-                "title": .string("from network"),
-            ])
-        ]))
+        http.whenQueryContains(
+            "TestPost",
+            respondWith: .object([
+                "post": .object([
+                    "__typename": .string("Post"),
+                    "id": .string("p1"),
+                    "title": .string("from network"),
+                ])
+            ]))
         let (client, _, _) = makeClient(http: http)
 
         let result = try await client.execute(TestPost.self, variables: .init(id: "p1"))
@@ -385,13 +390,15 @@ final class TypedAPITests: XCTestCase {
 
     func test_typedExecuteMutation_decodesNetworkResponse() async throws {
         let http = MockHTTPTransport()
-        http.whenQueryContains("TestUpdatePost", respondWith: .object([
-            "updatePost": .object([
-                "__typename": .string("Post"),
-                "id": .string("p1"),
-                "title": .string("renamed"),
-            ])
-        ]))
+        http.whenQueryContains(
+            "TestUpdatePost",
+            respondWith: .object([
+                "updatePost": .object([
+                    "__typename": .string("Post"),
+                    "id": .string("p1"),
+                    "title": .string("renamed"),
+                ])
+            ]))
         let (client, _, _) = makeClient(http: http)
 
         let result = try await client.execute(mutation: TestUpdatePost.self, variables: .init(id: "p1", title: "renamed"))

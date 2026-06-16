@@ -11,19 +11,19 @@ final class ConnectionEdgeCasesTests: XCTestCase {
     }
 
     private let querySource = """
-    query Posts($first: Int, $last: Int, $after: String, $before: String) {
-        posts(first: $first, last: $last, after: $after, before: $before) @connection(mode: "infinite") {
-            pageInfo { startCursor endCursor hasPreviousPage hasNextPage }
-            edges { cursor node { id title } }
+        query Posts($first: Int, $last: Int, $after: String, $before: String) {
+            posts(first: $first, last: $last, after: $after, before: $before) @connection(mode: "infinite") {
+                pageInfo { startCursor endCursor hasPreviousPage hasNextPage }
+                edges { cursor node { id title } }
+            }
         }
-    }
-    """
+        """
 
     private func page(cursors: [(String, String)], startCursor: String?, endCursor: String?, hasPrev: Bool, hasNext: Bool) -> JSONValue {
         let edges: [JSONValue] = cursors.map { (cursor, id) in
             .object([
                 "__typename": "PostEdge", "cursor": .string(cursor),
-                "node": .object(["__typename": "Post", "id": .string(id), "title": .string(id)])
+                "node": .object(["__typename": "Post", "id": .string(id), "title": .string(id)]),
             ])
         }
         return .object([
@@ -82,14 +82,14 @@ final class ConnectionEdgeCasesTests: XCTestCase {
     func test_pageInfo_shallow_merge_preserves_extras() throws {
         let (_, planner, _, docs) = makeStack()
         let extraSource = """
-        query Posts($first: Int, $after: String) {
-            posts(first: $first, after: $after) @connection(mode: "infinite") {
-                totalCount
-                pageInfo { endCursor hasNextPage }
-                edges { cursor node { id } }
+            query Posts($first: Int, $after: String) {
+                posts(first: $first, after: $after) @connection(mode: "infinite") {
+                    totalCount
+                    pageInfo { endCursor hasNextPage }
+                    edges { cursor node { id } }
+                }
             }
-        }
-        """
+            """
         let plan = try planner.getPlan(.source(extraSource))
         let data1: JSONValue = .object([
             "posts": .object([

@@ -24,12 +24,13 @@ final class StorageWarmupTests: XCTestCase {
     }
 
     private func makeClient(path: String) -> CachebayClient {
-        CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0,
-            storage: SQLiteStorage.factory(options: .init(path: path))
-        ))
+        CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0,
+                storage: SQLiteStorage.factory(options: .init(path: path))
+            ))
     }
 
     // MARK: - Contract: construction does NOT auto-hydrate
@@ -52,7 +53,8 @@ final class StorageWarmupTests: XCTestCase {
         let fresh = makeClient(path: path)
         // Give any (incorrectly-spawned) background task a chance to fire.
         try await Task.sleep(nanoseconds: 50_000_000)
-        XCTAssertNil(fresh.graph.getRecord("Post:p1"),
+        XCTAssertNil(
+            fresh.graph.getRecord("Post:p1"),
             "Construction must NOT trigger background hydration; the graph must be empty until warmup() is called explicitly")
         await fresh.shutdown()
     }
@@ -86,11 +88,12 @@ final class StorageWarmupTests: XCTestCase {
     // MARK: - Contract: warmup() is a no-op when no storage is configured
 
     func test_warmup_noOp_whenStorageMissing() {
-        let client = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
         // Must not throw, must not crash.
         client.warmup()
         XCTAssertNil(client.graph.getRecord("Post:p1"))
@@ -134,14 +137,17 @@ final class StorageWarmupTests: XCTestCase {
         // Simulate a fresh network response landing BEFORE warmup is
         // called (the typical race in apps that fire queries during
         // bootstrap). Live data must beat disk data on conflict.
-        client.graph.replaceRecord("Post:p1", [
-            "__typename": .string("Post"),
-            "id": .string("p1"),
-            "title": .string("From network — newer"),
-        ])
+        client.graph.replaceRecord(
+            "Post:p1",
+            [
+                "__typename": .string("Post"),
+                "id": .string("p1"),
+                "title": .string("From network — newer"),
+            ])
         client.warmup()
 
-        XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "From network — newer",
+        XCTAssertEqual(
+            client.graph.getField("Post:p1", "title")?.string, "From network — newer",
             "warmup() must NOT overwrite a record that's already in the in-memory graph (gap-fill semantics)")
         await client.shutdown()
     }
@@ -210,9 +216,9 @@ final class StorageWarmupTests: XCTestCase {
             // Sanity asserts so a 10× regression breaks CI even if no
             // human reads the [perf] lines.
             switch label {
-            case "small":  XCTAssertLessThan(med, 200,  "small (n=500) median warmup must stay under 200ms")
+            case "small": XCTAssertLessThan(med, 200, "small (n=500) median warmup must stay under 200ms")
             case "medium": XCTAssertLessThan(med, 1500, "medium (n=5_000) median warmup must stay under 1500ms")
-            case "large":  XCTAssertLessThan(med, 10_000, "large (n=50_000) median warmup must stay under 10s")
+            case "large": XCTAssertLessThan(med, 10_000, "large (n=50_000) median warmup must stay under 10s")
             default: break
             }
         }
@@ -247,18 +253,22 @@ final class StorageWarmupTests: XCTestCase {
 
         // Entities — typed scalars + a couple of refs.
         for i in 0..<entityCount {
-            records.append(("Post:p\(i)", [
-                "__typename": .string("Post"),
-                "id": .string("p\(i)"),
-                "title": .string("Post title number \(i) — realistic length string for serialization weight"),
-                "body": .string(String(repeating: "lorem ", count: 20)),
-                "createdAt": .string("2026-05-04T06:53:00Z"),
-                "updatedAt": .string("2026-05-04T06:54:00Z"),
-                "likes": .int(Int64(i % 1000)),
-                "published": .bool(i % 3 == 0),
-                "author": .ref("User:u\(i % 50)"),
-                "tags": .refList(["Tag:t\(i % 10)", "Tag:t\((i + 1) % 10)"]),
-            ]))
+            records.append(
+                (
+                    "Post:p\(i)",
+                    [
+                        "__typename": .string("Post"),
+                        "id": .string("p\(i)"),
+                        "title": .string("Post title number \(i) — realistic length string for serialization weight"),
+                        "body": .string(String(repeating: "lorem ", count: 20)),
+                        "createdAt": .string("2026-05-04T06:53:00Z"),
+                        "updatedAt": .string("2026-05-04T06:54:00Z"),
+                        "likes": .int(Int64(i % 1000)),
+                        "published": .bool(i % 3 == 0),
+                        "author": .ref("User:u\(i % 50)"),
+                        "tags": .refList(["Tag:t\(i % 10)", "Tag:t\((i + 1) % 10)"]),
+                    ]
+                ))
         }
 
         // Connection canonicals + pageInfo records.
@@ -266,34 +276,50 @@ final class StorageWarmupTests: XCTestCase {
             let canonicalKey: CacheKey = "@connection.posts({\"category\":\"c\(i)\"})"
             // Each canonical points at ~10-30 edges (synthetic, just refs).
             let edges = (0..<min(20, edgeCount)).map { "\(canonicalKey).edges.\($0)" }
-            records.append((canonicalKey, [
-                "__typename": .string("PostConnection"),
-                "edges": .refList(edges),
-                "pageInfo": .ref("\(canonicalKey).pageInfo"),
-            ]))
-            records.append(("\(canonicalKey).pageInfo", [
-                "__typename": .string("PageInfo"),
-                "hasNextPage": .bool(true),
-                "hasPreviousPage": .bool(false),
-                "startCursor": .string("cur-\(i)-start"),
-                "endCursor": .string("cur-\(i)-end"),
-            ]))
+            records.append(
+                (
+                    canonicalKey,
+                    [
+                        "__typename": .string("PostConnection"),
+                        "edges": .refList(edges),
+                        "pageInfo": .ref("\(canonicalKey).pageInfo"),
+                    ]
+                ))
+            records.append(
+                (
+                    "\(canonicalKey).pageInfo",
+                    [
+                        "__typename": .string("PageInfo"),
+                        "hasNextPage": .bool(true),
+                        "hasPreviousPage": .bool(false),
+                        "startCursor": .string("cur-\(i)-start"),
+                        "endCursor": .string("cur-\(i)-end"),
+                    ]
+                ))
         }
 
         // Edge records — synthetic refs + cursor.
         for i in 0..<edgeCount {
-            records.append(("@connection.posts({}).edges.\(i)", [
-                "__typename": .string("PostEdge"),
-                "node": .ref("Post:p\(i % max(entityCount, 1))"),
-                "cursor": .string("cursor-\(i)"),
-            ]))
+            records.append(
+                (
+                    "@connection.posts({}).edges.\(i)",
+                    [
+                        "__typename": .string("PostEdge"),
+                        "node": .ref("Post:p\(i % max(entityCount, 1))"),
+                        "cursor": .string("cursor-\(i)"),
+                    ]
+                ))
         }
 
         // Aux records — nodeIndex + cursorIndex per canonical (rough).
         for i in 0..<auxCount {
-            records.append(("@connection.posts({\"category\":\"a\(i)\"})::nodeIndex", [
-                "Post:p\(i)": .string("@connection.posts({}).edges.\(i)"),
-            ]))
+            records.append(
+                (
+                    "@connection.posts({\"category\":\"a\(i)\"})::nodeIndex",
+                    [
+                        "Post:p\(i)": .string("@connection.posts({}).edges.\(i)")
+                    ]
+                ))
         }
 
         storage.put(records)

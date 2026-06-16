@@ -82,7 +82,8 @@ public enum CachebayDiagnostics {
     static func makeDefaultSink() -> ((String) -> Void)? {
         // `XCTestCase` is loaded under both `swift test` and the Xcode runner;
         // `XCTestConfigurationFilePath` only under Xcode. Check both.
-        let underTest = NSClassFromString("XCTestCase") != nil
+        let underTest =
+            NSClassFromString("XCTestCase") != nil
             || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
         guard underTest else { return nil }
         return { message in FileHandle.standardError.write(Data(("[Cachebay] " + message + "\n").utf8)) }

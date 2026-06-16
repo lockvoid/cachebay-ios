@@ -34,8 +34,9 @@ final class JSONValueRecordDecodeTests: XCTestCase {
 
     func test_nonSentinelSingleKeyObjectStaysObject() throws {
         // A single-key object whose key isn't __ref/__refs is a normal object.
-        XCTAssertEqual(try decode(#"{"data":{"only":"field"}}"#),
-                       ["data": .object(["only": .string("field")])])
+        XCTAssertEqual(
+            try decode(#"{"data":{"only":"field"}}"#),
+            ["data": .object(["only": .string("field")])])
     }
 
     func test_refsWithNonStringElementStaysObject() throws {
@@ -48,8 +49,9 @@ final class JSONValueRecordDecodeTests: XCTestCase {
         // A record that is literally a single-key __ref object keeps the root as
         // an object (records are entity fields, never a bare ref) — preserves the
         // old `restoreRefs(&obj)` semantics, which only processed values.
-        XCTAssertEqual(try decode(#"{"__ref":"User:1"}"#),
-                       ["__ref": .string("User:1")])
+        XCTAssertEqual(
+            try decode(#"{"__ref":"User:1"}"#),
+            ["__ref": .string("User:1")])
     }
 
     func test_nonObjectRoot_throws() {
@@ -61,12 +63,13 @@ final class JSONValueRecordDecodeTests: XCTestCase {
     // Equivalence with the old restore semantics on a representative record:
     // mixed scalars + a ref + a refList + nested object, all in one blob.
     func test_mixedRecord_endToEnd() throws {
-        let r = try decode(#"""
-        {"__typename":"Cook","id":"c1","title":"Pasta","rating":4.5,
-         "hero":{"__ref":"VideoElement:v1"},
-         "tags":{"__refs":["Tag:1","Tag:2"]},
-         "meta":{"views":10,"pinned":true}}
-        """#)
+        let r = try decode(
+            #"""
+            {"__typename":"Cook","id":"c1","title":"Pasta","rating":4.5,
+             "hero":{"__ref":"VideoElement:v1"},
+             "tags":{"__refs":["Tag:1","Tag:2"]},
+             "meta":{"views":10,"pinned":true}}
+            """#)
         XCTAssertEqual(r["__typename"], .string("Cook"))
         XCTAssertEqual(r["id"], .string("c1"))
         XCTAssertEqual(r["rating"], .double(4.5))

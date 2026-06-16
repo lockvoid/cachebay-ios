@@ -20,11 +20,11 @@ final class CompileFragmentsTests: XCTestCase {
 
     func test_includes_typename_in_fragment_root_selection() throws {
         let src = """
-        fragment UserFields on User {
-          id
-          email
-        }
-        """
+            fragment UserFields on User {
+              id
+              email
+            }
+            """
         let plan = try Compiler.compilePlan(source: src)
 
         // Compiler injects __typename into the fragment's root selection so
@@ -39,23 +39,23 @@ final class CompileFragmentsTests: XCTestCase {
 
     func test_includes_typename_in_pageInfo_for_connections_via_fragment_spread() throws {
         let src = """
-        fragment PageInfoFields on PageInfo {
-          startCursor
-          endCursor
-          hasNextPage
-          hasPreviousPage
-        }
-
-        fragment UserPosts on User {
-          posts(first: $first) @connection {
-            pageInfo { ...PageInfoFields }
-            edges {
-              cursor
-              node { id }
+            fragment PageInfoFields on PageInfo {
+              startCursor
+              endCursor
+              hasNextPage
+              hasPreviousPage
             }
-          }
-        }
-        """
+
+            fragment UserPosts on User {
+              posts(first: $first) @connection {
+                pageInfo { ...PageInfoFields }
+                edges {
+                  cursor
+                  node { id }
+                }
+              }
+            }
+            """
         let plan = try Compiler.compilePlan(source: src, fragmentName: "UserPosts")
 
         let posts = try XCTUnwrap(plan.rootSelectionMap["posts"])
@@ -68,22 +68,22 @@ final class CompileFragmentsTests: XCTestCase {
 
     func test_includes_typename_in_pageInfo_and_edges_for_connection_fields() throws {
         let src = """
-        fragment UserPostsWithFilters on User {
-          posts(category: $postsCategory, first: $postsFirst, after: $postsAfter) @connection(filters: ["category"]) {
-            totalCount
-            pageInfo {
-              startCursor
-              endCursor
-              hasNextPage
-              hasPreviousPage
+            fragment UserPostsWithFilters on User {
+              posts(category: $postsCategory, first: $postsFirst, after: $postsAfter) @connection(filters: ["category"]) {
+                totalCount
+                pageInfo {
+                  startCursor
+                  endCursor
+                  hasNextPage
+                  hasPreviousPage
+                }
+                edges {
+                  cursor
+                  node { id title }
+                }
+              }
             }
-            edges {
-              cursor
-              node { id title }
-            }
-          }
-        }
-        """
+            """
         let plan = try Compiler.compilePlan(source: src, fragmentName: "UserPostsWithFilters")
 
         XCTAssertNotNil(plan.root.first { $0.fieldName == CachebayConstants.typenameField })
@@ -137,9 +137,9 @@ final class CompileFragmentsTests: XCTestCase {
 
     func test_throws_when_doc_has_neither_op_nor_exactly_one_fragment() {
         let src = """
-        fragment A on User { id }
-        fragment B on User { email }
-        """
+            fragment A on User { id }
+            fragment B on User { email }
+            """
         // Two fragments, no fragmentName → ambiguous selection.
         XCTAssertThrowsError(try Compiler.compilePlan(source: src))
     }

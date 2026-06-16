@@ -31,11 +31,12 @@ import XCTest
 final class OptimisticReplayAfterNormalizeTests: XCTestCase {
 
     private func makeClient() -> CachebayClient {
-        CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
     }
 
     // MARK: - The core race
@@ -88,9 +89,11 @@ final class OptimisticReplayAfterNormalizeTests: XCTestCase {
             ])
         )
 
-        XCTAssertEqual(client.graph.getField("Clip:c1", "captionsEnabled")?.bool, true,
+        XCTAssertEqual(
+            client.graph.getField("Clip:c1", "captionsEnabled")?.bool, true,
             "captionsEnabled must reflect the server-confirmed value")
-        XCTAssertEqual(client.graph.getField("Clip:c1", "volume")?.double, 0.5,
+        XCTAssertEqual(
+            client.graph.getField("Clip:c1", "volume")?.double, 0.5,
             "Pending optimistic layer B's volume=0.5 must survive the server-response normalize. Pre-fix this fails with volume=1.0.")
 
         // Tidy: both layers dispose normally; final state preserved
@@ -141,9 +144,11 @@ final class OptimisticReplayAfterNormalizeTests: XCTestCase {
             ])
         )
 
-        XCTAssertEqual(client.graph.getField("Clip:c1", "volume")?.double, 0.5,
+        XCTAssertEqual(
+            client.graph.getField("Clip:c1", "volume")?.double, 0.5,
             "in-scope (c1): replay re-applies optimistic volume=0.5")
-        XCTAssertEqual(client.graph.getField("Clip:c2", "volume")?.double, 0.7,
+        XCTAssertEqual(
+            client.graph.getField("Clip:c2", "volume")?.double, 0.7,
             "out-of-scope (c2): optimistic volume=0.7 still visible (never touched by normalize)")
 
         tx.dispose()
@@ -191,7 +196,8 @@ final class OptimisticReplayAfterNormalizeTests: XCTestCase {
             ])
         )
 
-        XCTAssertEqual(client.graph.getField("Clip:c1", "volume")?.double, 0.5,
+        XCTAssertEqual(
+            client.graph.getField("Clip:c1", "volume")?.double, 0.5,
             "after replay, latest-id layer's value wins")
 
         tx1.dispose()
@@ -237,9 +243,11 @@ final class OptimisticReplayAfterNormalizeTests: XCTestCase {
             ])
         )
 
-        XCTAssertEqual(client.graph.getField("Clip:c1", "captionsEnabled")?.bool, true,
+        XCTAssertEqual(
+            client.graph.getField("Clip:c1", "captionsEnabled")?.bool, true,
             "server-side update on a field the layer didn't patch must win the normalize")
-        XCTAssertEqual(client.graph.getField("Clip:c1", "volume")?.double, 0.5,
+        XCTAssertEqual(
+            client.graph.getField("Clip:c1", "volume")?.double, 0.5,
             "layer's pending patch on `volume` must re-apply over the server's 1.0")
 
         tx.dispose()
@@ -282,14 +290,14 @@ final class OptimisticReplayAfterNormalizeTests: XCTestCase {
         try client.writeFragment(
             id: "Project:p1",
             fragment: """
-            fragment P on Project {
-              id
-              clips {
-                id
-                volume
-              }
-            }
-            """,
+                fragment P on Project {
+                  id
+                  clips {
+                    id
+                    volume
+                  }
+                }
+                """,
             data: .object([
                 "__typename": .string("Project"),
                 "id": .string("p1"),
@@ -308,9 +316,11 @@ final class OptimisticReplayAfterNormalizeTests: XCTestCase {
             ])
         )
 
-        XCTAssertEqual(client.graph.getField("Clip:c1", "volume")?.double, 0.3,
+        XCTAssertEqual(
+            client.graph.getField("Clip:c1", "volume")?.double, 0.3,
             "layer's volume=0.3 on c1 must re-apply")
-        XCTAssertEqual(client.graph.getField("Clip:c2", "volume")?.double, 0.7,
+        XCTAssertEqual(
+            client.graph.getField("Clip:c2", "volume")?.double, 0.7,
             "layer's volume=0.7 on c2 must re-apply (both replays happen, not just one)")
 
         tx.dispose()
@@ -345,7 +355,8 @@ final class OptimisticReplayAfterNormalizeTests: XCTestCase {
             ])
         )
 
-        XCTAssertEqual(client.graph.getField("Clip:c1", "volume")?.double, 0.7,
+        XCTAssertEqual(
+            client.graph.getField("Clip:c1", "volume")?.double, 0.7,
             "no pending layers → normalize wins unmodified")
     }
 
@@ -365,11 +376,12 @@ final class OptimisticReplayAfterNormalizeTests: XCTestCase {
     /// pin the protection end-to-end.
     func test_subscriptionFrame_triggersEntityReplay() async throws {
         let ws = StageSubscriptionTransport()
-        let client = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport(), ws: ws),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport(), ws: ws),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
 
         // Seed Post:p1 with baseline scalars.
         try client.writeFragment(
@@ -401,7 +413,7 @@ final class OptimisticReplayAfterNormalizeTests: XCTestCase {
                 for try await _ in stream {
                     received.value += 1
                 }
-            } catch { /* tolerate teardown */ }
+            } catch { /* tolerate teardown */  }
         }
         // Let the Cachebay subscription producer-Task register its
         // continuation on the transport before we emit. Without this,
@@ -413,20 +425,23 @@ final class OptimisticReplayAfterNormalizeTests: XCTestCase {
         // body — server didn't know about the user's draft yet.
         // Pre-fix: normalize merges body="Original body" over the
         // optimistic patch. Post-fix: replay re-applies the patch.
-        ws.emit(.object([
-            "postUpdated": .object([
-                "__typename": .string("Post"),
-                "id": .string("p1"),
-                "title": .string("Server-updated title"),
-                "body": .string("Original body"),
-            ])
-        ]))
+        ws.emit(
+            .object([
+                "postUpdated": .object([
+                    "__typename": .string("Post"),
+                    "id": .string("p1"),
+                    "title": .string("Server-updated title"),
+                    "body": .string("Original body"),
+                ])
+            ]))
         // Wait briefly for the producer task to normalize the frame.
         try await Task.sleep(nanoseconds: 50_000_000)
 
-        XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "Server-updated title",
+        XCTAssertEqual(
+            client.graph.getField("Post:p1", "title")?.string, "Server-updated title",
             "subscription frame's title update on an UNpatched field must land")
-        XCTAssertEqual(client.graph.getField("Post:p1", "body")?.string, "Drafting new body…",
+        XCTAssertEqual(
+            client.graph.getField("Post:p1", "body")?.string, "Drafting new body…",
             "pending optimistic patch on `body` must survive the subscription auto-normalize")
 
         consumer.cancel()
@@ -440,11 +455,12 @@ final class OptimisticReplayAfterNormalizeTests: XCTestCase {
     /// "fire once then stop" — it must run per frame.
     func test_subscriptionFrames_eachTriggerReplay() async throws {
         let ws = StageSubscriptionTransport()
-        let client = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport(), ws: ws),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport(), ws: ws),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
 
         try client.writeFragment(
             id: "Post:p1",
@@ -477,16 +493,18 @@ final class OptimisticReplayAfterNormalizeTests: XCTestCase {
         // 3 frames in a row, each carrying likes=0 (stale relative
         // to the optimistic patch). Each must trigger replay.
         for i in 0..<3 {
-            ws.emit(.object([
-                "postUpdated": .object([
-                    "__typename": .string("Post"),
-                    "id": .string("p1"),
-                    "title": .string("Frame \(i)"),
-                    "likes": .int(0),
-                ])
-            ]))
+            ws.emit(
+                .object([
+                    "postUpdated": .object([
+                        "__typename": .string("Post"),
+                        "id": .string("p1"),
+                        "title": .string("Frame \(i)"),
+                        "likes": .int(0),
+                    ])
+                ]))
             try await Task.sleep(nanoseconds: 30_000_000)
-            XCTAssertEqual(client.graph.getField("Post:p1", "likes")?.int, 42,
+            XCTAssertEqual(
+                client.graph.getField("Post:p1", "likes")?.int, 42,
                 "frame \(i): pending optimistic likes=42 must survive")
         }
 
@@ -522,15 +540,18 @@ final class OptimisticReplayAfterNormalizeTests: XCTestCase {
         // Layer issues a `.replace` patch — only id + typename + a
         // new title. Other fields must be gone after layer applies.
         let tx = client.modifyOptimistic { b in
-            b.patch(.key("Post:p1"), [
-                "__typename": .string("Post"),
-                "id": .string("p1"),
-                "title": .string("Replaced"),
-            ], mode: .replace)
+            b.patch(
+                .key("Post:p1"),
+                [
+                    "__typename": .string("Post"),
+                    "id": .string("p1"),
+                    "title": .string("Replaced"),
+                ], mode: .replace)
         }
 
         XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "Replaced")
-        XCTAssertNil(client.graph.getField("Post:p1", "body"),
+        XCTAssertNil(
+            client.graph.getField("Post:p1", "body"),
             ".replace must drop fields outside the patch")
 
         // Server response normalize tries to re-introduce `body` and
@@ -547,9 +568,11 @@ final class OptimisticReplayAfterNormalizeTests: XCTestCase {
             ])
         )
 
-        XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "Replaced",
+        XCTAssertEqual(
+            client.graph.getField("Post:p1", "title")?.string, "Replaced",
             ".replace layer's title must win over server normalize")
-        XCTAssertNil(client.graph.getField("Post:p1", "body"),
+        XCTAssertNil(
+            client.graph.getField("Post:p1", "body"),
             "`.replace` mode must drop server-normalized `body` because the layer's patch didn't include it")
 
         tx.dispose()
@@ -583,10 +606,12 @@ final class OptimisticReplayAfterNormalizeTests: XCTestCase {
             b.patch(.key("Post:p1"), ["title": .string("Optimistic title")], mode: .merge)
             // Connection op: link a brand-new optimistic post into the
             // posts connection.
-            b.patch(.key("Post:tmp"), [
-                "__typename": .string("Post"),
-                "id": .string("tmp"),
-            ], mode: .merge)
+            b.patch(
+                .key("Post:tmp"),
+                [
+                    "__typename": .string("Post"),
+                    "id": .string("tmp"),
+                ], mode: .merge)
             b.connection(ConnectionSelector(key: "posts"))
                 .linkNode(.key("Post:tmp"), options: LinkNodeOptions(position: .start))
         }
@@ -596,16 +621,16 @@ final class OptimisticReplayAfterNormalizeTests: XCTestCase {
         // temp post nor about the title edit.
         try client.writeQuery(
             query: """
-            query Posts {
-              posts(first: 10) @connection(key: "posts") {
-                pageInfo { hasNextPage hasPreviousPage }
-                edges {
-                  cursor
-                  node { __typename id title }
+                query Posts {
+                  posts(first: 10) @connection(key: "posts") {
+                    pageInfo { hasNextPage hasPreviousPage }
+                    edges {
+                      cursor
+                      node { __typename id title }
+                    }
+                  }
                 }
-              }
-            }
-            """,
+                """,
             data: .object([
                 "posts": .object([
                     "__typename": .string("PostConnection"),
@@ -623,7 +648,7 @@ final class OptimisticReplayAfterNormalizeTests: XCTestCase {
                                 "id": .string("p1"),
                                 "title": .string("Server title"),
                             ]),
-                        ]),
+                        ])
                     ]),
                 ])
             ])
@@ -631,7 +656,8 @@ final class OptimisticReplayAfterNormalizeTests: XCTestCase {
 
         // Entity replay must run: Post:p1.title stays "Optimistic title"
         // despite the server response carrying "Server title".
-        XCTAssertEqual(client.graph.getField("Post:p1", "title")?.string, "Optimistic title",
+        XCTAssertEqual(
+            client.graph.getField("Post:p1", "title")?.string, "Optimistic title",
             "entity replay: pending title patch must survive the canonical-page normalize")
 
         // Connection replay must run: the temp post stays linked at
@@ -639,7 +665,8 @@ final class OptimisticReplayAfterNormalizeTests: XCTestCase {
         let canonicalKey: CacheKey = "@connection.posts({})"
         let edges = client.graph.getField(canonicalKey, CachebayConstants.connectionEdgesField)?.refList ?? []
         let nodeRefs = edges.compactMap { client.graph.getField($0, "node")?.ref }
-        XCTAssertTrue(nodeRefs.contains("Post:tmp"),
+        XCTAssertTrue(
+            nodeRefs.contains("Post:tmp"),
             "connection replay: optimistic temp post must still be linked after the canonical-page normalize")
 
         tx.dispose()

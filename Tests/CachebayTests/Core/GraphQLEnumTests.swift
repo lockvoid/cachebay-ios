@@ -31,8 +31,8 @@ final class GraphQLEnumTests: XCTestCase {
     func test_init_unknownRawValue_isUnknown() {
         let g = GraphQLEnum<SampleIntent>("PORTRAIT")  // server added a case we don't know
         XCTAssertEqual(g, .unknown("PORTRAIT"))
-        XCTAssertNil(g.value)                          // `.value` is nil for unknown
-        XCTAssertEqual(g.rawValue, "PORTRAIT")         // raw is preserved
+        XCTAssertNil(g.value)  // `.value` is nil for unknown
+        XCTAssertEqual(g.rawValue, "PORTRAIT")  // raw is preserved
     }
 
     func test_rawValue_roundTrips_forBothCases() {
@@ -103,7 +103,7 @@ final class GraphQLEnumTests: XCTestCase {
 
     func test_matches_knownCase() {
         let g = GraphQLEnum<SampleIntent>.known(.roll)
-        XCTAssertTrue(g == .roll)        // == against the underlying case
+        XCTAssertTrue(g == .roll)  // == against the underlying case
         XCTAssertFalse(g == .vibe)
         XCTAssertFalse(GraphQLEnum<SampleIntent>.unknown("ROLL") == .roll)
     }
@@ -112,7 +112,7 @@ final class GraphQLEnumTests: XCTestCase {
         let known = GraphQLEnum<SampleIntent>.known(.roll)
         XCTAssertTrue(known != .vibe)
         XCTAssertFalse(known != .roll)
-        XCTAssertTrue(SampleIntent.vibe != known)   // reversed operand order
+        XCTAssertTrue(SampleIntent.vibe != known)  // reversed operand order
         XCTAssertFalse(SampleIntent.roll != known)
         // unknown is != every known case.
         XCTAssertTrue(GraphQLEnum<SampleIntent>.unknown("ROLL") != .roll)
@@ -126,10 +126,10 @@ final class GraphQLEnumTests: XCTestCase {
         // `.unknown` case pattern. Non-exhaustive by design -> `default` required.
         func classify(_ g: GraphQLEnum<SampleIntent>) -> String {
             switch g {
-            case .roll: return "roll"                  // matched via ~=
+            case .roll: return "roll"  // matched via ~=
             case .story: return "story"
             case .unknown(let raw): return "unknown:\(raw)"
-            default: return "other"                    // e.g. .known(.vibe)
+            default: return "other"  // e.g. .known(.vibe)
             }
         }
         XCTAssertEqual(classify(.known(.roll)), "roll")

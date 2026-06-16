@@ -33,23 +33,27 @@ public struct Visitor {
             switch d {
             case .operation(let op):
                 let sels = visit(op.selectionSet)
-                defs.append(.operation(OperationDefinition(
-                    operation: op.operation,
-                    name: op.name,
-                    variableDefinitions: op.variableDefinitions,
-                    directives: op.directives,
-                    selectionSet: sels,
-                    location: op.location
-                )))
+                defs.append(
+                    .operation(
+                        OperationDefinition(
+                            operation: op.operation,
+                            name: op.name,
+                            variableDefinitions: op.variableDefinitions,
+                            directives: op.directives,
+                            selectionSet: sels,
+                            location: op.location
+                        )))
             case .fragment(let fr):
                 let sels = visit(fr.selectionSet)
-                defs.append(.fragment(FragmentDefinition(
-                    name: fr.name,
-                    typeCondition: fr.typeCondition,
-                    directives: fr.directives,
-                    selectionSet: sels,
-                    location: fr.location
-                )))
+                defs.append(
+                    .fragment(
+                        FragmentDefinition(
+                            name: fr.name,
+                            typeCondition: fr.typeCondition,
+                            directives: fr.directives,
+                            selectionSet: sels,
+                            location: fr.location
+                        )))
             case .schema:
                 defs.append(d)
             }

@@ -10,8 +10,8 @@ final class CachebayDataBehaviourTests: XCTestCase {
         let v = Video(id: "v1", url: URL(string: "https://x.com/v.mp4")!, duration: 5)
         XCTAssertEqual(v.__typename, "VideoElement")
         XCTAssertEqual(v.id, "v1")
-        XCTAssertEqual(v.rank, "a0")          // @CachebayDefault("a0")
-        XCTAssertNil(v.intent)                // optional -> nil
+        XCTAssertEqual(v.rank, "a0")  // @CachebayDefault("a0")
+        XCTAssertNil(v.intent)  // optional -> nil
         XCTAssertEqual(v.duration, 5)
     }
 
@@ -106,7 +106,7 @@ final class CachebayDataBehaviourTests: XCTestCase {
         XCTAssertEqual(cook?.tags.count, 2)
         XCTAssertEqual(cook?.tags.first?.label, "dinner")
         XCTAssertEqual(cook?.hero?.id, "v1")
-        XCTAssertEqual(cook?.hero?.rank, "c3")        // from the record (decode is strict)
+        XCTAssertEqual(cook?.hero?.rank, "c3")  // from the record (decode is strict)
     }
 
     // D6 — `@CachebayDefault` is a CONSTRUCTION default (§6) only. The read/decode
@@ -132,6 +132,6 @@ final class CachebayDataBehaviourTests: XCTestCase {
         XCTAssertEqual(a, b)
         XCTAssertNotEqual(a, c)
         let set: Set<Video> = [a, b, c]
-        XCTAssertEqual(set.count, 2)   // a == b collapse
+        XCTAssertEqual(set.count, 2)  // a == b collapse
     }
 }

@@ -31,9 +31,9 @@ final class CodableBehaviourTests: XCTestCase {
         let v = CodableAudioEvents(id: "ae1", bpm: 1, kind: .known(.video), summary: nil, tags: [], beatGrid: nil)
         let s = String(decoding: try JSONEncoder().encode(v), as: UTF8.self)
         XCTAssertTrue(s.contains(#""__typename":"AudioEvents""#), s)
-        XCTAssertTrue(s.contains(#""rank":"a0""#), s)            // @CachebayDefault memberwise value
-        XCTAssertTrue(s.contains(#""kind":"VIDEO""#), s)         // GraphQLEnum → raw string
-        XCTAssertTrue(s.contains(#""summary":null"#), s)         // nil optional → explicit null
+        XCTAssertTrue(s.contains(#""rank":"a0""#), s)  // @CachebayDefault memberwise value
+        XCTAssertTrue(s.contains(#""kind":"VIDEO""#), s)  // GraphQLEnum → raw string
+        XCTAssertTrue(s.contains(#""summary":null"#), s)  // nil optional → explicit null
         XCTAssertTrue(s.contains(#""beatGrid":null"#), s)
     }
 
@@ -42,12 +42,12 @@ final class CodableBehaviourTests: XCTestCase {
     // tolerate absence. This is the no-recompute-storm guarantee.
     func test_decode_missingDefaultedAndOptionalFields_honorsDefaults() throws {
         let json = #"""
-        {"__typename":"AudioEvents","id":"ae1","bpm":120,"kind":"AUDIO","tags":["x"]}
-        """#
+            {"__typename":"AudioEvents","id":"ae1","bpm":120,"kind":"AUDIO","tags":["x"]}
+            """#
         let back = try JSONDecoder().decode(CodableAudioEvents.self, from: Data(json.utf8))
-        XCTAssertEqual(back.rank, "a0")        // @CachebayDefault honored on absence
-        XCTAssertNil(back.summary)             // optional absent → nil
-        XCTAssertNil(back.beatGrid)            // optional nested absent → nil
+        XCTAssertEqual(back.rank, "a0")  // @CachebayDefault honored on absence
+        XCTAssertNil(back.summary)  // optional absent → nil
+        XCTAssertNil(back.beatGrid)  // optional nested absent → nil
         XCTAssertEqual(back.bpm, 120)
         XCTAssertEqual(back.kind, .known(.audio))
     }
@@ -63,10 +63,10 @@ final class CodableBehaviourTests: XCTestCase {
     // payload with the same wire keys decodes into the model.
     func test_decode_serverShapedPayload() throws {
         let json = #"""
-        {"__typename":"AudioEvents","id":"ae1","rank":"c3","bpm":90.5,"kind":"AUDIO",
-         "summary":"intro","tags":["a","b"],
-         "beatGrid":{"__typename":"BeatGrid","id":"bg9","coverage":1.0,"downbeats":[0.25,0.5]}}
-        """#
+            {"__typename":"AudioEvents","id":"ae1","rank":"c3","bpm":90.5,"kind":"AUDIO",
+             "summary":"intro","tags":["a","b"],
+             "beatGrid":{"__typename":"BeatGrid","id":"bg9","coverage":1.0,"downbeats":[0.25,0.5]}}
+            """#
         let back = try JSONDecoder().decode(CodableAudioEvents.self, from: Data(json.utf8))
         XCTAssertEqual(back.rank, "c3")
         XCTAssertEqual(back.beatGrid?.id, "bg9")

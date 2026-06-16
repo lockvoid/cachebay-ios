@@ -1,6 +1,6 @@
 import Foundation
 #if canImport(FoundationNetworking)
-import FoundationNetworking
+    import FoundationNetworking
 #endif
 
 /// WSTransport implementing the `graphql-transport-ws` subprotocol over
@@ -230,9 +230,10 @@ public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendabl
     /// `.stopped(.userClosed)`. Auto-reconnect does NOT run from this
     /// state — call `reconnect()` to resume. Idempotent.
     public func disconnect(reason: DisconnectReason = .userClosed) {
-        teardown(disconnectEvent: .disconnected(reason: reason),
-                 then: .stopped(reason: .userClosed),
-                 finishSubscriptions: true)
+        teardown(
+            disconnectEvent: .disconnected(reason: reason),
+            then: .stopped(reason: .userClosed),
+            finishSubscriptions: true)
     }
 
     /// Replace the params sent in `connection_init`. Use this when
@@ -344,8 +345,9 @@ public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendabl
             let finish: @Sendable (Error?) -> Void = { err in
                 if let err { continuation.finish(throwing: err) } else { continuation.finish() }
             }
-            selfRef.registerSubscription(id: id, query: query, variables: variables,
-                                          yield: yield, finish: finish)
+            selfRef.registerSubscription(
+                id: id, query: query, variables: variables,
+                yield: yield, finish: finish)
 
             Task { @Sendable in
                 do {
@@ -402,9 +404,10 @@ public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendabl
         finish: @escaping @Sendable (Error?) -> Void
     ) {
         lock.lock()
-        subscriptions[id] = ActiveSubscription(id: id, query: query, variables: variables,
-                                                yield: yield, finish: finish,
-                                                status: .pending)
+        subscriptions[id] = ActiveSubscription(
+            id: id, query: query, variables: variables,
+            yield: yield, finish: finish,
+            status: .pending)
         emitLocked(.subscriptionsChanged(active: subscriptions.count))
         lock.unlock()
     }
@@ -529,8 +532,8 @@ public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendabl
         let parsed = try? JSONValue.from(json: data)
         decodeSpan?.end()
         guard let value = parsed,
-              case .object(let obj) = value,
-              let type = obj["type"]?.string
+            case .object(let obj) = value,
+            let type = obj["type"]?.string
         else { return }
         let id = obj["id"]?.string
         let payload: [String: JSONValue]? = {
@@ -673,9 +676,10 @@ public final class URLSessionWebSocketTransport: WSTransport, @unchecked Sendabl
         // duplicate `.disconnected` event slips through. The
         // reconnectorLoop overwrites to `.reconnecting(N)` on its
         // next iteration; the brief `.disconnected` flicker is fine.
-        teardown(disconnectEvent: .disconnected(reason: reason),
-                 then: .disconnected,
-                 finishSubscriptions: false)
+        teardown(
+            disconnectEvent: .disconnected(reason: reason),
+            then: .disconnected,
+            finishSubscriptions: false)
 
         // 4401/4403 detection from URLSessionWebSocketTask close codes:
         // URLSession surfaces them in the underlying error's userInfo.
@@ -1199,7 +1203,7 @@ enum WSClientMessage: Sendable {
                 "payload": [
                     "query": query,
                     "variables": JSONValue.object(variables).toFoundation(),
-                ]
+                ],
             ]
         case .complete(let id):
             return ["id": id, "type": "complete"]
@@ -1212,11 +1216,11 @@ enum WSClientMessage: Sendable {
 
     func eventForOutbound() -> URLSessionWebSocketTransport.ConnectionEvent {
         switch self {
-        case .connectionInit:           return .messageSent(type: "connection_init", id: nil)
-        case .subscribe(let id, _, _):  return .messageSent(type: "subscribe", id: id)
-        case .complete(let id):         return .messageSent(type: "complete", id: id)
-        case .ping:                     return .messageSent(type: "ping", id: nil)
-        case .pong:                     return .messageSent(type: "pong", id: nil)
+        case .connectionInit: return .messageSent(type: "connection_init", id: nil)
+        case .subscribe(let id, _, _): return .messageSent(type: "subscribe", id: id)
+        case .complete(let id): return .messageSent(type: "complete", id: id)
+        case .ping: return .messageSent(type: "ping", id: nil)
+        case .pong: return .messageSent(type: "pong", id: nil)
         }
     }
 }

@@ -17,26 +17,27 @@ import XCTest
 final class OptimisticCursorIndexTests: XCTestCase {
 
     private func makeClient() -> CachebayClient {
-        CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
     }
 
     private let connectionQuery = """
-    query Posts {
-        posts @connection(mode: "infinite") {
-            __typename
-            pageInfo { __typename hasNextPage }
-            edges {
+        query Posts {
+            posts @connection(mode: "infinite") {
                 __typename
-                cursor
-                node { __typename id title }
+                pageInfo { __typename hasNextPage }
+                edges {
+                    __typename
+                    cursor
+                    node { __typename id title }
+                }
             }
         }
-    }
-    """
+        """
 
     private let canonicalKey: CacheKey = "@connection.posts({})"
 
@@ -55,35 +56,37 @@ final class OptimisticCursorIndexTests: XCTestCase {
     /// Seed the canonical with two edges (c1, c2) so the cursor index
     /// has known starting values: `{c1: 0, c2: 1}`.
     private func seedTwoEdges(_ client: CachebayClient) throws {
-        try client.writeQuery(query: connectionQuery, variables: [:], data: .object([
-            "posts": .object([
-                "__typename": .string("PostConnection"),
-                "pageInfo": .object([
-                    "__typename": .string("PageInfo"),
-                    "hasNextPage": .bool(false),
-                ]),
-                "edges": .array([
-                    .object([
-                        "__typename": .string("PostEdge"),
-                        "cursor": .string("c1"),
-                        "node": .object([
-                            "__typename": .string("Post"),
-                            "id": .string("p1"),
-                            "title": .string("First"),
+        try client.writeQuery(
+            query: connectionQuery, variables: [:],
+            data: .object([
+                "posts": .object([
+                    "__typename": .string("PostConnection"),
+                    "pageInfo": .object([
+                        "__typename": .string("PageInfo"),
+                        "hasNextPage": .bool(false),
+                    ]),
+                    "edges": .array([
+                        .object([
+                            "__typename": .string("PostEdge"),
+                            "cursor": .string("c1"),
+                            "node": .object([
+                                "__typename": .string("Post"),
+                                "id": .string("p1"),
+                                "title": .string("First"),
+                            ]),
+                        ]),
+                        .object([
+                            "__typename": .string("PostEdge"),
+                            "cursor": .string("c2"),
+                            "node": .object([
+                                "__typename": .string("Post"),
+                                "id": .string("p2"),
+                                "title": .string("Second"),
+                            ]),
                         ]),
                     ]),
-                    .object([
-                        "__typename": .string("PostEdge"),
-                        "cursor": .string("c2"),
-                        "node": .object([
-                            "__typename": .string("Post"),
-                            "id": .string("p2"),
-                            "title": .string("Second"),
-                        ]),
-                    ]),
-                ]),
-            ])
-        ]))
+                ])
+            ]))
     }
 
     func test_insertEdge_at_start_shifts_existing_cursor_indices_and_inserts_new() throws {

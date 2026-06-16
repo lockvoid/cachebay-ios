@@ -36,10 +36,12 @@ final class TypedKeyPathPatchTests: XCTestCase {
     // The patch routes through patchFragment -> the optimistic layer and lands on the record.
     func test_keyPathPatch_writesThroughOptimisticLayer() {
         let client = makeClient()
-        client.graph.putRecord("Cook:c1", [
-            "__typename": .string("Cook"), "id": .string("c1"),
-            "title": .string("Old"), "likes": .int(1),
-        ])
+        client.graph.putRecord(
+            "Cook:c1",
+            [
+                "__typename": .string("Cook"), "id": .string("c1"),
+                "title": .string("Old"), "likes": .int(1),
+            ])
 
         client.modifyOptimistic { b in
             b.patch(fragment: CookFields.self, id: "c1") { patch in
@@ -49,17 +51,19 @@ final class TypedKeyPathPatchTests: XCTestCase {
         }
 
         let rec = client.graph.getRecord("Cook:c1")
-        XCTAssertEqual(rec?["title"], .string("Renamed"))   // merged
+        XCTAssertEqual(rec?["title"], .string("Renamed"))  // merged
         XCTAssertEqual(rec?["likes"], .int(42))
-        XCTAssertEqual(rec?["id"], .string("c1"))           // untouched fields preserved
+        XCTAssertEqual(rec?["id"], .string("c1"))  // untouched fields preserved
     }
 
     // An empty patch (no set calls) is a no-op — record unchanged.
     func test_keyPathPatch_emptyIsNoOp() {
         let client = makeClient()
-        client.graph.putRecord("Cook:c1", [
-            "__typename": .string("Cook"), "id": .string("c1"), "title": .string("Old"), "likes": .int(1),
-        ])
+        client.graph.putRecord(
+            "Cook:c1",
+            [
+                "__typename": .string("Cook"), "id": .string("c1"), "title": .string("Old"), "likes": .int(1),
+            ])
         client.modifyOptimistic { b in
             b.patch(fragment: CookFields.self, id: "c1") { _ in }
         }

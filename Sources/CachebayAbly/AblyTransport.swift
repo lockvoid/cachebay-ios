@@ -84,9 +84,10 @@ public final class AblyTransport: WSTransport, @unchecked Sendable {
         releaseChannelWhenIdle: Bool = true,
         maintainsPresence: Bool = false
     ) {
-        self.init(realtime: realtime, ownsRealtime: false,
-                  resolveChannel: resolveChannel, decodeMessage: decodeMessage,
-                  releaseChannelWhenIdle: releaseChannelWhenIdle, maintainsPresence: maintainsPresence)
+        self.init(
+            realtime: realtime, ownsRealtime: false,
+            resolveChannel: resolveChannel, decodeMessage: decodeMessage,
+            releaseChannelWhenIdle: releaseChannelWhenIdle, maintainsPresence: maintainsPresence)
     }
 
     /// Convenience: the transport builds and owns the `ARTRealtime` from
@@ -99,9 +100,10 @@ public final class AblyTransport: WSTransport, @unchecked Sendable {
         releaseChannelWhenIdle: Bool = true,
         maintainsPresence: Bool = false
     ) {
-        self.init(realtime: ARTRealtime(options: options), ownsRealtime: true,
-                  resolveChannel: resolveChannel, decodeMessage: decodeMessage,
-                  releaseChannelWhenIdle: releaseChannelWhenIdle, maintainsPresence: maintainsPresence)
+        self.init(
+            realtime: ARTRealtime(options: options), ownsRealtime: true,
+            resolveChannel: resolveChannel, decodeMessage: decodeMessage,
+            releaseChannelWhenIdle: releaseChannelWhenIdle, maintainsPresence: maintainsPresence)
     }
 
     private init(
@@ -249,7 +251,8 @@ public final class AblyTransport: WSTransport, @unchecked Sendable {
     /// payload is treated as the `data` itself.
     public static func result(from frame: JSONValue) -> OperationResult<JSONValue> {
         guard case .object(let object) = frame,
-              object["data"] != nil || object["errors"] != nil else {
+            object["data"] != nil || object["errors"] != nil
+        else {
             return OperationResult(data: frame)
         }
         let data = object["data"] ?? .null

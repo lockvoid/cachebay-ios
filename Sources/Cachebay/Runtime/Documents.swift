@@ -130,7 +130,8 @@ public final class Documents: @unchecked Sendable {
             if let r = typeReducers[canonicalTypename] {
                 rootReducer = r
                 rootReducerPrev = graph.getRecord(startId)
-                rootReducerIdPart = firstColon
+                rootReducerIdPart =
+                    firstColon
                     .map { String(startId[startId.index(after: $0)...]) }
                     ?? ""
             } else {
@@ -145,10 +146,12 @@ public final class Documents: @unchecked Sendable {
         }
 
         if isRoot {
-            graph.putRecord(startId, [
-                CachebayConstants.idField: .string(startId),
-                CachebayConstants.typenameField: .string(startId),
-            ])
+            graph.putRecord(
+                startId,
+                [
+                    CachebayConstants.idField: .string(startId),
+                    CachebayConstants.typenameField: .string(startId),
+                ])
         }
 
         var pendingPages: [PendingPage] = []
@@ -190,11 +193,12 @@ public final class Documents: @unchecked Sendable {
         // for the rooted entity.
         if let rootReducer {
             let nextSnapshot = graph.getRecord(startId) ?? [:]
-            let result = rootReducer(EntityMergeContext(
-                id: rootReducerIdPart,
-                prev: rootReducerPrev,
-                next: nextSnapshot
-            ))
+            let result = rootReducer(
+                EntityMergeContext(
+                    id: rootReducerIdPart,
+                    prev: rootReducerPrev,
+                    next: nextSnapshot
+                ))
             if !recordsEqual(result, nextSnapshot) {
                 graph.replaceRecord(startId, result)
             }
@@ -378,8 +382,9 @@ public final class Documents: @unchecked Sendable {
         for (k, v) in obj {
             switch k {
             case CachebayConstants.typenameField,
-                 CachebayConstants.connectionEdgesField,
-                 CachebayConstants.connectionPageInfoField: continue
+                CachebayConstants.connectionEdgesField,
+                CachebayConstants.connectionPageInfoField:
+                continue
             default:
                 // Inline scalar/array/inline object — stored directly.
                 if case .object(let o) = v, o[CachebayConstants.typenameField] == nil {
@@ -442,7 +447,8 @@ public final class Documents: @unchecked Sendable {
             if let r = typeReducers[canonicalTypename] {
                 reducer = r
                 prevSnapshot = graph.getRecord(rootId)
-                reducerIdPart = firstColon
+                reducerIdPart =
+                    firstColon
                     .map { String(rootId[rootId.index(after: $0)...]) }
                     ?? ""
             } else {
@@ -482,11 +488,12 @@ public final class Documents: @unchecked Sendable {
         // observable change and no emit fires.
         if let reducer {
             let nextSnapshot = graph.getRecord(rootId) ?? [:]
-            let result = reducer(EntityMergeContext(
-                id: reducerIdPart,
-                prev: prevSnapshot,
-                next: nextSnapshot
-            ))
+            let result = reducer(
+                EntityMergeContext(
+                    id: reducerIdPart,
+                    prev: prevSnapshot,
+                    next: nextSnapshot
+                ))
             if !recordsEqual(result, nextSnapshot) {
                 graph.replaceRecord(rootId, result)
             }
@@ -622,7 +629,8 @@ public final class Documents: @unchecked Sendable {
         var data: [String: JSONValue] = [:]
         var fingerprints: [String: JSONValue] = [:]
 
-        let isRootId = options.rootId == nil
+        let isRootId =
+            options.rootId == nil
             || options.rootId == CachebayConstants.rootID
             || (options.rootId?.hasPrefix("@mutation.") ?? false)
             || (options.rootId?.hasPrefix("@subscription.") ?? false)
@@ -723,7 +731,8 @@ public final class Documents: @unchecked Sendable {
                 fingerprints[CachebayConstants.fingerprintKey] = .int(Int64(fingerprintNodes(0, rootFps)))
             }
         }
-        let result: MaterializeResult = !requestedOK
+        let result: MaterializeResult =
+            !requestedOK
             ? MaterializeResult(
                 data: .undefined, fingerprints: .undefined,
                 dependencies: context.dependencies, source: .none,
@@ -895,7 +904,8 @@ struct MaterializeContext {
         // detects "we don't have the exact page" even when the
         // canonical merger has data.
         let baseIsCanonical = canonical
-        let baseKey = baseIsCanonical
+        let baseKey =
+            baseIsCanonical
             ? Keys.buildConnectionCanonicalKey(field: field, parentId: parentId, variables: variables)
             : Keys.buildConnectionKey(field: field, parentId: parentId, variables: variables)
         dependencies.insert(baseKey)

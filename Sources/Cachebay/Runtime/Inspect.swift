@@ -109,7 +109,7 @@ public final class Inspect: @unchecked Sendable {
     private func parseFilters(_ raw: String) -> [String: JSONValue] {
         if raw.isEmpty { return [:] }
         guard let data = raw.data(using: .utf8),
-              case .object(let obj) = (try? JSONValue.from(json: data)) ?? .null
+            case .object(let obj) = (try? JSONValue.from(json: data)) ?? .null
         else { return [:] }
         var out: [String: JSONValue] = [:]
         for (k, v) in obj where !CachebayConstants.paginationArgs.contains(k) {

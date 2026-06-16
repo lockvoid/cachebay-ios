@@ -4,22 +4,24 @@ import XCTest
 final class OperationsTests: XCTestCase {
     private func makeClient(ws: MockWSTransport? = nil) -> (CachebayClient, MockHTTPTransport) {
         let http = MockHTTPTransport()
-        let client = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: http, ws: ws),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: http, ws: ws),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
         return (client, http)
     }
 
     func test_mutation_writes_result_and_updates_watchers() async throws {
         let (client, http) = makeClient()
         http.whenQueryContains("mutation") { _ in
-            OperationResult(data: .object([
-                "createPost": .object([
-                    "post": .object(["__typename": "Post", "id": "p1", "title": "Hello"])
-                ])
-            ]))
+            OperationResult(
+                data: .object([
+                    "createPost": .object([
+                        "post": .object(["__typename": "Post", "id": "p1", "title": "Hello"])
+                    ])
+                ]))
         }
 
         // Watcher pre-registers deps for Post:p1 — the mutation should trigger it.
@@ -30,18 +32,21 @@ final class OperationsTests: XCTestCase {
         )
         // Pre-populate the dep index: normalize an empty response so watcher deps exist,
         // then let the mutation update the Post:p1 entity which feeds the watcher.
-        try client.writeQuery(query: "query { post(id: \"p1\") { id title } }", variables: ["id": "p1"], data: .object([
-            "post": .object(["__typename": "Post", "id": "p1", "title": "Old"])
-        ]))
+        try client.writeQuery(
+            query: "query { post(id: \"p1\") { id title } }", variables: ["id": "p1"],
+            data: .object([
+                "post": .object(["__typename": "Post", "id": "p1", "title": "Old"])
+            ]))
         try await Task.sleep(nanoseconds: 20_000_000)
 
-        let result = try await client.executeMutation(query: """
-        mutation CreatePost {
-            createPost {
-                post { id title }
-            }
-        }
-        """, variables: [:])
+        let result = try await client.executeMutation(
+            query: """
+                mutation CreatePost {
+                    createPost {
+                        post { id title }
+                    }
+                }
+                """, variables: [:])
         XCTAssertNotNil(result.data?["createPost"]?["post"])
         XCTAssertEqual(result.data?["createPost"]?["post"]?["title"]?.string, "Hello")
 
@@ -60,9 +65,10 @@ final class OperationsTests: XCTestCase {
         ])
         let (client, _) = makeClient(ws: ws)
 
-        let stream = try client.executeSubscription(query: """
-        subscription PostAdded { postAdded { id title } }
-        """)
+        let stream = try client.executeSubscription(
+            query: """
+                subscription PostAdded { postAdded { id title } }
+                """)
 
         var titles: [String] = []
         for try await event in stream {
@@ -76,9 +82,11 @@ final class OperationsTests: XCTestCase {
 
     func test_networkOnly_always_fetches() async throws {
         let (client, http) = makeClient()
-        http.whenQueryContains("me", respondWith: .object([
-            "me": .object(["__typename": "User", "id": "u1", "name": "Alice"])
-        ]))
+        http.whenQueryContains(
+            "me",
+            respondWith: .object([
+                "me": .object(["__typename": "User", "id": "u1", "name": "Alice"])
+            ]))
         // Warm up cache.
         _ = try await client.executeQuery(query: "query { me { id name } }")
         XCTAssertEqual(http.calls.count, 1)
@@ -95,9 +103,11 @@ final class OperationsTests: XCTestCase {
         let capturedErrors = CaptureBox<[CombinedError]>(value: [])
         _ = try client.watchQuery(
             query: "query { posts { id } }",
-            options: WatchQueryOptions(immediate: false, onData: { _ in }, onError: { err in
-                capturedErrors.lock.lock(); capturedErrors.unsafeValue.append(err); capturedErrors.lock.unlock()
-            })
+            options: WatchQueryOptions(
+                immediate: false, onData: { _ in },
+                onError: { err in
+                    capturedErrors.lock.lock(); capturedErrors.unsafeValue.append(err); capturedErrors.lock.unlock()
+                })
         )
         let r = try await client.executeQuery(query: "query { posts { id } }", cachePolicy: .networkOnly)
         XCTAssertNotNil(r.error)
@@ -107,9 +117,11 @@ final class OperationsTests: XCTestCase {
 
     func test_evictAll_clears_cache_and_refetches_watchers() async throws {
         let (client, http) = makeClient()
-        http.whenQueryContains("me", respondWith: .object([
-            "me": .object(["__typename": "User", "id": "u1", "name": "Alice"])
-        ]))
+        http.whenQueryContains(
+            "me",
+            respondWith: .object([
+                "me": .object(["__typename": "User", "id": "u1", "name": "Alice"])
+            ]))
         let emissions = CaptureBox<[JSONValue]>(value: [])
         let handle = try client.watchQuery(
             query: "query { me { id name } }",

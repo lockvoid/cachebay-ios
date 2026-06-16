@@ -3,14 +3,15 @@ import XCTest
 
 final class ParserTests: XCTestCase {
     func test_simple_query() throws {
-        let doc = try Parser.parse("""
-        query Foo($id: ID!) {
-            post(id: $id) {
-                id
-                title
+        let doc = try Parser.parse(
+            """
+            query Foo($id: ID!) {
+                post(id: $id) {
+                    id
+                    title
+                }
             }
-        }
-        """)
+            """)
         XCTAssertEqual(doc.operations.count, 1)
         let op = doc.operations[0]
         XCTAssertEqual(op.operation, .query)
@@ -33,27 +34,29 @@ final class ParserTests: XCTestCase {
     }
 
     func test_fragment() throws {
-        let doc = try Parser.parse("""
-        fragment PostFields on Post {
-            id
-            title
-            author { id name }
-        }
-        """)
+        let doc = try Parser.parse(
+            """
+            fragment PostFields on Post {
+                id
+                title
+                author { id name }
+            }
+            """)
         XCTAssertEqual(doc.fragments.count, 1)
         XCTAssertEqual(doc.fragments[0].name, "PostFields")
         XCTAssertEqual(doc.fragments[0].typeCondition, "Post")
     }
 
     func test_inline_fragment_and_spread() throws {
-        let doc = try Parser.parse("""
-        query Foo {
-            node {
-                ... on Post { id }
-                ...OtherFields
+        let doc = try Parser.parse(
+            """
+            query Foo {
+                node {
+                    ... on Post { id }
+                    ...OtherFields
+                }
             }
-        }
-        """)
+            """)
         let op = doc.operations[0]
         guard case .field(let nodeF) = op.selectionSet[0] else { return XCTFail() }
         XCTAssertEqual(nodeF.selectionSet.count, 2)
@@ -64,13 +67,14 @@ final class ParserTests: XCTestCase {
     }
 
     func test_directive_with_args() throws {
-        let doc = try Parser.parse("""
-        query Q {
-            posts @connection(key: "Feed", filters: ["category"], mode: "infinite") {
-                edges { node { id } }
+        let doc = try Parser.parse(
+            """
+            query Q {
+                posts @connection(key: "Feed", filters: ["category"], mode: "infinite") {
+                    edges { node { id } }
+                }
             }
-        }
-        """)
+            """)
         guard case .field(let f) = doc.operations[0].selectionSet[0] else { return XCTFail() }
         XCTAssertEqual(f.directives.count, 1)
         XCTAssertEqual(f.directives[0].name, "connection")
@@ -78,18 +82,19 @@ final class ParserTests: XCTestCase {
     }
 
     func test_sdl_object_type() throws {
-        let doc = try Parser.parse("""
-        type Post {
-            id: ID!
-            title: String
-            author: User
-        }
+        let doc = try Parser.parse(
+            """
+            type Post {
+                id: ID!
+                title: String
+                author: User
+            }
 
-        type User {
-            id: ID!
-            name: String!
-        }
-        """)
+            type User {
+                id: ID!
+                name: String!
+            }
+            """)
         // Should produce a schema definition collecting types
         let schemas = doc.definitions.compactMap { if case .schema(let s) = $0 { return s } else { return nil } }
         XCTAssertEqual(schemas.count, 1)

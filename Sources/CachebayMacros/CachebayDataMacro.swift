@@ -81,9 +81,10 @@ extension CachebayDataMacro {
             if varDecl.modifiers.contains(where: { $0.name.tokenKind == .keyword(.static) }) { continue }
             for binding in varDecl.bindings {
                 guard let idPattern = binding.pattern.as(IdentifierPatternSyntax.self) else { continue }
-                if binding.accessorBlock != nil { continue } // computed property
+                if binding.accessorBlock != nil { continue }  // computed property
                 guard let type = binding.typeAnnotation?.type else { continue }
-                let isOptional = type.is(OptionalTypeSyntax.self)
+                let isOptional =
+                    type.is(OptionalTypeSyntax.self)
                     || (type.as(IdentifierTypeSyntax.self)?.name.text == "Optional")
                 out.append(
                     CachebayProperty(
@@ -165,10 +166,10 @@ extension CachebayDataMacro {
         }
         let body = lines.joined(separator: "\n")
         return """
-        @_spi(Cachebay) public init?(_dataDict dict: [String: Cachebay.JSONValue]) {
-        \(raw: body)
-        }
-        """
+            @_spi(Cachebay) public init?(_dataDict dict: [String: Cachebay.JSONValue]) {
+            \(raw: body)
+            }
+            """
     }
 
     /// Builds the round-trip `@_spi(Cachebay) __dataDict()` bridge.
@@ -180,10 +181,10 @@ extension CachebayDataMacro {
         lines.append("return d")
         let body = lines.joined(separator: "\n")
         return """
-        @_spi(Cachebay) public func __dataDict() -> [String: Cachebay.JSONValue] {
-        \(raw: body)
-        }
-        """
+            @_spi(Cachebay) public func __dataDict() -> [String: Cachebay.JSONValue] {
+            \(raw: body)
+            }
+            """
     }
 
     /// True when the struct declares `Codable`/`Decodable`/`Encodable` — the
@@ -193,7 +194,8 @@ extension CachebayDataMacro {
         for t in inherited {
             let name = t.type.trimmedDescription
             if name == "Codable" || name == "Decodable" || name == "Encodable"
-                || name.hasSuffix(".Codable") || name.hasSuffix(".Decodable") || name.hasSuffix(".Encodable") {
+                || name.hasSuffix(".Codable") || name.hasSuffix(".Decodable") || name.hasSuffix(".Encodable")
+            {
                 return true
             }
         }
@@ -217,10 +219,10 @@ extension CachebayDataMacro {
     static func makeCodable(props: [CachebayProperty], typename: String) -> [DeclSyntax] {
         let keyCases = props.map { "case \($0.name)" }.joined(separator: "\n")
         let codingKeys: DeclSyntax = """
-        public enum CodingKeys: String, CodingKey {
-        \(raw: keyCases)
-        }
-        """
+            public enum CodingKeys: String, CodingKey {
+            \(raw: keyCases)
+            }
+            """
 
         var decodeLines: [String] = ["let container = try decoder.container(keyedBy: CodingKeys.self)"]
         for p in props {
@@ -236,20 +238,20 @@ extension CachebayDataMacro {
             }
         }
         let initFrom: DeclSyntax = """
-        public init(from decoder: any Decoder) throws {
-        \(raw: decodeLines.joined(separator: "\n"))
-        }
-        """
+            public init(from decoder: any Decoder) throws {
+            \(raw: decodeLines.joined(separator: "\n"))
+            }
+            """
 
         var encodeLines: [String] = ["var container = encoder.container(keyedBy: CodingKeys.self)"]
         for p in props {
             encodeLines.append("try container.encode(self.\(p.name), forKey: .\(p.name))")
         }
         let encodeTo: DeclSyntax = """
-        public func encode(to encoder: any Encoder) throws {
-        \(raw: encodeLines.joined(separator: "\n"))
-        }
-        """
+            public func encode(to encoder: any Encoder) throws {
+            \(raw: encodeLines.joined(separator: "\n"))
+            }
+            """
 
         return [codingKeys, initFrom, encodeTo]
     }

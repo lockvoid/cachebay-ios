@@ -31,15 +31,26 @@ public extension CachebayClient {
     ) -> CachebayToken {
         let token = CachebayToken()
         var wrappedOnCache: (@Sendable (Op.Data, Bool) -> Void)? = nil
-        if let cb = onCacheData { wrappedOnCache = { [token] d, w in if token.isCancelled { return }; cb(d, w) } }
+        if let cb = onCacheData {
+            wrappedOnCache = { [token] d, w in
+                if token.isCancelled { return }; cb(d, w)
+            }
+        }
         var wrappedOnNetwork: (@Sendable (Op.Data) -> Void)? = nil
-        if let cb = onNetworkData { wrappedOnNetwork = { [token] d in if token.isCancelled { return }; cb(d) } }
+        if let cb = onNetworkData {
+            wrappedOnNetwork = { [token] d in
+                if token.isCancelled { return }; cb(d)
+            }
+        }
         var wrappedOnError: (@Sendable (CombinedError) -> Void)? = nil
-        if let cb = onError { wrappedOnError = { [token] e in if token.isCancelled { return }; cb(e) } }
+        if let cb = onError {
+            wrappedOnError = { [token] e in
+                if token.isCancelled { return }; cb(e)
+            }
+        }
 
         let plan: CachePlan
-        do { plan = try planner.getPlan(Op.document) }
-        catch { wrappedOnError?(CombinedError(networkError: error)); return token }
+        do { plan = try planner.getPlan(Op.document) } catch { wrappedOnError?(CombinedError(networkError: error)); return token }
 
         var cacheCb: (@Sendable (JSONValue, Bool) -> Void)? = nil
         if let typed = wrappedOnCache { cacheCb = { json, w in if let d = Op.Data(cachebayJSON: json) { typed(d, w) } } }
@@ -77,13 +88,20 @@ public extension CachebayClient {
     ) -> CachebayToken {
         let token = CachebayToken()
         var wrappedOnData: (@Sendable (Op.Data) -> Void)? = nil
-        if let cb = onData { wrappedOnData = { [token] d in if token.isCancelled { return }; cb(d) } }
+        if let cb = onData {
+            wrappedOnData = { [token] d in
+                if token.isCancelled { return }; cb(d)
+            }
+        }
         var wrappedOnError: (@Sendable (CombinedError) -> Void)? = nil
-        if let cb = onError { wrappedOnError = { [token] e in if token.isCancelled { return }; cb(e) } }
+        if let cb = onError {
+            wrappedOnError = { [token] e in
+                if token.isCancelled { return }; cb(e)
+            }
+        }
 
         let plan: CachePlan
-        do { plan = try planner.getPlan(Op.document) }
-        catch { wrappedOnError?(CombinedError(networkError: error)); return token }
+        do { plan = try planner.getPlan(Op.document) } catch { wrappedOnError?(CombinedError(networkError: error)); return token }
 
         var dataCb: (@Sendable (JSONValue) -> Void)? = nil
         if let typed = wrappedOnData { dataCb = { json in if let d = Op.Data(cachebayJSON: json) { typed(d) } } }
@@ -133,9 +151,17 @@ public extension CachebayClient {
     ) -> CachebayToken {
         let token = CachebayToken()
         var wrappedOnData: (@Sendable (Op.Data) -> Void)? = nil
-        if let cb = onData { wrappedOnData = { [token] d in if token.isCancelled { return }; cb(d) } }
+        if let cb = onData {
+            wrappedOnData = { [token] d in
+                if token.isCancelled { return }; cb(d)
+            }
+        }
         var wrappedOnError: (@Sendable (CombinedError) -> Void)? = nil
-        if let cb = onError { wrappedOnError = { [token] e in if token.isCancelled { return }; cb(e) } }
+        if let cb = onError {
+            wrappedOnError = { [token] e in
+                if token.isCancelled { return }; cb(e)
+            }
+        }
 
         let task = Task.detached { [weak self] in
             guard let self else { return }

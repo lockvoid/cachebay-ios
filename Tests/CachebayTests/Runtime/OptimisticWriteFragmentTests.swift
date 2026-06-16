@@ -24,24 +24,26 @@ private enum StoryFields: CachebayFragment {
     typealias Data = StoryFieldsData
     static let fragmentName = "StoryFields"
     static let onTypename = "Story"
-    static let document: QueryDocument = .source("""
-    fragment StoryFields on Story {
-        __typename
-        id
-        title
-        comments { __typename id body }
-    }
-    """)
+    static let document: QueryDocument = .source(
+        """
+        fragment StoryFields on Story {
+            __typename
+            id
+            title
+            comments { __typename id body }
+        }
+        """)
     static var __cachebayFieldNames: [AnyKeyPath: String] { StoryFieldsData.__cachebayFieldNames }
 }
 
 final class OptimisticWriteFragmentTests: XCTestCase {
     private func makeClient() -> CachebayClient {
-        CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
     }
 
     private static func makeStoryData() -> StoryFields.Data {
@@ -61,7 +63,8 @@ final class OptimisticWriteFragmentTests: XCTestCase {
 
         let story = client.graph.getRecord("Story:s1")
         XCTAssertEqual(story?["title"], .string("Hello"))
-        XCTAssertEqual(story?["comments"], .refList(["Comment:c1", "Comment:c2"]),
+        XCTAssertEqual(
+            story?["comments"], .refList(["Comment:c1", "Comment:c2"]),
             "nested entity-list field must be a refList of cache keys, not embedded objects")
         XCTAssertEqual(client.graph.getRecord("Comment:c1")?["body"], .string("first"))
         XCTAssertEqual(client.graph.getRecord("Comment:c1")?["__typename"], .string("Comment"))
@@ -106,10 +109,12 @@ final class OptimisticWriteFragmentTests: XCTestCase {
 
         tx.revert()
 
-        XCTAssertEqual(client.graph.getField("Comment:c1", "body")?.string, "ORIGINAL",
+        XCTAssertEqual(
+            client.graph.getField("Comment:c1", "body")?.string, "ORIGINAL",
             "pre-existing record must restore to its baseline, not vanish")
         XCTAssertNotNil(client.graph.getRecord("Comment:c1"))
-        XCTAssertNil(client.graph.getRecord("Comment:c2"),
+        XCTAssertNil(
+            client.graph.getRecord("Comment:c2"),
             "fresh record introduced by the write must still be dropped")
     }
 }

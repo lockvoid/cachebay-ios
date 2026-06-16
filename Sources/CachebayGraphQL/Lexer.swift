@@ -16,7 +16,7 @@ public enum TokenKind: Hashable, Sendable {
     case equals
     case at
     case pipe
-    case spread      // "..."
+    case spread  // "..."
     case eof
 }
 
@@ -110,11 +110,11 @@ public struct Lexer {
         case UInt8(ascii: "\""):
             return try readString(startOffset: startOffset, startColumn: startColumn)
         case UInt8(ascii: "_"),
-             UInt8(ascii: "a")...UInt8(ascii: "z"),
-             UInt8(ascii: "A")...UInt8(ascii: "Z"):
+            UInt8(ascii: "a")...UInt8(ascii: "z"),
+            UInt8(ascii: "A")...UInt8(ascii: "Z"):
             return readName(startOffset: startOffset, startColumn: startColumn)
         case UInt8(ascii: "-"),
-             UInt8(ascii: "0")...UInt8(ascii: "9"):
+            UInt8(ascii: "0")...UInt8(ascii: "9"):
             return try readNumber(startOffset: startOffset, startColumn: startColumn)
         default:
             throw syntax("Unexpected character '\(Character(UnicodeScalar(b)))'")
@@ -127,7 +127,7 @@ public struct Lexer {
         while offset < source.count {
             let b = source[offset]
             if b == 0xEF && offset + 2 < source.count && source[offset + 1] == 0xBB && source[offset + 2] == 0xBF {
-                offset += 3 // BOM
+                offset += 3  // BOM
                 continue
             }
             switch b {
@@ -199,17 +199,17 @@ public struct Lexer {
     private mutating func readString(startOffset: Int, startColumn: Int) throws -> Token {
         // Check for block string """..."""
         if offset + 2 < source.count,
-           source[offset] == UInt8(ascii: "\""),
-           source[offset + 1] == UInt8(ascii: "\""),
-           source[offset + 2] == UInt8(ascii: "\"")
+            source[offset] == UInt8(ascii: "\""),
+            source[offset + 1] == UInt8(ascii: "\""),
+            source[offset + 2] == UInt8(ascii: "\"")
         {
             offset += 3
             var body: [UInt8] = []
             while offset < source.count {
                 if offset + 2 < source.count,
-                   source[offset] == UInt8(ascii: "\""),
-                   source[offset + 1] == UInt8(ascii: "\""),
-                   source[offset + 2] == UInt8(ascii: "\"")
+                    source[offset] == UInt8(ascii: "\""),
+                    source[offset + 1] == UInt8(ascii: "\""),
+                    source[offset + 2] == UInt8(ascii: "\"")
                 {
                     offset += 3
                     let raw = String(decoding: body, as: UTF8.self)
@@ -219,7 +219,8 @@ public struct Lexer {
                 if source[offset] == UInt8(ascii: "\\") && offset + 3 < source.count
                     && source[offset + 1] == UInt8(ascii: "\"")
                     && source[offset + 2] == UInt8(ascii: "\"")
-                    && source[offset + 3] == UInt8(ascii: "\"") {
+                    && source[offset + 3] == UInt8(ascii: "\"")
+                {
                     body.append(UInt8(ascii: "\""))
                     body.append(UInt8(ascii: "\""))
                     body.append(UInt8(ascii: "\""))

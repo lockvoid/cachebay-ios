@@ -183,7 +183,8 @@ public struct CachePlan: Hashable, Sendable {
         for field in fields {
             let parentId = parentTypename == rootTypename ? CachebayConstants.rootID : parentTypename
             if field.isConnection {
-                let key = canonical
+                let key =
+                    canonical
                     ? Keys.buildConnectionCanonicalKey(field: field, parentId: parentId, variables: variables)
                     : Keys.buildConnectionKey(field: field, parentId: parentId, variables: variables)
                 deps.insert(key)

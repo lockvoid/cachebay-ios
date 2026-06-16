@@ -43,16 +43,18 @@ jobs:
 
   lint:
     # Apple's swift-format, bundled in the toolchain — no brew, no third-party
-    # action. Informational only (continue-on-error): it surfaces style findings
-    # but never blocks the build. Tune via `.swift-format`. To adopt enforcing
-    # later: run `swift format --in-place --recursive Sources Tests` once, commit
-    # the diff, then drop `continue-on-error`.
-    name: swift format (lint, non-blocking)
+    # action. ENFORCING (fails CI on findings): the tree was reformatted once
+    # with `swift format --in-place`, so it's clean. Tune via `.swift-format`.
+    # Generated code (GeneratedSmoke/*.cachebay output) is excluded — it carries
+    # the CLI's own formatting and would drift on regen. (.swift-format-ignore is
+    # not honored with --recursive in 6.2.x, so we exclude via an explicit list.)
+    name: swift format (lint)
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
       - name: Select newest Xcode (Swift 6.2 bundles swift-format)
         run: sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
-      - name: swift format lint
-        continue-on-error: true
-        run: swift format lint --strict --parallel --recursive Sources Tests
+      - name: swift format lint (strict)
+        run: |
+          find Sources Tests -name '*.swift' -not -path '*/GeneratedSmoke/*' -print0 \
+            | xargs -0 swift format lint --strict --parallel

@@ -39,7 +39,7 @@ final class GraphQLNullableTests: XCTestCase {
     func test_nilLiteral_isNone_notNull() {
         let v: GraphQLNullable<String> = nil
         XCTAssertEqual(v, .none)
-        XCTAssertNotEqual(v, .null) // crucial: `nil` is omit, NOT explicit null
+        XCTAssertNotEqual(v, .null)  // crucial: `nil` is omit, NOT explicit null
     }
 
     // MARK: - Literal conformances wrap into .some
@@ -98,9 +98,9 @@ final class GraphQLNullableTests: XCTestCase {
         func wire(_ v: GraphQLNullable<Int>) -> JSONValue? {
             v.__cachebayEncode { .int(Int64($0)) }
         }
-        XCTAssertNil(wire(.none))                 // key omitted
-        XCTAssertEqual(wire(.null), .null)        // key present, null
-        XCTAssertEqual(wire(.some(7)), .int(7))   // key present, value
+        XCTAssertNil(wire(.none))  // key omitted
+        XCTAssertEqual(wire(.null), .null)  // key present, null
+        XCTAssertEqual(wire(.some(7)), .int(7))  // key present, value
     }
 
     // MARK: - Optional bridge (nil → omit, value → some; never .null)

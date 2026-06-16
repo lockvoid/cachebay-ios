@@ -12,21 +12,24 @@ import XCTest
 final class FragmentsPerformanceTests: XCTestCase {
 
     private func makeClient() -> CachebayClient {
-        CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
     }
 
     private let userFragment = "fragment UserFields on User { id email }"
 
     private func putUser(_ client: CachebayClient, id: String, email: String) {
-        client.graph.putRecord("User:\(id)", [
-            "__typename": "User",
-            "id": .string(id),
-            "email": .string(email),
-        ])
+        client.graph.putRecord(
+            "User:\(id)",
+            [
+                "__typename": "User",
+                "id": .string(id),
+                "email": .string(email),
+            ])
         client.graph.flush()
     }
 
@@ -48,8 +51,9 @@ final class FragmentsPerformanceTests: XCTestCase {
         client.graph.flush()
 
         let r2 = client.readFragment(id: "User:u1", fragment: userFragment)
-        XCTAssertEqual(r2?["email"]?.string, "updated@example.com",
-                       "readFragment must always reflect the freshest record (force:true)")
+        XCTAssertEqual(
+            r2?["email"]?.string, "updated@example.com",
+            "readFragment must always reflect the freshest record (force:true)")
     }
 
     // MARK: - watchFragment two-phase (cold then hot)

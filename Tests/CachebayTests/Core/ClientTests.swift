@@ -68,9 +68,10 @@ final class ClientTests: XCTestCase {
         let client = makeClient(ws: ws)
 
         // Subscription stream is constructed without throwing.
-        XCTAssertNoThrow(try {
-            _ = try client.executeSubscription(query: "subscription S { x }")
-        }())
+        XCTAssertNoThrow(
+            try {
+                _ = try client.executeSubscription(query: "subscription S { x }")
+            }())
     }
 
     // MARK: - Option propagation
@@ -102,9 +103,11 @@ final class ClientTests: XCTestCase {
 
     func test_optionPropagation_cachePolicy_defaultsToProvided() async throws {
         let http = MockHTTPTransport()
-        http.whenQueryContains("post", respondWith: .object([
-            "post": .object(["__typename": .string("Post"), "id": .string("p1"), "title": .string("Hello")])
-        ]))
+        http.whenQueryContains(
+            "post",
+            respondWith: .object([
+                "post": .object(["__typename": .string("Post"), "id": .string("p1"), "title": .string("Hello")])
+            ]))
         let opts = CachebayOptions(
             transport: Transport(http: http),
             cachePolicy: .cacheOnly,

@@ -31,9 +31,11 @@ final class DocumentsMaterializeTests: XCTestCase {
     func test_fulfilled_for_fully_present_entity_selection() throws {
         let (_, documents) = makeStack()
         let p = try plan("query Q($id: ID!) { user(id: $id) { id email } }")
-        documents.normalize(plan: p, variables: ["id": "u1"], data: .object([
-            "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
-        ]))
+        documents.normalize(
+            plan: p, variables: ["id": "u1"],
+            data: .object([
+                "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
+            ]))
         let res = documents.materialize(plan: p, variables: ["id": "u1"])
         XCTAssertNotEqual(res.source, .none)
         XCTAssertTrue(res.canonicalOK)
@@ -58,7 +60,8 @@ final class DocumentsMaterializeTests: XCTestCase {
         let res = documents.materialize(plan: p, variables: ["id": "u2"])
         XCTAssertEqual(res.source, .none)
         XCTAssertFalse(res.canonicalOK)
-        if case .undefined = res.data { /* ok */ } else {
+        if case .undefined = res.data { /* ok */
+        } else {
             XCTFail("expected undefined data, got \(res.data)")
         }
         // Watcher dependency on missing entity is still reported so that a
@@ -68,23 +71,26 @@ final class DocumentsMaterializeTests: XCTestCase {
 
     func test_aliases_and_args_map_to_response_keys() throws {
         let (_, documents) = makeStack(keys: ["Media": { _, obj in obj["key"]?.string }])
-        let p = try plan("""
-        query MediaView {
-            media(key: "m1") {
-                key
-                dataUrl
-                previewUrl: dataUrl(variant: "preview")
+        let p = try plan(
+            """
+            query MediaView {
+                media(key: "m1") {
+                    key
+                    dataUrl
+                    previewUrl: dataUrl(variant: "preview")
+                }
             }
-        }
-        """)
-        documents.normalize(plan: p, variables: [:], data: .object([
-            "media": .object([
-                "__typename": "Media",
-                "key": "m1",
-                "dataUrl": "raw-1",
-                "previewUrl": "raw-2",
-            ])
-        ]))
+            """)
+        documents.normalize(
+            plan: p, variables: [:],
+            data: .object([
+                "media": .object([
+                    "__typename": "Media",
+                    "key": "m1",
+                    "dataUrl": "raw-1",
+                    "previewUrl": "raw-2",
+                ])
+            ]))
 
         let res = documents.materialize(plan: p, variables: [:])
         XCTAssertNotEqual(res.source, .none)
@@ -95,25 +101,28 @@ final class DocumentsMaterializeTests: XCTestCase {
 
     func test_dependencies_include_canonical_connection_keys() throws {
         let (_, documents) = makeStack()
-        let p = try plan("""
-        query Posts($first: Int, $after: String) {
-            posts(first: $first, after: $after) @connection(mode: "infinite") {
-                pageInfo { endCursor hasNextPage }
-                edges { cursor node { id title } }
+        let p = try plan(
+            """
+            query Posts($first: Int, $after: String) {
+                posts(first: $first, after: $after) @connection(mode: "infinite") {
+                    pageInfo { endCursor hasNextPage }
+                    edges { cursor node { id title } }
+                }
             }
-        }
-        """)
+            """)
         let vars: [String: JSONValue] = ["first": 2, "after": .null]
-        documents.normalize(plan: p, variables: vars, data: .object([
-            "posts": .object([
-                "__typename": "PostConnection",
-                "pageInfo": .object(["__typename": "PageInfo", "endCursor": "p2", "hasNextPage": true]),
-                "edges": .array([
-                    .object(["__typename": "PostEdge", "cursor": "p1", "node": .object(["__typename": "Post", "id": "p1", "title": "A"])]),
-                    .object(["__typename": "PostEdge", "cursor": "p2", "node": .object(["__typename": "Post", "id": "p2", "title": "B"])]),
-                ]),
-            ])
-        ]))
+        documents.normalize(
+            plan: p, variables: vars,
+            data: .object([
+                "posts": .object([
+                    "__typename": "PostConnection",
+                    "pageInfo": .object(["__typename": "PageInfo", "endCursor": "p2", "hasNextPage": true]),
+                    "edges": .array([
+                        .object(["__typename": "PostEdge", "cursor": "p1", "node": .object(["__typename": "Post", "id": "p1", "title": "A"])]),
+                        .object(["__typename": "PostEdge", "cursor": "p2", "node": .object(["__typename": "Post", "id": "p2", "title": "B"])]),
+                    ]),
+                ])
+            ]))
 
         let res = documents.materialize(plan: p, variables: vars)
         XCTAssertEqual(res.source, .canonical)
@@ -130,9 +139,11 @@ final class DocumentsMaterializeTests: XCTestCase {
     func test_reads_string_scalar() throws {
         let (_, documents) = makeStack()
         let p = try plan("query Q($id: ID!) { entity(id: $id) { id data } }")
-        documents.normalize(plan: p, variables: ["id": "e1"], data: .object([
-            "entity": .object(["__typename": "Entity", "id": "e1", "data": "string"])
-        ]))
+        documents.normalize(
+            plan: p, variables: ["id": "e1"],
+            data: .object([
+                "entity": .object(["__typename": "Entity", "id": "e1", "data": "string"])
+            ]))
         let res = documents.materialize(plan: p, variables: ["id": "e1"])
         XCTAssertEqual(res.data["entity"]?["data"]?.string, "string")
     }
@@ -140,9 +151,11 @@ final class DocumentsMaterializeTests: XCTestCase {
     func test_reads_number_scalar() throws {
         let (_, documents) = makeStack()
         let p = try plan("query Q($id: ID!) { entity(id: $id) { id data } }")
-        documents.normalize(plan: p, variables: ["id": "e1"], data: .object([
-            "entity": .object(["__typename": "Entity", "id": "e1", "data": .int(123)])
-        ]))
+        documents.normalize(
+            plan: p, variables: ["id": "e1"],
+            data: .object([
+                "entity": .object(["__typename": "Entity", "id": "e1", "data": .int(123)])
+            ]))
         let res = documents.materialize(plan: p, variables: ["id": "e1"])
         if case .int(let v) = res.data["entity"]?["data"] ?? .undefined {
             XCTAssertEqual(v, 123)
@@ -154,9 +167,11 @@ final class DocumentsMaterializeTests: XCTestCase {
     func test_reads_boolean_scalar() throws {
         let (_, documents) = makeStack()
         let p = try plan("query Q($id: ID!) { entity(id: $id) { id data } }")
-        documents.normalize(plan: p, variables: ["id": "e1"], data: .object([
-            "entity": .object(["__typename": "Entity", "id": "e1", "data": .bool(true)])
-        ]))
+        documents.normalize(
+            plan: p, variables: ["id": "e1"],
+            data: .object([
+                "entity": .object(["__typename": "Entity", "id": "e1", "data": .bool(true)])
+            ]))
         let res = documents.materialize(plan: p, variables: ["id": "e1"])
         XCTAssertEqual(res.data["entity"]?["data"]?.bool, true)
     }
@@ -164,11 +179,14 @@ final class DocumentsMaterializeTests: XCTestCase {
     func test_reads_null_scalar() throws {
         let (_, documents) = makeStack()
         let p = try plan("query Q($id: ID!) { entity(id: $id) { id data } }")
-        documents.normalize(plan: p, variables: ["id": "e1"], data: .object([
-            "entity": .object(["__typename": "Entity", "id": "e1", "data": .null])
-        ]))
+        documents.normalize(
+            plan: p, variables: ["id": "e1"],
+            data: .object([
+                "entity": .object(["__typename": "Entity", "id": "e1", "data": .null])
+            ]))
         let res = documents.materialize(plan: p, variables: ["id": "e1"])
-        if case .null = res.data["entity"]?["data"] ?? .undefined { /* ok */ } else {
+        if case .null = res.data["entity"]?["data"] ?? .undefined { /* ok */
+        } else {
             XCTFail("expected null data")
         }
     }
@@ -176,12 +194,14 @@ final class DocumentsMaterializeTests: XCTestCase {
     func test_reads_inline_json_object() throws {
         let (_, documents) = makeStack()
         let p = try plan("query Q($id: ID!) { entity(id: $id) { id data } }")
-        documents.normalize(plan: p, variables: ["id": "e1"], data: .object([
-            "entity": .object([
-                "__typename": "Entity", "id": "e1",
-                "data": .object(["foo": .object(["bar": "baz"])]),
-            ])
-        ]))
+        documents.normalize(
+            plan: p, variables: ["id": "e1"],
+            data: .object([
+                "entity": .object([
+                    "__typename": "Entity", "id": "e1",
+                    "data": .object(["foo": .object(["bar": "baz"])]),
+                ])
+            ]))
         let res = documents.materialize(plan: p, variables: ["id": "e1"])
         XCTAssertEqual(res.data["entity"]?["data"]?["foo"]?["bar"]?.string, "baz")
     }
@@ -190,24 +210,27 @@ final class DocumentsMaterializeTests: XCTestCase {
 
     func test_follows_ref_in_array_of_child_entities() throws {
         let (_, documents) = makeStack()
-        let p = try plan("""
-        query Q($id: ID!) {
-            post(id: $id) {
-                id
-                title
-                tags { id name }
+        let p = try plan(
+            """
+            query Q($id: ID!) {
+                post(id: $id) {
+                    id
+                    title
+                    tags { id name }
+                }
             }
-        }
-        """)
-        documents.normalize(plan: p, variables: ["id": "p1"], data: .object([
-            "post": .object([
-                "__typename": "Post", "id": "p1", "title": "Post 1",
-                "tags": .array([
-                    .object(["__typename": "Tag", "id": "t1", "name": "Tag 1"]),
-                    .object(["__typename": "Tag", "id": "t2", "name": "Tag 2"]),
-                ]),
-            ])
-        ]))
+            """)
+        documents.normalize(
+            plan: p, variables: ["id": "p1"],
+            data: .object([
+                "post": .object([
+                    "__typename": "Post", "id": "p1", "title": "Post 1",
+                    "tags": .array([
+                        .object(["__typename": "Tag", "id": "t1", "name": "Tag 1"]),
+                        .object(["__typename": "Tag", "id": "t2", "name": "Tag 2"]),
+                    ]),
+                ])
+            ]))
         let res = documents.materialize(plan: p, variables: ["id": "p1"])
         let tags = res.data["post"]?["tags"]?.array ?? []
         XCTAssertEqual(tags.count, 2)
@@ -219,43 +242,53 @@ final class DocumentsMaterializeTests: XCTestCase {
 
     func test_explicit_null_link_is_valid_data_not_a_miss() throws {
         let (_, documents) = makeStack()
-        let p = try plan("""
-        query Q($id: ID!) {
-            post(id: $id) { id author { id email } }
-        }
-        """)
-        documents.normalize(plan: p, variables: ["id": "p1"], data: .object([
-            "post": .object(["__typename": "Post", "id": "p1", "author": .null])
-        ]))
+        let p = try plan(
+            """
+            query Q($id: ID!) {
+                post(id: $id) { id author { id email } }
+            }
+            """)
+        documents.normalize(
+            plan: p, variables: ["id": "p1"],
+            data: .object([
+                "post": .object(["__typename": "Post", "id": "p1", "author": .null])
+            ]))
         let res = documents.materialize(plan: p, variables: ["id": "p1"])
         XCTAssertNotEqual(res.source, .none)
-        if case .null = res.data["post"]?["author"] ?? .undefined { /* ok */ } else {
+        if case .null = res.data["post"]?["author"] ?? .undefined { /* ok */
+        } else {
             XCTFail("expected explicit null author")
         }
     }
 
     func test_hydrates_in_place_when_record_appears_after_initial_null() throws {
         let (_, documents) = makeStack()
-        let p = try plan("""
-        query Q($id: ID!) {
-            post(id: $id) { id author { id email } }
-        }
-        """)
-        documents.normalize(plan: p, variables: ["id": "p1"], data: .object([
-            "post": .object(["__typename": "Post", "id": "p1", "author": .null])
-        ]))
+        let p = try plan(
+            """
+            query Q($id: ID!) {
+                post(id: $id) { id author { id email } }
+            }
+            """)
+        documents.normalize(
+            plan: p, variables: ["id": "p1"],
+            data: .object([
+                "post": .object(["__typename": "Post", "id": "p1", "author": .null])
+            ]))
         let r1 = documents.materialize(plan: p, variables: ["id": "p1"])
         XCTAssertNotEqual(r1.source, .none)
-        if case .null = r1.data["post"]?["author"] ?? .undefined { /* ok */ } else {
+        if case .null = r1.data["post"]?["author"] ?? .undefined { /* ok */
+        } else {
             XCTFail("expected null author at first read")
         }
 
-        documents.normalize(plan: p, variables: ["id": "p1"], data: .object([
-            "post": .object([
-                "__typename": "Post", "id": "p1",
-                "author": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
-            ])
-        ]))
+        documents.normalize(
+            plan: p, variables: ["id": "p1"],
+            data: .object([
+                "post": .object([
+                    "__typename": "Post", "id": "p1",
+                    "author": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"]),
+                ])
+            ]))
         let r2 = documents.materialize(plan: p, variables: ["id": "p1"], options: MaterializeOptions(preferCache: false))
         XCTAssertEqual(r2.data["post"]?["author"]?["id"]?.string, "u1")
         XCTAssertEqual(r2.data["post"]?["author"]?["email"]?.string, "u1@example.com")
@@ -264,9 +297,11 @@ final class DocumentsMaterializeTests: XCTestCase {
     func test_returns_consistent_data_for_same_query() throws {
         let (_, documents) = makeStack()
         let p = try plan("query Q($id: ID!) { user(id: $id) { id email } }")
-        documents.normalize(plan: p, variables: ["id": "u1"], data: .object([
-            "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
-        ]))
+        documents.normalize(
+            plan: p, variables: ["id": "u1"],
+            data: .object([
+                "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
+            ]))
         let r1 = documents.materialize(plan: p, variables: ["id": "u1"])
         let r2 = documents.materialize(plan: p, variables: ["id": "u1"])
         XCTAssertEqual(r1.data["user"]?["id"]?.string, r2.data["user"]?["id"]?.string)
@@ -278,9 +313,11 @@ final class DocumentsMaterializeTests: XCTestCase {
     func test_strict_read_when_canonical_false_finds_per_page_data() throws {
         let (_, documents) = makeStack()
         let p = try plan("query Q($id: ID!) { user(id: $id) { id email } }")
-        documents.normalize(plan: p, variables: ["id": "u1"], data: .object([
-            "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
-        ]))
+        documents.normalize(
+            plan: p, variables: ["id": "u1"],
+            data: .object([
+                "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
+            ]))
         let res = documents.materialize(plan: p, variables: ["id": "u1"], options: MaterializeOptions(canonical: false, preferCache: false))
         XCTAssertEqual(res.source, .strict)
         XCTAssertTrue(res.strictOK)
@@ -290,9 +327,11 @@ final class DocumentsMaterializeTests: XCTestCase {
     func test_canonical_read_succeeds_for_normalized_entity() throws {
         let (_, documents) = makeStack()
         let p = try plan("query Q($id: ID!) { user(id: $id) { id email } }")
-        documents.normalize(plan: p, variables: ["id": "u2"], data: .object([
-            "user": .object(["__typename": "User", "id": "u2", "email": "u2@example.com"])
-        ]))
+        documents.normalize(
+            plan: p, variables: ["id": "u2"],
+            data: .object([
+                "user": .object(["__typename": "User", "id": "u2", "email": "u2@example.com"])
+            ]))
         let res = documents.materialize(plan: p, variables: ["id": "u2"])
         XCTAssertEqual(res.source, .canonical)
         XCTAssertTrue(res.canonicalOK)
@@ -305,9 +344,11 @@ final class DocumentsMaterializeTests: XCTestCase {
     func test_root_fingerprint_present_when_fingerprint_enabled() throws {
         let (_, documents) = makeStack()
         let p = try plan("query Q($id: ID!) { user(id: $id) { id email } }")
-        documents.normalize(plan: p, variables: ["id": "u1"], data: .object([
-            "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
-        ]))
+        documents.normalize(
+            plan: p, variables: ["id": "u1"],
+            data: .object([
+                "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
+            ]))
         let res = documents.materialize(plan: p, variables: ["id": "u1"])
         let fps = res.fingerprints.object ?? [:]
         if case .int(let v) = fps[CachebayConstants.fingerprintKey] ?? .undefined {
@@ -326,9 +367,11 @@ final class DocumentsMaterializeTests: XCTestCase {
     func test_same_fingerprint_for_unchanged_data() throws {
         let (_, documents) = makeStack()
         let p = try plan("query Q($id: ID!) { user(id: $id) { id email } }")
-        documents.normalize(plan: p, variables: ["id": "u1"], data: .object([
-            "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
-        ]))
+        documents.normalize(
+            plan: p, variables: ["id": "u1"],
+            data: .object([
+                "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
+            ]))
         let r1 = documents.materialize(plan: p, variables: ["id": "u1"])
         let r2 = documents.materialize(plan: p, variables: ["id": "u1"])
         let fp1 = r1.fingerprints.object?[CachebayConstants.fingerprintKey]
@@ -339,14 +382,18 @@ final class DocumentsMaterializeTests: XCTestCase {
     func test_different_fingerprint_after_data_changes() throws {
         let (_, documents) = makeStack()
         let p = try plan("query Q($id: ID!) { user(id: $id) { id email } }")
-        documents.normalize(plan: p, variables: ["id": "u1"], data: .object([
-            "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
-        ]))
+        documents.normalize(
+            plan: p, variables: ["id": "u1"],
+            data: .object([
+                "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
+            ]))
         let r1 = documents.materialize(plan: p, variables: ["id": "u1"])
 
-        documents.normalize(plan: p, variables: ["id": "u1"], data: .object([
-            "user": .object(["__typename": "User", "id": "u1", "email": "u1+updated@example.com"])
-        ]))
+        documents.normalize(
+            plan: p, variables: ["id": "u1"],
+            data: .object([
+                "user": .object(["__typename": "User", "id": "u1", "email": "u1+updated@example.com"])
+            ]))
         let r2 = documents.materialize(plan: p, variables: ["id": "u1"], options: MaterializeOptions(preferCache: false))
         let fp1 = r1.fingerprints.object?[CachebayConstants.fingerprintKey]
         let fp2 = r2.fingerprints.object?[CachebayConstants.fingerprintKey]
@@ -356,9 +403,11 @@ final class DocumentsMaterializeTests: XCTestCase {
     func test_disable_fingerprinting_does_not_emit_versions() throws {
         let (_, documents) = makeStack()
         let p = try plan("query Q($id: ID!) { user(id: $id) { id email } }")
-        documents.normalize(plan: p, variables: ["id": "u1"], data: .object([
-            "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
-        ]))
+        documents.normalize(
+            plan: p, variables: ["id": "u1"],
+            data: .object([
+                "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
+            ]))
         let res = documents.materialize(plan: p, variables: ["id": "u1"], options: MaterializeOptions(fingerprint: false, preferCache: false))
         let fps = res.fingerprints.object ?? [:]
         // No __version emitted when fingerprint disabled.
@@ -373,9 +422,11 @@ final class DocumentsMaterializeTests: XCTestCase {
     func test_invalidate_drops_cached_result() throws {
         let (_, documents) = makeStack()
         let p = try plan("query Q($id: ID!) { user(id: $id) { id email } }")
-        documents.normalize(plan: p, variables: ["id": "u1"], data: .object([
-            "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
-        ]))
+        documents.normalize(
+            plan: p, variables: ["id": "u1"],
+            data: .object([
+                "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
+            ]))
         let opts = MaterializeOptions(preferCache: true, updateCache: true)
         let r1 = documents.materialize(plan: p, variables: ["id": "u1"], options: opts)
         XCTAssertFalse(r1.hot)
@@ -393,9 +444,11 @@ final class DocumentsMaterializeTests: XCTestCase {
         let (_, documents) = makeStack()
         let p = try plan("query Q($id: ID!) { user(id: $id) { id email } }")
         for (id, email) in [("u1", "u1@x.com"), ("u2", "u2@x.com")] {
-            documents.normalize(plan: p, variables: ["id": .string(id)], data: .object([
-                "user": .object(["__typename": "User", "id": .string(id), "email": .string(email)])
-            ]))
+            documents.normalize(
+                plan: p, variables: ["id": .string(id)],
+                data: .object([
+                    "user": .object(["__typename": "User", "id": .string(id), "email": .string(email)])
+                ]))
         }
         let opts = MaterializeOptions(preferCache: true, updateCache: true)
         _ = documents.materialize(plan: p, variables: ["id": "u1"], options: opts)
@@ -413,10 +466,12 @@ final class DocumentsMaterializeTests: XCTestCase {
         let (_, documents) = makeStack()
         let p = try plan("query Q($id: ID!) { user(id: $id) { id email } }")
         // Has data but never materialized.
-        documents.normalize(plan: p, variables: ["id": "u1"], data: .object([
-            "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
-        ]))
-        documents.invalidate(plan: p, variables: ["id": "u1"]) // no throw
+        documents.normalize(
+            plan: p, variables: ["id": "u1"],
+            data: .object([
+                "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
+            ]))
+        documents.invalidate(plan: p, variables: ["id": "u1"])  // no throw
 
         let res = documents.materialize(plan: p, variables: ["id": "u1"])
         XCTAssertFalse(res.hot)
@@ -426,9 +481,11 @@ final class DocumentsMaterializeTests: XCTestCase {
     func test_invalidate_respects_canonical_flag() throws {
         let (_, documents) = makeStack()
         let p = try plan("query Q($id: ID!) { user(id: $id) { id email } }")
-        documents.normalize(plan: p, variables: ["id": "u1"], data: .object([
-            "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
-        ]))
+        documents.normalize(
+            plan: p, variables: ["id": "u1"],
+            data: .object([
+                "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
+            ]))
         let canonOpts = MaterializeOptions(canonical: true, preferCache: true, updateCache: true)
         let strictOpts = MaterializeOptions(canonical: false, preferCache: true, updateCache: true)
         _ = documents.materialize(plan: p, variables: ["id": "u1"], options: canonOpts)
@@ -445,9 +502,11 @@ final class DocumentsMaterializeTests: XCTestCase {
     func test_invalidate_respects_fingerprint_flag() throws {
         let (_, documents) = makeStack()
         let p = try plan("query Q($id: ID!) { user(id: $id) { id email } }")
-        documents.normalize(plan: p, variables: ["id": "u1"], data: .object([
-            "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
-        ]))
+        documents.normalize(
+            plan: p, variables: ["id": "u1"],
+            data: .object([
+                "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
+            ]))
         let fpOpts = MaterializeOptions(fingerprint: true, preferCache: true, updateCache: true)
         let plainOpts = MaterializeOptions(fingerprint: false, preferCache: true, updateCache: true)
         _ = documents.materialize(plan: p, variables: ["id": "u1"], options: fpOpts)
@@ -464,9 +523,11 @@ final class DocumentsMaterializeTests: XCTestCase {
     func test_invalidate_respects_rootId() throws {
         let (_, documents) = makeStack()
         let p = try plan("query Q($id: ID!) { user(id: $id) { id email } }")
-        documents.normalize(plan: p, variables: ["id": "u1"], data: .object([
-            "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
-        ]))
+        documents.normalize(
+            plan: p, variables: ["id": "u1"],
+            data: .object([
+                "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
+            ]))
         let entityOpts = MaterializeOptions(rootId: "User:u1", preferCache: true, updateCache: true)
         let rootOpts = MaterializeOptions(preferCache: true, updateCache: true)
         _ = documents.materialize(plan: p, variables: ["id": "u1"], options: entityOpts)
@@ -483,9 +544,11 @@ final class DocumentsMaterializeTests: XCTestCase {
     func test_default_options_do_not_pollute_cache() throws {
         let (_, documents) = makeStack()
         let p = try plan("query Q($id: ID!) { user(id: $id) { id email } }")
-        documents.normalize(plan: p, variables: ["id": "u1"], data: .object([
-            "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
-        ]))
+        documents.normalize(
+            plan: p, variables: ["id": "u1"],
+            data: .object([
+                "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
+            ]))
         // Default updateCache = false.
         let r1 = documents.materialize(plan: p, variables: ["id": "u1"])
         XCTAssertFalse(r1.hot)
@@ -496,9 +559,11 @@ final class DocumentsMaterializeTests: XCTestCase {
     func test_preferCache_returns_cached_result() throws {
         let (_, documents) = makeStack()
         let p = try plan("query Q($id: ID!) { user(id: $id) { id email } }")
-        documents.normalize(plan: p, variables: ["id": "u1"], data: .object([
-            "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
-        ]))
+        documents.normalize(
+            plan: p, variables: ["id": "u1"],
+            data: .object([
+                "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
+            ]))
         let r1 = documents.materialize(plan: p, variables: ["id": "u1"], options: MaterializeOptions(preferCache: true, updateCache: true))
         XCTAssertFalse(r1.hot)
         let r2 = documents.materialize(plan: p, variables: ["id": "u1"], options: MaterializeOptions(preferCache: true))
@@ -508,9 +573,11 @@ final class DocumentsMaterializeTests: XCTestCase {
     func test_preferCache_falls_back_to_materialization_on_miss() throws {
         let (_, documents) = makeStack()
         let p = try plan("query Q($id: ID!) { user(id: $id) { id email } }")
-        documents.normalize(plan: p, variables: ["id": "u1"], data: .object([
-            "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
-        ]))
+        documents.normalize(
+            plan: p, variables: ["id": "u1"],
+            data: .object([
+                "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
+            ]))
         let res = documents.materialize(plan: p, variables: ["id": "u1"], options: MaterializeOptions(preferCache: true, updateCache: true))
         XCTAssertFalse(res.hot)
         XCTAssertNotEqual(res.source, .none)
@@ -519,11 +586,13 @@ final class DocumentsMaterializeTests: XCTestCase {
     func test_updateCache_explicit_true_caches_result() throws {
         let (_, documents) = makeStack()
         let p = try plan("query Q($id: ID!) { user(id: $id) { id email } }")
-        documents.normalize(plan: p, variables: ["id": "u1"], data: .object([
-            "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
-        ]))
+        documents.normalize(
+            plan: p, variables: ["id": "u1"],
+            data: .object([
+                "user": .object(["__typename": "User", "id": "u1", "email": "u1@example.com"])
+            ]))
         _ = documents.materialize(plan: p, variables: ["id": "u1"], options: MaterializeOptions(preferCache: true, updateCache: true))
-        let r2 = documents.materialize(plan: p, variables: ["id": "u1"]) // defaults to preferCache: true
+        let r2 = documents.materialize(plan: p, variables: ["id": "u1"])  // defaults to preferCache: true
         XCTAssertTrue(r2.hot)
     }
 
@@ -531,9 +600,11 @@ final class DocumentsMaterializeTests: XCTestCase {
         let (_, documents) = makeStack()
         let p = try plan("query Q($id: ID!) { user(id: $id) { id email } }")
         for id in ["u1", "u2"] {
-            documents.normalize(plan: p, variables: ["id": .string(id)], data: .object([
-                "user": .object(["__typename": "User", "id": .string(id), "email": .string("\(id)@x.com")])
-            ]))
+            documents.normalize(
+                plan: p, variables: ["id": .string(id)],
+                data: .object([
+                    "user": .object(["__typename": "User", "id": .string(id), "email": .string("\(id)@x.com")])
+                ]))
             _ = documents.materialize(plan: p, variables: ["id": .string(id)], options: MaterializeOptions(updateCache: true))
         }
         XCTAssertTrue(documents.materialize(plan: p, variables: ["id": "u1"]).hot)

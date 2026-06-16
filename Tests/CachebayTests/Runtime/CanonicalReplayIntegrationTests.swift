@@ -18,11 +18,12 @@ import XCTest
 final class CanonicalReplayIntegrationTests: XCTestCase {
 
     private func makeClient() -> CachebayClient {
-        CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
     }
 
     /// Web `canonical.test.ts:1157` "triggers optimistic replay after
@@ -37,25 +38,33 @@ final class CanonicalReplayIntegrationTests: XCTestCase {
         // Pre-seed the canonical with one server edge (Post:server).
         let serverPostKey: CacheKey = "Post:server"
         let serverEdgeKey: CacheKey = "\(canonicalKey).edges.0"
-        client.graph.replaceRecord(serverPostKey, [
-            CachebayConstants.typenameField: .string("Post"),
-            "id": .string("server"),
-        ])
-        client.graph.replaceRecord(serverEdgeKey, [
-            CachebayConstants.typenameField: .string("PostEdge"),
-            "node": .ref(serverPostKey),
-            "cursor": .string("c-server"),
-        ])
-        client.graph.replaceRecord("\(canonicalKey).pageInfo", [
-            CachebayConstants.typenameField: .string("PageInfo"),
-            "hasNextPage": .bool(false),
-            "hasPreviousPage": .bool(false),
-        ])
-        client.graph.replaceRecord(canonicalKey, [
-            CachebayConstants.typenameField: .string("PostConnection"),
-            CachebayConstants.connectionEdgesField: .refList([serverEdgeKey]),
-            CachebayConstants.connectionPageInfoField: .ref("\(canonicalKey).pageInfo"),
-        ])
+        client.graph.replaceRecord(
+            serverPostKey,
+            [
+                CachebayConstants.typenameField: .string("Post"),
+                "id": .string("server"),
+            ])
+        client.graph.replaceRecord(
+            serverEdgeKey,
+            [
+                CachebayConstants.typenameField: .string("PostEdge"),
+                "node": .ref(serverPostKey),
+                "cursor": .string("c-server"),
+            ])
+        client.graph.replaceRecord(
+            "\(canonicalKey).pageInfo",
+            [
+                CachebayConstants.typenameField: .string("PageInfo"),
+                "hasNextPage": .bool(false),
+                "hasPreviousPage": .bool(false),
+            ])
+        client.graph.replaceRecord(
+            canonicalKey,
+            [
+                CachebayConstants.typenameField: .string("PostConnection"),
+                CachebayConstants.connectionEdgesField: .refList([serverEdgeKey]),
+                CachebayConstants.connectionPageInfoField: .ref("\(canonicalKey).pageInfo"),
+            ])
         client.graph.flush()
 
         // Optimistic linkNode: a new post that the server hasn't sent
@@ -84,8 +93,9 @@ final class CanonicalReplayIntegrationTests: XCTestCase {
         // Optimistic edge is still there after replay (re-asserted).
         edgeRefs = client.graph.getField(canonicalKey, CachebayConstants.connectionEdgesField)?.refList ?? []
         let after = edgeRefs.compactMap { client.graph.getField($0, "node")?.ref }
-        XCTAssertTrue(after.contains("Post:p99"),
-                      "optimistic edge must survive replay; canonical edges: \(after)")
+        XCTAssertTrue(
+            after.contains("Post:p99"),
+            "optimistic edge must survive replay; canonical edges: \(after)")
         withExtendedLifetime(_tx) {}
     }
 
@@ -98,16 +108,20 @@ final class CanonicalReplayIntegrationTests: XCTestCase {
         // canonical key.
         let canonicalKey: CacheKey = #"@connection.users({"role":"admin"})"#
 
-        client.graph.replaceRecord("\(canonicalKey).pageInfo", [
-            CachebayConstants.typenameField: .string("PageInfo"),
-            "hasNextPage": .bool(false),
-            "hasPreviousPage": .bool(false),
-        ])
-        client.graph.replaceRecord(canonicalKey, [
-            CachebayConstants.typenameField: .string("UserConnection"),
-            CachebayConstants.connectionEdgesField: .refList([]),
-            CachebayConstants.connectionPageInfoField: .ref("\(canonicalKey).pageInfo"),
-        ])
+        client.graph.replaceRecord(
+            "\(canonicalKey).pageInfo",
+            [
+                CachebayConstants.typenameField: .string("PageInfo"),
+                "hasNextPage": .bool(false),
+                "hasPreviousPage": .bool(false),
+            ])
+        client.graph.replaceRecord(
+            canonicalKey,
+            [
+                CachebayConstants.typenameField: .string("UserConnection"),
+                CachebayConstants.connectionEdgesField: .refList([]),
+                CachebayConstants.connectionPageInfoField: .ref("\(canonicalKey).pageInfo"),
+            ])
         client.graph.flush()
 
         let _tx = client.modifyOptimistic { b in
@@ -122,14 +136,16 @@ final class CanonicalReplayIntegrationTests: XCTestCase {
 
         // Replay scoped to this filtered canonical reports the link.
         let result = client.optimistic.replay(connectionKeys: [canonicalKey])
-        XCTAssertTrue(result.linked.contains("User:admin99"),
-                      "filtered-connection replay must report linked entity, got \(result.linked)")
+        XCTAssertTrue(
+            result.linked.contains("User:admin99"),
+            "filtered-connection replay must report linked entity, got \(result.linked)")
         // And replay scoped to a DIFFERENT filter must NOT pick up
         // this layer's op.
         let otherKey: CacheKey = #"@connection.users({"role":"member"})"#
         let resultOther = client.optimistic.replay(connectionKeys: [otherKey])
-        XCTAssertFalse(resultOther.linked.contains("User:admin99"),
-                       "scope filter must isolate replay; admin99 leaked into role:member: \(resultOther.linked)")
+        XCTAssertFalse(
+            resultOther.linked.contains("User:admin99"),
+            "scope filter must isolate replay; admin99 leaked into role:member: \(resultOther.linked)")
         withExtendedLifetime(_tx) {}
     }
 }

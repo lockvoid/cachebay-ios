@@ -21,23 +21,24 @@ import XCTest
 final class ConnectionWatcherIntegrationTests: XCTestCase {
 
     private let postsQuery = """
-    query Posts($first: Int) {
-        posts(first: $first) @connection(mode: "infinite") {
-            pageInfo { endCursor hasNextPage }
-            edges {
-                cursor
-                node { id title }
+        query Posts($first: Int) {
+            posts(first: $first) @connection(mode: "infinite") {
+                pageInfo { endCursor hasNextPage }
+                edges {
+                    cursor
+                    node { id title }
+                }
             }
         }
-    }
-    """
+        """
 
     private func makeClient(http: MockHTTPTransport) -> CachebayClient {
-        CachebayClient(options: CachebayOptions(
-            transport: Transport(http: http),
-            cachePolicy: .cacheAndNetwork,
-            suspensionTimeout: 0
-        ))
+        CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: http),
+                cachePolicy: .cacheAndNetwork,
+                suspensionTimeout: 0
+            ))
     }
 
     // Tests are `async throws`. `MockHTTPTransport` returns synchronously,
@@ -160,9 +161,9 @@ final class ConnectionWatcherIntegrationTests: XCTestCase {
         XCTAssertGreaterThan(received.value.count, countAfterNetwork, "watcher must re-fire after optimistic linkNode against the canonical")
 
         guard let last = received.value.last,
-              case .object(let root) = last,
-              case .object(let posts) = root["posts"] ?? .undefined,
-              case .array(let edges) = posts["edges"] ?? .undefined
+            case .object(let root) = last,
+            case .object(let posts) = root["posts"] ?? .undefined,
+            case .array(let edges) = posts["edges"] ?? .undefined
         else {
             XCTFail("watcher data shape unexpected: \(received.value.last ?? .undefined)")
             return
@@ -240,21 +241,22 @@ final class ConnectionWatcherIntegrationTests: XCTestCase {
         let http = MockHTTPTransport()
         http.whenQueryContains("posts") { _ in
             leaderHits.value += 1
-            return OperationResult(data: .object([
-                "posts": .object([
-                    "__typename": .string("PostConnection"),
-                    "pageInfo": .object([
-                        "__typename": .string("PageInfo"),
-                        "endCursor": .string("c3"),
-                        "hasNextPage": .bool(false),
-                    ]),
-                    "edges": .array([
-                        .object(["__typename": .string("PostEdge"), "cursor": .string("c1"), "node": .object(["__typename": .string("Post"), "id": .string("a1"), "title": .string("A1")])]),
-                        .object(["__typename": .string("PostEdge"), "cursor": .string("c2"), "node": .object(["__typename": .string("Post"), "id": .string("a2"), "title": .string("A2")])]),
-                        .object(["__typename": .string("PostEdge"), "cursor": .string("c3"), "node": .object(["__typename": .string("Post"), "id": .string("a3"), "title": .string("A3")])]),
-                    ]),
-                ])
-            ]))
+            return OperationResult(
+                data: .object([
+                    "posts": .object([
+                        "__typename": .string("PostConnection"),
+                        "pageInfo": .object([
+                            "__typename": .string("PageInfo"),
+                            "endCursor": .string("c3"),
+                            "hasNextPage": .bool(false),
+                        ]),
+                        "edges": .array([
+                            .object(["__typename": .string("PostEdge"), "cursor": .string("c1"), "node": .object(["__typename": .string("Post"), "id": .string("a1"), "title": .string("A1")])]),
+                            .object(["__typename": .string("PostEdge"), "cursor": .string("c2"), "node": .object(["__typename": .string("Post"), "id": .string("a2"), "title": .string("A2")])]),
+                            .object(["__typename": .string("PostEdge"), "cursor": .string("c3"), "node": .object(["__typename": .string("Post"), "id": .string("a3"), "title": .string("A3")])]),
+                        ]),
+                    ])
+                ]))
         }
 
         let client = self.makeClient(http: http)
@@ -296,9 +298,9 @@ final class ConnectionWatcherIntegrationTests: XCTestCase {
         }.dispose()
 
         guard let last1 = received1.value.last,
-              case .object(let root1) = last1,
-              case .object(let posts1) = root1["posts"] ?? .undefined,
-              case .array(let edges1) = posts1["edges"] ?? .undefined
+            case .object(let root1) = last1,
+            case .object(let posts1) = root1["posts"] ?? .undefined,
+            case .array(let edges1) = posts1["edges"] ?? .undefined
         else {
             XCTFail("first watcher data shape unexpected")
             return
@@ -330,9 +332,9 @@ final class ConnectionWatcherIntegrationTests: XCTestCase {
 
         // Last fire must reflect the server slice without A4.
         guard let last2 = received2.value.last,
-              case .object(let root2) = last2,
-              case .object(let posts2) = root2["posts"] ?? .undefined,
-              case .array(let edges2) = posts2["edges"] ?? .undefined
+            case .object(let root2) = last2,
+            case .object(let posts2) = root2["posts"] ?? .undefined,
+            case .array(let edges2) = posts2["edges"] ?? .undefined
         else {
             XCTFail("second watcher data shape unexpected")
             return
@@ -353,30 +355,32 @@ final class ConnectionWatcherIntegrationTests: XCTestCase {
             let hit = leaderHits.value
             leaderHits.value += 1
             if hit == 0 {
-                return OperationResult(data: .object([
+                return OperationResult(
+                    data: .object([
+                        "posts": .object([
+                            "__typename": .string("PostConnection"),
+                            "pageInfo": .object(["__typename": .string("PageInfo"), "endCursor": .string("c3"), "hasNextPage": .bool(false)]),
+                            "edges": .array([
+                                .object(["__typename": .string("PostEdge"), "cursor": .string("c1"), "node": .object(["__typename": .string("Post"), "id": .string("a1"), "title": .string("A1")])]),
+                                .object(["__typename": .string("PostEdge"), "cursor": .string("c2"), "node": .object(["__typename": .string("Post"), "id": .string("a2"), "title": .string("A2")])]),
+                                .object(["__typename": .string("PostEdge"), "cursor": .string("c3"), "node": .object(["__typename": .string("Post"), "id": .string("a3"), "title": .string("A3")])]),
+                            ]),
+                        ])
+                    ]))
+            }
+            // Second refetch: server now returns A4 at the head and drops A3.
+            return OperationResult(
+                data: .object([
                     "posts": .object([
                         "__typename": .string("PostConnection"),
-                        "pageInfo": .object(["__typename": .string("PageInfo"), "endCursor": .string("c3"), "hasNextPage": .bool(false)]),
+                        "pageInfo": .object(["__typename": .string("PageInfo"), "endCursor": .string("c2"), "hasNextPage": .bool(false)]),
                         "edges": .array([
+                            .object(["__typename": .string("PostEdge"), "cursor": .string("c4"), "node": .object(["__typename": .string("Post"), "id": .string("a4"), "title": .string("A4-from-server")])]),
                             .object(["__typename": .string("PostEdge"), "cursor": .string("c1"), "node": .object(["__typename": .string("Post"), "id": .string("a1"), "title": .string("A1")])]),
                             .object(["__typename": .string("PostEdge"), "cursor": .string("c2"), "node": .object(["__typename": .string("Post"), "id": .string("a2"), "title": .string("A2")])]),
-                            .object(["__typename": .string("PostEdge"), "cursor": .string("c3"), "node": .object(["__typename": .string("Post"), "id": .string("a3"), "title": .string("A3")])]),
                         ]),
                     ])
                 ]))
-            }
-            // Second refetch: server now returns A4 at the head and drops A3.
-            return OperationResult(data: .object([
-                "posts": .object([
-                    "__typename": .string("PostConnection"),
-                    "pageInfo": .object(["__typename": .string("PageInfo"), "endCursor": .string("c2"), "hasNextPage": .bool(false)]),
-                    "edges": .array([
-                        .object(["__typename": .string("PostEdge"), "cursor": .string("c4"), "node": .object(["__typename": .string("Post"), "id": .string("a4"), "title": .string("A4-from-server")])]),
-                        .object(["__typename": .string("PostEdge"), "cursor": .string("c1"), "node": .object(["__typename": .string("Post"), "id": .string("a1"), "title": .string("A1")])]),
-                        .object(["__typename": .string("PostEdge"), "cursor": .string("c2"), "node": .object(["__typename": .string("Post"), "id": .string("a2"), "title": .string("A2")])]),
-                    ]),
-                ])
-            ]))
         }
 
         let client = self.makeClient(http: http)
@@ -422,9 +426,9 @@ final class ConnectionWatcherIntegrationTests: XCTestCase {
         )
 
         guard let last = received.value.last,
-              case .object(let root) = last,
-              case .object(let posts) = root["posts"] ?? .undefined,
-              case .array(let edges) = posts["edges"] ?? .undefined
+            case .object(let root) = last,
+            case .object(let posts) = root["posts"] ?? .undefined,
+            case .array(let edges) = posts["edges"] ?? .undefined
         else {
             XCTFail("watcher data shape unexpected")
             return
@@ -441,16 +445,16 @@ final class ConnectionWatcherIntegrationTests: XCTestCase {
     // MARK: - Mirror of ferment-cuts-ios ProjectsQuery (literal arg)
 
     private let postsQueryWithLiteralOrderBy = """
-    query Posts($first: Int, $after: String) {
-        posts(first: $first, after: $after, orderBy: "updatedAt") @connection(mode: "infinite") {
-            pageInfo { endCursor hasNextPage }
-            edges {
-                cursor
-                node { id title }
+        query Posts($first: Int, $after: String) {
+            posts(first: $first, after: $after, orderBy: "updatedAt") @connection(mode: "infinite") {
+                pageInfo { endCursor hasNextPage }
+                edges {
+                    cursor
+                    node { id title }
+                }
             }
         }
-    }
-    """
+        """
 
     /// Reproduce ferment-cuts-ios's `Projects` query exactly: a literal
     /// `orderBy: "updatedAt"` arg inside the connection field. The
@@ -462,17 +466,19 @@ final class ConnectionWatcherIntegrationTests: XCTestCase {
     /// silently misses and the watcher never re-fires after `linkNode`.
     func test_addNode_withLiteralOrderByArg_firesWatcher() async throws {
         let http = MockHTTPTransport()
-        http.whenQueryContains("posts", respondWith: .object([
-            "posts": .object([
-                "__typename": .string("PostConnection"),
-                "edges": .array([]),
-                "pageInfo": .object([
-                    "__typename": .string("PageInfo"),
-                    "endCursor": .null,
-                    "hasNextPage": .bool(false),
-                ]),
-            ])
-        ]))
+        http.whenQueryContains(
+            "posts",
+            respondWith: .object([
+                "posts": .object([
+                    "__typename": .string("PostConnection"),
+                    "edges": .array([]),
+                    "pageInfo": .object([
+                        "__typename": .string("PageInfo"),
+                        "endCursor": .null,
+                        "hasNextPage": .bool(false),
+                    ]),
+                ])
+            ]))
 
         let client = self.makeClient(http: http)
 
@@ -523,9 +529,9 @@ final class ConnectionWatcherIntegrationTests: XCTestCase {
         XCTAssertGreaterThan(received.value.count, countAfterNetwork, "watcher must re-fire after linkNode against canonical with literal orderBy arg")
 
         guard let last = received.value.last,
-              case .object(let root) = last,
-              case .object(let posts) = root["posts"] ?? .undefined,
-              case .array(let edges) = posts["edges"] ?? .undefined
+            case .object(let root) = last,
+            case .object(let posts) = root["posts"] ?? .undefined,
+            case .array(let edges) = posts["edges"] ?? .undefined
         else {
             XCTFail("watcher data shape unexpected")
             return

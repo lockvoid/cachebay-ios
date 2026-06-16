@@ -78,21 +78,23 @@ public final class SQLiteStorage: StorageAdapter, @unchecked Sendable {
         _ = sqlite3_exec(handle, "PRAGMA journal_mode=WAL;", nil, nil, nil)
         _ = sqlite3_exec(handle, "PRAGMA synchronous=NORMAL;", nil, nil, nil)
         _ = sqlite3_exec(handle, "PRAGMA temp_store=MEMORY;", nil, nil, nil)
-        _ = sqlite3_exec(handle, "PRAGMA cache_size=-8192;", nil, nil, nil) // ~8MB
+        _ = sqlite3_exec(handle, "PRAGMA cache_size=-8192;", nil, nil, nil)  // ~8MB
 
-        _ = sqlite3_exec(handle, """
-        CREATE TABLE IF NOT EXISTS records(
-            id TEXT PRIMARY KEY NOT NULL,
-            snapshot BLOB NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS journal(
-            seq INTEGER PRIMARY KEY AUTOINCREMENT,
-            client_id TEXT NOT NULL,
-            kind TEXT NOT NULL,
-            record_id TEXT,
-            ts INTEGER NOT NULL
-        );
-        """, nil, nil, nil)
+        _ = sqlite3_exec(
+            handle,
+            """
+            CREATE TABLE IF NOT EXISTS records(
+                id TEXT PRIMARY KEY NOT NULL,
+                snapshot BLOB NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS journal(
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                record_id TEXT,
+                ts INTEGER NOT NULL
+            );
+            """, nil, nil, nil)
 
         // Prepare reused statements.
         sqlite3_prepare_v2(handle, "INSERT OR REPLACE INTO records(id, snapshot) VALUES(?1, ?2);", -1, &putStmt, nil)

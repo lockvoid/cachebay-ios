@@ -9,11 +9,12 @@ import XCTest
 final class OptimisticLayeringTests: XCTestCase {
 
     private func makeClient() -> CachebayClient {
-        CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
     }
 
     private let canonicalKey: CacheKey = "@connection.posts({})"
@@ -31,14 +32,16 @@ final class OptimisticLayeringTests: XCTestCase {
 
         let tx1 = client.modifyOptimistic { b in
             let c = b.connection(selector)
-            c.linkNode(.object([
-                CachebayConstants.typenameField: .string("Post"),
-                "id": .string("p1"),
-            ]), options: LinkNodeOptions(position: .end))
-            c.linkNode(.object([
-                CachebayConstants.typenameField: .string("Post"),
-                "id": .string("p2"),
-            ]), options: LinkNodeOptions(position: .end))
+            c.linkNode(
+                .object([
+                    CachebayConstants.typenameField: .string("Post"),
+                    "id": .string("p1"),
+                ]), options: LinkNodeOptions(position: .end))
+            c.linkNode(
+                .object([
+                    CachebayConstants.typenameField: .string("Post"),
+                    "id": .string("p2"),
+                ]), options: LinkNodeOptions(position: .end))
         }
         let tx2 = client.modifyOptimistic { b in
             b.connection(selector).linkNode(
@@ -103,7 +106,8 @@ final class OptimisticLayeringTests: XCTestCase {
         tx.dispose()
         tx.revert()
 
-        XCTAssertEqual(nodeIds(client), ["Post:p1"],
+        XCTAssertEqual(
+            nodeIds(client), ["Post:p1"],
             "after commit, connection state must NOT be rolled back")
     }
 
@@ -139,7 +143,8 @@ final class OptimisticLayeringTests: XCTestCase {
                 options: LinkNodeOptions(position: .end)
             )
         }
-        XCTAssertEqual(nodeIds(client), ["Post:tmp-3", "Post:p2"],
+        XCTAssertEqual(
+            nodeIds(client), ["Post:tmp-3", "Post:p2"],
             "before commit: temp-3 first, p2 last")
 
         // Commit closure captures the real id (here, hard-coded for the
@@ -154,7 +159,8 @@ final class OptimisticLayeringTests: XCTestCase {
                 options: LinkNodeOptions(position: .start)
             )
         }
-        XCTAssertEqual(nodeIds(client), ["Post:p1", "Post:p2"],
+        XCTAssertEqual(
+            nodeIds(client), ["Post:p1", "Post:p2"],
             "after L1.commit: p1 in start slot, p2 still last (ordering preserved)")
         withExtendedLifetime(_tx) {}
     }

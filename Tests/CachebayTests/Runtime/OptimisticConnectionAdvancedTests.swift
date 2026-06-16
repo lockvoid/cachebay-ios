@@ -11,11 +11,12 @@ import XCTest
 final class OptimisticConnectionAdvancedTests: XCTestCase {
 
     private func makeClient() -> CachebayClient {
-        CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
     }
 
     private func nodeIds(_ client: CachebayClient, _ key: CacheKey) -> [String] {
@@ -42,7 +43,8 @@ final class OptimisticConnectionAdvancedTests: XCTestCase {
             )
         }.dispose()
 
-        XCTAssertEqual(nodeIds(client, canonicalKey), ["Post:p1", "Post:p2"],
+        XCTAssertEqual(
+            nodeIds(client, canonicalKey), ["Post:p1", "Post:p2"],
             "selector-form and canonical-key form must resolve to the same connection record")
     }
 
@@ -59,13 +61,16 @@ final class OptimisticConnectionAdvancedTests: XCTestCase {
         XCTAssertEqual(nodeIds(client, canonicalKey), ["Post:t1"])
 
         client.modifyOptimistic { b in
-            b.connection(ConnectionSelector(
-                parent: .key("Query"),
-                key: "posts",
-                filters: ["category": .string("tech")]
-            )).unlinkNode(.key("Post:t1"))
+            b.connection(
+                ConnectionSelector(
+                    parent: .key("Query"),
+                    key: "posts",
+                    filters: ["category": .string("tech")]
+                )
+            ).unlinkNode(.key("Post:t1"))
         }.dispose()
-        XCTAssertEqual(nodeIds(client, canonicalKey), [],
+        XCTAssertEqual(
+            nodeIds(client, canonicalKey), [],
             "unlinkNode via selector with same filters must hit the canonical-key connection")
     }
 
@@ -97,13 +102,15 @@ final class OptimisticConnectionAdvancedTests: XCTestCase {
         let lifeKey: CacheKey = #"@connection.posts({"category":"life"})"#
 
         client.modifyOptimistic { b in
-            let tech = b.connection(ConnectionSelector(
-                parent: .key("Query"), key: "posts", filters: ["category": .string("tech")]
-            ))
+            let tech = b.connection(
+                ConnectionSelector(
+                    parent: .key("Query"), key: "posts", filters: ["category": .string("tech")]
+                ))
             tech.linkNode(.object(["__typename": "Post", "id": "p1"]), options: LinkNodeOptions(position: .end))
-            let life = b.connection(ConnectionSelector(
-                parent: .key("Query"), key: "posts", filters: ["category": .string("life")]
-            ))
+            let life = b.connection(
+                ConnectionSelector(
+                    parent: .key("Query"), key: "posts", filters: ["category": .string("life")]
+                ))
             life.linkNode(.object(["__typename": "Post", "id": "p2"]), options: LinkNodeOptions(position: .end))
         }.dispose()
 
@@ -121,10 +128,10 @@ final class OptimisticConnectionAdvancedTests: XCTestCase {
 
         client.modifyOptimistic { b in
             b.connection(ConnectionSelector(parent: .key("Query"), key: "posts"))
-              .linkNode(.object(["__typename": "Post", "id": "p10"]), options: LinkNodeOptions(position: .end))
+                .linkNode(.object(["__typename": "Post", "id": "p10"]), options: LinkNodeOptions(position: .end))
 
             b.connection(ConnectionSelector(parent: .object(["__typename": "User", "id": "42"]), key: "posts"))
-              .linkNode(.object(["__typename": "Post", "id": "p11"]), options: LinkNodeOptions(position: .end))
+                .linkNode(.object(["__typename": "Post", "id": "p11"]), options: LinkNodeOptions(position: .end))
         }.dispose()
 
         XCTAssertEqual(nodeIds(client, "@connection.posts({})"), ["Post:p10"])
@@ -140,7 +147,7 @@ final class OptimisticConnectionAdvancedTests: XCTestCase {
         client.modifyOptimistic { b in
             // No `__typename` → graph.identify returns nil → linkNode bails.
             b.connection(ConnectionSelector(parent: .key("Query"), key: "posts"))
-              .linkNode(.object(["id": "x1", "title": "No typename"]), options: LinkNodeOptions(position: .end))
+                .linkNode(.object(["id": "x1", "title": "No typename"]), options: LinkNodeOptions(position: .end))
         }.dispose()
 
         XCTAssertEqual(nodeIds(client, canonicalKey), [])
@@ -152,7 +159,7 @@ final class OptimisticConnectionAdvancedTests: XCTestCase {
 
         client.modifyOptimistic { b in
             b.connection(ConnectionSelector(parent: .key("Query"), key: "posts"))
-              .linkNode(.object(["__typename": "Post", "title": "No id"]), options: LinkNodeOptions(position: .end))
+                .linkNode(.object(["__typename": "Post", "title": "No id"]), options: LinkNodeOptions(position: .end))
         }.dispose()
 
         XCTAssertEqual(nodeIds(client, canonicalKey), [])
@@ -165,13 +172,13 @@ final class OptimisticConnectionAdvancedTests: XCTestCase {
         // Seed a real edge first.
         client.modifyOptimistic { b in
             b.connection(ConnectionSelector(parent: .key("Query"), key: "posts"))
-              .linkNode(.object(["__typename": "Post", "id": "p1"]), options: LinkNodeOptions(position: .end))
+                .linkNode(.object(["__typename": "Post", "id": "p1"]), options: LinkNodeOptions(position: .end))
         }.dispose()
 
         client.modifyOptimistic { b in
             // No id — identify returns nil — must be a safe no-op.
             b.connection(ConnectionSelector(parent: .key("Query"), key: "posts"))
-              .unlinkNode(.object(["__typename": "Post"]))
+                .unlinkNode(.object(["__typename": "Post"]))
         }.dispose()
 
         XCTAssertEqual(nodeIds(client, canonicalKey), ["Post:p1"])
@@ -198,7 +205,8 @@ final class OptimisticConnectionAdvancedTests: XCTestCase {
         let edges = client.graph.getField(canonicalKey, CachebayConstants.connectionEdgesField)?.refList ?? []
         XCTAssertEqual(edges.count, 1, "second linkNode dedups against the first by node id")
         let edgeKey = edges[0]
-        XCTAssertEqual(client.graph.getField(edgeKey, "score")?.int, 42,
+        XCTAssertEqual(
+            client.graph.getField(edgeKey, "score")?.int, 42,
             "edge meta from the second add must overwrite the first")
         XCTAssertEqual(client.graph.getField(edgeKey, "cursor")?.string, "c-new")
     }
@@ -213,18 +221,21 @@ final class OptimisticConnectionAdvancedTests: XCTestCase {
         XCTAssertNil(client.graph.getRecord(canonicalKey))
 
         // Seed entity (linkNode is purely structural).
-        client.graph.replaceRecord("Post:p1", [
-            CachebayConstants.typenameField: .string("Post"),
-            "id": .string("p1"),
-            "title": .string("Recovered"),
-        ])
+        client.graph.replaceRecord(
+            "Post:p1",
+            [
+                CachebayConstants.typenameField: .string("Post"),
+                "id": .string("p1"),
+                "title": .string("Recovered"),
+            ])
         client.graph.flush()
 
         client.modifyOptimistic { b in
             let c = b.connection(ConnectionSelector(parent: .key("Query"), key: "posts"))
-            c.unlinkNode(.object(["__typename": "Post", "id": "p1"]))   // no-op
-            c.linkNode(.key("Post:p1"),
-                      options: LinkNodeOptions(position: .end))
+            c.unlinkNode(.object(["__typename": "Post", "id": "p1"]))  // no-op
+            c.linkNode(
+                .key("Post:p1"),
+                options: LinkNodeOptions(position: .end))
         }.dispose()
 
         XCTAssertEqual(nodeIds(client, canonicalKey), ["Post:p1"])

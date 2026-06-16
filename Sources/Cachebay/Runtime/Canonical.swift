@@ -71,13 +71,15 @@ public final class Canonical: @unchecked Sendable {
         let pageInfoData = pageInfoRef.flatMap { graph.getRecord($0) } ?? [:]
         let pageInfoKey = "\(canonicalKey).pageInfo"
 
-        graph.putRecord(pageInfoKey, [
-            CachebayConstants.typenameField: pageInfoData[CachebayConstants.typenameField] ?? .string(CachebayConstants.connectionPageInfoTypename),
-            "startCursor": pageInfoData["startCursor"] ?? .null,
-            "endCursor": pageInfoData["endCursor"] ?? .null,
-            "hasPreviousPage": .bool(pageInfoData["hasPreviousPage"]?.bool ?? false),
-            "hasNextPage": .bool(pageInfoData["hasNextPage"]?.bool ?? false),
-        ])
+        graph.putRecord(
+            pageInfoKey,
+            [
+                CachebayConstants.typenameField: pageInfoData[CachebayConstants.typenameField] ?? .string(CachebayConstants.connectionPageInfoTypename),
+                "startCursor": pageInfoData["startCursor"] ?? .null,
+                "endCursor": pageInfoData["endCursor"] ?? .null,
+                "hasPreviousPage": .bool(pageInfoData["hasPreviousPage"]?.bool ?? false),
+                "hasNextPage": .bool(pageInfoData["hasNextPage"]?.bool ?? false),
+            ])
 
         var record: [String: JSONValue] = [
             CachebayConstants.typenameField: page[CachebayConstants.typenameField] ?? .string(CachebayConstants.connectionTypename),
@@ -232,7 +234,8 @@ public final class Canonical: @unchecked Sendable {
         let existingPageInfo = existingPageInfoRef.flatMap { graph.getRecord($0) } ?? [:]
 
         var pageInfo: [String: JSONValue] = [:]
-        pageInfo[CachebayConstants.typenameField] = incomingPageInfo[CachebayConstants.typenameField]
+        pageInfo[CachebayConstants.typenameField] =
+            incomingPageInfo[CachebayConstants.typenameField]
             ?? existingPageInfo[CachebayConstants.typenameField]
             ?? .string(CachebayConstants.connectionPageInfoTypename)
         // Start from existing; apply incoming extras
@@ -267,11 +270,13 @@ public final class Canonical: @unchecked Sendable {
         }
         // Infer from first/last edges if still nil.
         if (pageInfo["startCursor"]?.isNull ?? true) && !merged.isEmpty,
-           let firstCursor = getEdgeCursor(merged[0]) {
+            let firstCursor = getEdgeCursor(merged[0])
+        {
             pageInfo["startCursor"] = .string(firstCursor)
         }
         if (pageInfo["endCursor"]?.isNull ?? true) && !merged.isEmpty,
-           let lastCursor = getEdgeCursor(merged[merged.count - 1]) {
+            let lastCursor = getEdgeCursor(merged[merged.count - 1])
+        {
             pageInfo["endCursor"] = .string(lastCursor)
         }
         // Default falsy booleans.
@@ -304,8 +309,9 @@ public final class Canonical: @unchecked Sendable {
         for (k, v) in connection {
             switch k {
             case CachebayConstants.connectionEdgesField,
-                 CachebayConstants.connectionPageInfoField,
-                 CachebayConstants.typenameField: continue
+                CachebayConstants.connectionPageInfoField,
+                CachebayConstants.typenameField:
+                continue
             default: out.append((k, v))
             }
         }
@@ -315,18 +321,22 @@ public final class Canonical: @unchecked Sendable {
     func ensureCanonical(_ canonicalKey: CacheKey) {
         if graph.hasRecord(canonicalKey) { return }
         let pageInfoKey = "\(canonicalKey).pageInfo"
-        graph.putRecord(pageInfoKey, [
-            CachebayConstants.typenameField: .string(CachebayConstants.connectionPageInfoTypename),
-            "startCursor": .null,
-            "endCursor": .null,
-            "hasPreviousPage": .bool(false),
-            "hasNextPage": .bool(false),
-        ])
-        graph.putRecord(canonicalKey, [
-            CachebayConstants.typenameField: .string(CachebayConstants.connectionTypename),
-            CachebayConstants.connectionEdgesField: .refList([]),
-            CachebayConstants.connectionPageInfoField: .ref(pageInfoKey),
-        ])
+        graph.putRecord(
+            pageInfoKey,
+            [
+                CachebayConstants.typenameField: .string(CachebayConstants.connectionPageInfoTypename),
+                "startCursor": .null,
+                "endCursor": .null,
+                "hasPreviousPage": .bool(false),
+                "hasNextPage": .bool(false),
+            ])
+        graph.putRecord(
+            canonicalKey,
+            [
+                CachebayConstants.typenameField: .string(CachebayConstants.connectionTypename),
+                CachebayConstants.connectionEdgesField: .refList([]),
+                CachebayConstants.connectionPageInfoField: .ref(pageInfoKey),
+            ])
         writeCursorIndex(canonicalKey, [:])
         ConnectionIndex.clear(graph: graph, canonicalKey: canonicalKey)
     }

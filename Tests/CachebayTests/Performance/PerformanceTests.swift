@@ -23,11 +23,12 @@ import XCTest
 final class PerformanceTests: XCTestCase {
 
     private func makeClient() -> CachebayClient {
-        CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
     }
 
     private func time(_ block: () -> Void) -> Double {
@@ -122,9 +123,10 @@ final class PerformanceTests: XCTestCase {
             )
             var pending: [OptimisticTransaction] = []
             for i in 0..<depth {
-                pending.append(client.modifyOptimistic { b in
-                    b.patch(.key("Post:p1"), ["title": .string("d\(i)")], mode: .merge)
-                })
+                pending.append(
+                    client.modifyOptimistic { b in
+                        b.patch(.key("Post:p1"), ["title": .string("d\(i)")], mode: .merge)
+                    })
             }
             // Revert just the bottom layer; the rest should still apply on top.
             let elapsed = time {
@@ -157,7 +159,7 @@ final class PerformanceTests: XCTestCase {
                             options: LinkNodeOptions(position: .end)
                         )
                     }
-                    tx.dispose() // keep the edge; measures the hot add path
+                    tx.dispose()  // keep the edge; measures the hot add path
                 }
             }
         }
@@ -339,8 +341,10 @@ final class PerformanceTests: XCTestCase {
         let p999 = pctUs(0.999)
         let maxUs = Double(samplesNs.last ?? 0) / 1000.0
 
-        print(String(format: "[perf] linkNode tail (preload=5000)  mean=%6.2f µs  p50=%6.2f  p95=%6.2f  p99=%6.2f  p99.9=%6.2f  max=%7.2f  (p99/p50=%.1fx)",
-                     meanUs, p50, p95, p99, p999, maxUs, p99 / p50))
+        print(
+            String(
+                format: "[perf] linkNode tail (preload=5000)  mean=%6.2f µs  p50=%6.2f  p95=%6.2f  p99=%6.2f  p99.9=%6.2f  max=%7.2f  (p99/p50=%.1fx)",
+                meanUs, p50, p95, p99, p999, maxUs, p99 / p50))
 
         // Local M-series typically lands at p99/p50 ≈ 1.3×. GitHub-hosted
         // macos-15 runners are shared hardware with noisy neighbours and
@@ -388,7 +392,9 @@ final class PerformanceTests: XCTestCase {
         let stddev = sqrt(variance)
         let rsd = (stddev / mean) * 100.0
         let perRun = throughputs.map { String(format: "%.0f", $0) }.joined(separator: ", ")
-        print(String(format: "[perf] mixed variance   runs=[%@] mean=%.0f ops/s  stddev=%.0f  rsd=%.2f%%",
-                     perRun, mean, stddev, rsd))
+        print(
+            String(
+                format: "[perf] mixed variance   runs=[%@] mean=%.0f ops/s  stddev=%.0f  rsd=%.2f%%",
+                perRun, mean, stddev, rsd))
     }
 }

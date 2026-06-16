@@ -15,11 +15,12 @@ import XCTest
 final class OptimisticReplayResultTests: XCTestCase {
 
     private func makeClient() -> CachebayClient {
-        CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
     }
 
     /// Web `optimistic.test.ts:663`. Replay scoped to connection A
@@ -34,16 +35,20 @@ final class OptimisticReplayResultTests: XCTestCase {
         let pageInfoA: CacheKey = "\(keyA).pageInfo"
         let pageInfoB: CacheKey = "\(keyB).pageInfo"
         for (canonical, pi) in [(keyA, pageInfoA), (keyB, pageInfoB)] {
-            client.graph.replaceRecord(pi, [
-                CachebayConstants.typenameField: .string("PageInfo"),
-                "hasNextPage": .bool(false),
-                "hasPreviousPage": .bool(false),
-            ])
-            client.graph.replaceRecord(canonical, [
-                CachebayConstants.typenameField: .string("Connection"),
-                CachebayConstants.connectionEdgesField: .refList([]),
-                CachebayConstants.connectionPageInfoField: .ref(pi),
-            ])
+            client.graph.replaceRecord(
+                pi,
+                [
+                    CachebayConstants.typenameField: .string("PageInfo"),
+                    "hasNextPage": .bool(false),
+                    "hasPreviousPage": .bool(false),
+                ])
+            client.graph.replaceRecord(
+                canonical,
+                [
+                    CachebayConstants.typenameField: .string("Connection"),
+                    CachebayConstants.connectionEdgesField: .refList([]),
+                    CachebayConstants.connectionPageInfoField: .ref(pi),
+                ])
         }
         client.graph.flush()
 
@@ -68,8 +73,9 @@ final class OptimisticReplayResultTests: XCTestCase {
 
         let resultBoth = client.optimistic.replay(connectionKeys: [keyA, keyB])
         XCTAssertTrue(resultBoth.linked.contains("Post:p1"))
-        XCTAssertTrue(resultBoth.unlinked.contains("Post:p99"),
-                      "scoped to both, unlinked must include Post:p99, got \(resultBoth.unlinked)")
+        XCTAssertTrue(
+            resultBoth.unlinked.contains("Post:p99"),
+            "scoped to both, unlinked must include Post:p99, got \(resultBoth.unlinked)")
         withExtendedLifetime(_tx) {}
     }
 
@@ -80,28 +86,34 @@ final class OptimisticReplayResultTests: XCTestCase {
         let client = makeClient()
         let key: CacheKey = "@connection.posts({})"
         let pageInfoKey: CacheKey = "\(key).pageInfo"
-        client.graph.replaceRecord(pageInfoKey, [
-            CachebayConstants.typenameField: .string("PageInfo"),
-            "hasNextPage": .bool(false),
-            "hasPreviousPage": .bool(false),
-        ])
-        client.graph.replaceRecord(key, [
-            CachebayConstants.typenameField: .string("Connection"),
-            CachebayConstants.connectionEdgesField: .refList([]),
-            CachebayConstants.connectionPageInfoField: .ref(pageInfoKey),
-        ])
+        client.graph.replaceRecord(
+            pageInfoKey,
+            [
+                CachebayConstants.typenameField: .string("PageInfo"),
+                "hasNextPage": .bool(false),
+                "hasPreviousPage": .bool(false),
+            ])
+        client.graph.replaceRecord(
+            key,
+            [
+                CachebayConstants.typenameField: .string("Connection"),
+                CachebayConstants.connectionEdgesField: .refList([]),
+                CachebayConstants.connectionPageInfoField: .ref(pageInfoKey),
+            ])
         client.graph.flush()
 
         let _tx = client.modifyOptimistic { b in
             let c = b.connection(key: key)
-            c.linkNode(.object([
-                CachebayConstants.typenameField: .string("Post"),
-                "id": .string("p1"),
-            ]), options: LinkNodeOptions(position: .end))
-            c.linkNode(.object([
-                CachebayConstants.typenameField: .string("Post"),
-                "id": .string("p2"),
-            ]), options: LinkNodeOptions(position: .end))
+            c.linkNode(
+                .object([
+                    CachebayConstants.typenameField: .string("Post"),
+                    "id": .string("p1"),
+                ]), options: LinkNodeOptions(position: .end))
+            c.linkNode(
+                .object([
+                    CachebayConstants.typenameField: .string("Post"),
+                    "id": .string("p2"),
+                ]), options: LinkNodeOptions(position: .end))
         }
 
         let r1 = client.optimistic.replay(connectionKeys: [key])
@@ -120,33 +132,40 @@ final class OptimisticReplayResultTests: XCTestCase {
         let keyA: CacheKey = "@connection.posts.A({})"
         let keyB: CacheKey = "@connection.posts.B({})"
         for k in [keyA, keyB] {
-            client.graph.replaceRecord("\(k).pageInfo", [
-                CachebayConstants.typenameField: .string("PageInfo"),
-                "hasNextPage": .bool(false),
-                "hasPreviousPage": .bool(false),
-            ])
-            client.graph.replaceRecord(k, [
-                CachebayConstants.typenameField: .string("Connection"),
-                CachebayConstants.connectionEdgesField: .refList([]),
-                CachebayConstants.connectionPageInfoField: .ref("\(k).pageInfo"),
-            ])
+            client.graph.replaceRecord(
+                "\(k).pageInfo",
+                [
+                    CachebayConstants.typenameField: .string("PageInfo"),
+                    "hasNextPage": .bool(false),
+                    "hasPreviousPage": .bool(false),
+                ])
+            client.graph.replaceRecord(
+                k,
+                [
+                    CachebayConstants.typenameField: .string("Connection"),
+                    CachebayConstants.connectionEdgesField: .refList([]),
+                    CachebayConstants.connectionPageInfoField: .ref("\(k).pageInfo"),
+                ])
         }
         client.graph.flush()
 
         let _tx = client.modifyOptimistic { b in
-            b.connection(key: keyA).linkNode(.object([
-                CachebayConstants.typenameField: .string("Post"),
-                "id": .string("p1"),
-            ]), options: LinkNodeOptions(position: .end))
-            b.connection(key: keyB).linkNode(.object([
-                CachebayConstants.typenameField: .string("Post"),
-                "id": .string("p2"),
-            ]), options: LinkNodeOptions(position: .end))
+            b.connection(key: keyA).linkNode(
+                .object([
+                    CachebayConstants.typenameField: .string("Post"),
+                    "id": .string("p1"),
+                ]), options: LinkNodeOptions(position: .end))
+            b.connection(key: keyB).linkNode(
+                .object([
+                    CachebayConstants.typenameField: .string("Post"),
+                    "id": .string("p2"),
+                ]), options: LinkNodeOptions(position: .end))
         }
 
         let result = client.optimistic.replay(connectionKeys: [])
-        XCTAssertEqual(result.linked, ["Post:p1", "Post:p2"],
-                       "unscoped replay must report both, got \(result.linked)")
+        XCTAssertEqual(
+            result.linked, ["Post:p1", "Post:p2"],
+            "unscoped replay must report both, got \(result.linked)")
         withExtendedLifetime(_tx) {}
     }
 }

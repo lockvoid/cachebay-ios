@@ -35,10 +35,12 @@ final class CachebayInterfaceBehaviourTests: XCTestCase {
 
     // §3.1 — unrecognized typename -> .unknown(Shared), carrying interface-level fields.
     func test_decode_unknownVariant_carriesSharedFields() {
-        guard let e = Element(_dataDict: [
-            "__typename": .string("PdfElement"),   // not narrowed in this query
-            "id": .string("p1"),
-        ]) else { return XCTFail("expected a decoded element") }
+        guard
+            let e = Element(_dataDict: [
+                "__typename": .string("PdfElement"),  // not narrowed in this query
+                "id": .string("p1"),
+            ])
+        else { return XCTFail("expected a decoded element") }
         guard case .unknown(let s) = e else { return XCTFail("expected .unknown") }
         XCTAssertEqual(s.id, "p1")
         XCTAssertEqual(s.__typename, "PdfElement")
@@ -49,13 +51,15 @@ final class CachebayInterfaceBehaviourTests: XCTestCase {
     // Lifted shared accessor works uniformly across every variant.
     func test_liftedAccessor_acrossVariants() {
         XCTAssertEqual(Element(_dataDict: videoRecord(id: "v9"))?.id, "v9")
-        XCTAssertEqual(Element(_dataDict: [
-            "__typename": .string("AudioElement"), "id": .string("a9"),
-            "waveformURL": .string("https://x.com/a9.wav"),
-        ])?.id, "a9")
-        XCTAssertEqual(Element(_dataDict: [
-            "__typename": .string("ZzzElement"), "id": .string("u9"),
-        ])?.id, "u9")
+        XCTAssertEqual(
+            Element(_dataDict: [
+                "__typename": .string("AudioElement"), "id": .string("a9"),
+                "waveformURL": .string("https://x.com/a9.wav"),
+            ])?.id, "a9")
+        XCTAssertEqual(
+            Element(_dataDict: [
+                "__typename": .string("ZzzElement"), "id": .string("u9"),
+            ])?.id, "u9")
     }
 
     // §7 — a KNOWN typename whose required field is missing is a record MISS,
@@ -89,7 +93,7 @@ final class CachebayInterfaceBehaviourTests: XCTestCase {
         let names = Element.__cachebayFieldNames
         XCTAssertEqual(names[\Element.id], "id")
         XCTAssertEqual(names[\Element.__typename], "__typename")
-        XCTAssertEqual(names.count, 2)   // only the Shared (interface-level) fields
+        XCTAssertEqual(names.count, 2)  // only the Shared (interface-level) fields
     }
 
     // Round-trip through __dataDict() and re-decode to an equal value (Equatable payoff).

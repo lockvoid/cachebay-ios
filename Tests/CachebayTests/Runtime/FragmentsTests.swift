@@ -8,17 +8,18 @@ import XCTest
 final class FragmentsTests: XCTestCase {
 
     private func makeClient(interfaces: [String: [String]] = [:]) -> CachebayClient {
-        CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            interfaces: interfaces,
-            suspensionTimeout: 0
-        ))
+        CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                interfaces: interfaces,
+                suspensionTimeout: 0
+            ))
     }
 
     private let userFragment = """
-    fragment UserFields on User { id email }
-    """
+        fragment UserFields on User { id email }
+        """
 
     // MARK: - readFragment
 

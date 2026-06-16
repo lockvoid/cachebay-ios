@@ -14,25 +14,29 @@ enum Dedupe {
             switch def {
             case .operation(let op):
                 let deduped = dedupeSelections(op.selectionSet, parentType: rootTypename(for: op.operation))
-                newDefs.append(.operation(OperationDefinition(
-                    operation: op.operation,
-                    name: op.name,
-                    variableDefinitions: op.variableDefinitions,
-                    directives: op.directives,
-                    selectionSet: deduped,
-                    location: op.location
-                )))
+                newDefs.append(
+                    .operation(
+                        OperationDefinition(
+                            operation: op.operation,
+                            name: op.name,
+                            variableDefinitions: op.variableDefinitions,
+                            directives: op.directives,
+                            selectionSet: deduped,
+                            location: op.location
+                        )))
             case .fragment(let fr):
                 if seen.contains(fr.name) { continue }
                 seen.insert(fr.name)
                 let deduped = dedupeSelections(fr.selectionSet, parentType: fr.typeCondition)
-                newDefs.append(.fragment(FragmentDefinition(
-                    name: fr.name,
-                    typeCondition: fr.typeCondition,
-                    directives: fr.directives,
-                    selectionSet: deduped,
-                    location: fr.location
-                )))
+                newDefs.append(
+                    .fragment(
+                        FragmentDefinition(
+                            name: fr.name,
+                            typeCondition: fr.typeCondition,
+                            directives: fr.directives,
+                            selectionSet: deduped,
+                            location: fr.location
+                        )))
             case .schema:
                 newDefs.append(def)
             }

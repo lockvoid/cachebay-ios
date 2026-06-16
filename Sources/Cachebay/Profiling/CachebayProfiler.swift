@@ -150,30 +150,30 @@ extension Optional where Wrapped == CachebayProfileSpan {
 /// give tests a stable reference for assertions.
 public enum CachebayProfileName: String, CaseIterable {
     // Optimistic
-    case modifyOptimistic       = "cachebay.modifyOptimistic"
-    case applyAutoCommit        = "cachebay.applyAutoCommit"
-    case optimisticCommit       = "cachebay.optimistic.commit"
-    case optimisticRevert       = "cachebay.optimistic.revert"
-    case optimisticDispose      = "cachebay.optimistic.dispose"
-    case replayConnection       = "cachebay.optimistic.replay.connection"
-    case replayEntity           = "cachebay.optimistic.replay.entity"
+    case modifyOptimistic = "cachebay.modifyOptimistic"
+    case applyAutoCommit = "cachebay.applyAutoCommit"
+    case optimisticCommit = "cachebay.optimistic.commit"
+    case optimisticRevert = "cachebay.optimistic.revert"
+    case optimisticDispose = "cachebay.optimistic.dispose"
+    case replayConnection = "cachebay.optimistic.replay.connection"
+    case replayEntity = "cachebay.optimistic.replay.entity"
 
     // Operations
-    case executeMutation        = "cachebay.executeMutation"
-    case executeQuery           = "cachebay.executeQuery"
+    case executeMutation = "cachebay.executeMutation"
+    case executeQuery = "cachebay.executeQuery"
     case executeSubscriptionFrame = "cachebay.executeSubscription.frame"
 
     // Documents
-    case normalize              = "cachebay.documents.normalize"
-    case materialize            = "cachebay.documents.materialize"
+    case normalize = "cachebay.documents.normalize"
+    case materialize = "cachebay.documents.materialize"
 
     // Fragments
-    case readFragment           = "cachebay.readFragment"
-    case writeFragment          = "cachebay.writeFragment"
+    case readFragment = "cachebay.readFragment"
+    case writeFragment = "cachebay.writeFragment"
 
     // Graph / watcher fanout
-    case graphFlush             = "cachebay.graph.flush"
-    case watchersFanout         = "cachebay.watchers.fanout"
+    case graphFlush = "cachebay.graph.flush"
+    case watchersFanout = "cachebay.watchers.fanout"
     /// Umbrella span for the signature-emit path
     /// (`Queries.notifyDataBySignature`). Counterpart to `watchersFanout`
     /// on the dep-based path. Closes the dark time between materialize
@@ -183,25 +183,25 @@ public enum CachebayProfileName: String, CaseIterable {
     /// watcher inside both notify paths; lets consumers see the cost
     /// of "deciding whether to emit" separately from materialize and
     /// from host onData time.
-    case watchersRecycle        = "cachebay.watchers.recycle"
+    case watchersRecycle = "cachebay.watchers.recycle"
     /// Single span around the `for cb in emits { cb(v) }` loop. Tags
     /// callback count as an attribute. This is the host's onData time
     /// — consumers measuring their own perceived `firstEmit` can
     /// subtract this span's duration from the total to back out
     /// Cachebay's runtime contribution.
-    case watchersEmitCallbacks  = "cachebay.watchers.emit.callbacks"
+    case watchersEmitCallbacks = "cachebay.watchers.emit.callbacks"
 
     // Transport (decode only — wire RTT is the server's time, not
     // Cachebay's, and stays excluded from the parent operation span by
     // `excludingHost { ... }`.)
-    case transportHTTPDecode    = "cachebay.transport.http.decode"
-    case transportWSDecode      = "cachebay.transport.ws.decode"
+    case transportHTTPDecode = "cachebay.transport.http.decode"
+    case transportWSDecode = "cachebay.transport.ws.decode"
 
     // Storage
-    case storageFlush           = "cachebay.storage.flush"
-    case storageWarmup          = "cachebay.storage.warmup"
+    case storageFlush = "cachebay.storage.flush"
+    case storageWarmup = "cachebay.storage.warmup"
 
     // Counter events (point-in-time, not durations)
-    case watchersEmitted        = "cachebay.watchers.emitted"
-    case watchersSilenced       = "cachebay.watchers.silenced"
+    case watchersEmitted = "cachebay.watchers.emitted"
+    case watchersSilenced = "cachebay.watchers.silenced"
 }

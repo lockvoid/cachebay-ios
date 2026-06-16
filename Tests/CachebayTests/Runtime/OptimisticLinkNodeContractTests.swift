@@ -23,20 +23,22 @@ import XCTest
 final class OptimisticLinkNodeContractTests: XCTestCase {
 
     private func makeClient() -> CachebayClient {
-        CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
     }
 
-    private static let projectMessageFragmentDoc: QueryDocument = .source("""
-    fragment ProjectMessageFields on ProjectMessage {
-      id
-      status
-      toolCalls
-    }
-    """)
+    private static let projectMessageFragmentDoc: QueryDocument = .source(
+        """
+        fragment ProjectMessageFields on ProjectMessage {
+          id
+          status
+          toolCalls
+        }
+        """)
 
     // MARK: - Repro of the chat-race bug
 
@@ -61,12 +63,14 @@ final class OptimisticLinkNodeContractTests: XCTestCase {
         // Step 1+2: simulate the subscription pipeline's
         // `documents.normalize` calls collapsed to their final state —
         // entity holds the Updated payload.
-        client.graph.replaceRecord("ProjectMessage:m1", [
-            CachebayConstants.typenameField: .string("ProjectMessage"),
-            "id": .string("m1"),
-            "status": .string("complete"),
-            "toolCalls": .array([.string("ask_user_to_pick")]),
-        ])
+        client.graph.replaceRecord(
+            "ProjectMessage:m1",
+            [
+                CachebayConstants.typenameField: .string("ProjectMessage"),
+                "id": .string("m1"),
+                "status": .string("complete"),
+                "toolCalls": .array([.string("ask_user_to_pick")]),
+            ])
 
         // Step 3: deferred user handler calls the link primitive with
         // the STALE Created payload (status=streaming, toolCalls=null).
@@ -89,10 +93,12 @@ final class OptimisticLinkNodeContractTests: XCTestCase {
         // The entity record MUST still reflect the Updated state — no
         // clobber by stale Created data routed through the link primitive.
         let entity = try XCTUnwrap(client.graph.getRecord("ProjectMessage:m1"))
-        XCTAssertEqual(entity["status"]?.string, "complete",
+        XCTAssertEqual(
+            entity["status"]?.string, "complete",
             "link primitive must not overwrite `status` with stale data; got \(String(describing: entity["status"]))")
         if case .array(let tc) = entity["toolCalls"] ?? .null {
-            XCTAssertEqual(tc.first?.string, "ask_user_to_pick",
+            XCTAssertEqual(
+                tc.first?.string, "ask_user_to_pick",
                 "link primitive must not overwrite `toolCalls` with stale data")
         } else {
             XCTFail("link primitive nulled out `toolCalls` (expected the populated array): \(String(describing: entity["toolCalls"]))")
@@ -104,12 +110,14 @@ final class OptimisticLinkNodeContractTests: XCTestCase {
     func test_linkNode_raw_doesNotClobberEntityScalarsWithStaleData() throws {
         let client = makeClient()
 
-        client.graph.replaceRecord("ProjectMessage:m1", [
-            CachebayConstants.typenameField: .string("ProjectMessage"),
-            "id": .string("m1"),
-            "status": .string("complete"),
-            "toolCalls": .array([.string("ask_user_to_pick")]),
-        ])
+        client.graph.replaceRecord(
+            "ProjectMessage:m1",
+            [
+                CachebayConstants.typenameField: .string("ProjectMessage"),
+                "id": .string("m1"),
+                "status": .string("complete"),
+                "toolCalls": .array([.string("ask_user_to_pick")]),
+            ])
 
         let staleCreatedNode: [String: JSONValue] = [
             CachebayConstants.typenameField: .string("ProjectMessage"),
@@ -124,9 +132,11 @@ final class OptimisticLinkNodeContractTests: XCTestCase {
         }.dispose()
 
         let entity = try XCTUnwrap(client.graph.getRecord("ProjectMessage:m1"))
-        XCTAssertEqual(entity["status"]?.string, "complete",
+        XCTAssertEqual(
+            entity["status"]?.string, "complete",
             "raw link primitive must not write entity scalars")
-        if case .array = entity["toolCalls"] ?? .null { /* ok */ } else {
+        if case .array = entity["toolCalls"] ?? .null { /* ok */
+        } else {
             XCTFail("raw link primitive overwrote `toolCalls` with null: \(String(describing: entity["toolCalls"]))")
         }
     }
@@ -163,9 +173,11 @@ final class OptimisticLinkNodeContractTests: XCTestCase {
 
         // Entity record either absent OR contains only identity fields.
         if let post = client.graph.getRecord("Post:p1") {
-            XCTAssertNil(post["title"],
+            XCTAssertNil(
+                post["title"],
                 "link primitive must not write scalar `title`; got \(String(describing: post["title"]))")
-            XCTAssertNil(post["body"],
+            XCTAssertNil(
+                post["body"],
                 "link primitive must not write scalar `body`; got \(String(describing: post["body"]))")
         }
     }
@@ -180,32 +192,37 @@ final class OptimisticLinkNodeContractTests: XCTestCase {
         let client = makeClient()
 
         // Pre-seed the canonical entity from a normalize-shaped write.
-        client.graph.replaceRecord("Post:p1", [
-            CachebayConstants.typenameField: .string("Post"),
-            "id": .string("p1"),
-            "title": .string("Authoritative"),
-        ])
+        client.graph.replaceRecord(
+            "Post:p1",
+            [
+                CachebayConstants.typenameField: .string("Post"),
+                "id": .string("p1"),
+                "title": .string("Authoritative"),
+            ])
 
         client.modifyOptimistic { b in
             b.connection(ConnectionSelector(key: "posts"))
-                .linkNode(.object([
-                    CachebayConstants.typenameField: .string("Post"),
-                    "id": .string("p1"),
-                    "title": .string("First-call attempt"),
-                ]), options: LinkNodeOptions(position: .start))
+                .linkNode(
+                    .object([
+                        CachebayConstants.typenameField: .string("Post"),
+                        "id": .string("p1"),
+                        "title": .string("First-call attempt"),
+                    ]), options: LinkNodeOptions(position: .start))
         }.dispose()
 
         client.modifyOptimistic { b in
             b.connection(ConnectionSelector(key: "posts"))
-                .linkNode(.object([
-                    CachebayConstants.typenameField: .string("Post"),
-                    "id": .string("p1"),
-                    "title": .string("Second-call attempt"),
-                ]), options: LinkNodeOptions(position: .start))
+                .linkNode(
+                    .object([
+                        CachebayConstants.typenameField: .string("Post"),
+                        "id": .string("p1"),
+                        "title": .string("Second-call attempt"),
+                    ]), options: LinkNodeOptions(position: .start))
         }.dispose()
 
         let post = try XCTUnwrap(client.graph.getRecord("Post:p1"))
-        XCTAssertEqual(post["title"]?.string, "Authoritative",
+        XCTAssertEqual(
+            post["title"]?.string, "Authoritative",
             "neither the first nor the second link call may overwrite the normalize-written title")
     }
 }

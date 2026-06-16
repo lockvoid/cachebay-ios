@@ -15,11 +15,12 @@ import XCTest
 final class ConnectionPatchTests: XCTestCase {
 
     private func makeClient() -> CachebayClient {
-        CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
     }
 
     private let canonicalKey: CacheKey = "@connection.posts({})"
@@ -30,11 +31,12 @@ final class ConnectionPatchTests: XCTestCase {
         let selector = ConnectionSelector(parent: .key("Query"), key: "posts")
         client.modifyOptimistic { b in
             let c = b.connection(selector)
-            c.linkNode(.object([
-                "__typename": .string("Post"),
-                "id": .string("p1"),
-                "title": .string("A"),
-            ]), options: LinkNodeOptions(position: .end))
+            c.linkNode(
+                .object([
+                    "__typename": .string("Post"),
+                    "id": .string("p1"),
+                    "title": .string("A"),
+                ]), options: LinkNodeOptions(position: .end))
             c.patch([
                 "pageInfo": .object([
                     "endCursor": .string("c-end"),
@@ -63,7 +65,7 @@ final class ConnectionPatchTests: XCTestCase {
         let selector = ConnectionSelector(parent: .key("Query"), key: "posts")
         client.modifyOptimistic { b in
             b.connection(selector).patch([
-                "pageInfo": .object(["hasNextPage": .bool(false)]),
+                "pageInfo": .object(["hasNextPage": .bool(false)])
             ])
         }.dispose()
 
@@ -105,7 +107,7 @@ final class ConnectionPatchTests: XCTestCase {
                 "pageInfo": .object([
                     "endCursor": .string("c-overwritten"),
                     "hasNextPage": .bool(false),
-                ]),
+                ])
             ])
         }
         XCTAssertEqual(pageInfoField(client, "endCursor")?.string, "c-overwritten")
@@ -147,17 +149,21 @@ final class ConnectionPatchTests: XCTestCase {
         // Pre-seed a canonical with totalCount + populated pageInfo via
         // a write-fragment style — we just write directly to the graph.
         let pageInfoKey: CacheKey = "\(key).pageInfo"
-        client.graph.replaceRecord(pageInfoKey, [
-            CachebayConstants.typenameField: .string("PageInfo"),
-            "endCursor": .string("e1"),
-            "hasNextPage": .bool(true),
-        ])
-        client.graph.replaceRecord(key, [
-            CachebayConstants.typenameField: .string("PostConnection"),
-            CachebayConstants.connectionEdgesField: .refList([]),
-            CachebayConstants.connectionPageInfoField: .ref(pageInfoKey),
-            "totalCount": .int(1),
-        ])
+        client.graph.replaceRecord(
+            pageInfoKey,
+            [
+                CachebayConstants.typenameField: .string("PageInfo"),
+                "endCursor": .string("e1"),
+                "hasNextPage": .bool(true),
+            ])
+        client.graph.replaceRecord(
+            key,
+            [
+                CachebayConstants.typenameField: .string("PostConnection"),
+                CachebayConstants.connectionEdgesField: .refList([]),
+                CachebayConstants.connectionPageInfoField: .ref(pageInfoKey),
+                "totalCount": .int(1),
+            ])
         client.graph.flush()
 
         client.modifyOptimistic { b in
@@ -172,7 +178,8 @@ final class ConnectionPatchTests: XCTestCase {
         }.dispose()
 
         XCTAssertEqual(client.graph.getField(key, "totalCount")?.int, 2)
-        XCTAssertEqual(client.graph.getField(pageInfoKey, "endCursor")?.string, "e1",
+        XCTAssertEqual(
+            client.graph.getField(pageInfoKey, "endCursor")?.string, "e1",
             "endCursor must survive a partial pageInfo patch")
         XCTAssertEqual(client.graph.getField(pageInfoKey, "startCursor")?.string, "s1")
         XCTAssertEqual(client.graph.getField(pageInfoKey, "hasNextPage")?.bool, false)
@@ -199,8 +206,9 @@ final class ConnectionPatchTests: XCTestCase {
             }
         }.dispose()
 
-        XCTAssertEqual(client.graph.getField(canonicalKey, "totalCount")?.int, 43,
-                       "closure form must read prev.totalCount and increment by 1")
+        XCTAssertEqual(
+            client.graph.getField(canonicalKey, "totalCount")?.int, 43,
+            "closure form must read prev.totalCount and increment by 1")
     }
 
     /// Box holding the closure's `prev` snapshot for assertion across
@@ -220,7 +228,7 @@ final class ConnectionPatchTests: XCTestCase {
         client.modifyOptimistic { b in
             b.connection(selector).patch { prev in
                 box.capture(prev)
-                return [:] // no-op patch
+                return [:]  // no-op patch
             }
         }.dispose()
 

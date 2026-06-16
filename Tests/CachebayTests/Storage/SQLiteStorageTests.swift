@@ -47,10 +47,13 @@ final class SQLiteStorageTests: XCTestCase {
         let path = tmpPath()
         let a = makeAdapter(path: path)
         a.put([
-            ("@", [
-                "post({\"id\":\"p1\"})": .ref("Post:p1"),
-                "posts": .refList(["Post:p1", "Post:p2"]),
-            ]),
+            (
+                "@",
+                [
+                    "post({\"id\":\"p1\"})": .ref("Post:p1"),
+                    "posts": .refList(["Post:p1", "Post:p2"]),
+                ]
+            ),
             ("Post:p1", ["__typename": "Post", "id": "p1", "title": "A"]),
         ])
         try await a.flush()
@@ -83,15 +86,18 @@ final class SQLiteStorageTests: XCTestCase {
     func test_client_persists_and_reloads() async throws {
         let path = tmpPath()
         // First client writes data.
-        let client1 = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0,
-            storage: SQLiteStorage.factory(options: .init(path: path))
-        ))
-        try client1.writeFragment(id: "Post:p1", fragment: "fragment P on Post { id title }", data: .object([
-            "__typename": "Post", "id": "p1", "title": "Persist-me"
-        ]))
+        let client1 = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0,
+                storage: SQLiteStorage.factory(options: .init(path: path))
+            ))
+        try client1.writeFragment(
+            id: "Post:p1", fragment: "fragment P on Post { id title }",
+            data: .object([
+                "__typename": "Post", "id": "p1", "title": "Persist-me",
+            ]))
         // Give the storage queue a chance to flush.
         try await client1.storage?.flush()
         await client1.shutdown()
@@ -100,12 +106,13 @@ final class SQLiteStorageTests: XCTestCase {
         // is explicit — call `warmup()` to load disk records into the
         // in-memory graph. Construction no longer fires a background
         // hydration task.
-        let client2 = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0,
-            storage: SQLiteStorage.factory(options: .init(path: path))
-        ))
+        let client2 = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0,
+                storage: SQLiteStorage.factory(options: .init(path: path))
+            ))
         client2.warmup()
 
         let read = client2.readFragment(id: "Post:p1", fragment: "fragment P on Post { id title }")

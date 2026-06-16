@@ -688,9 +688,11 @@ public final class Optimistic: @unchecked Sendable {
         if canonicalRecord.isEmpty {
             // Ensure canonical exists.
             let pageInfoKey = "\(op.connectionKey).pageInfo"
-            graph.putRecord(pageInfoKey, [
-                CachebayConstants.typenameField: .string(CachebayConstants.connectionPageInfoTypename),
-            ])
+            graph.putRecord(
+                pageInfoKey,
+                [
+                    CachebayConstants.typenameField: .string(CachebayConstants.connectionPageInfoTypename)
+                ])
             canonicalRecord = [
                 CachebayConstants.typenameField: .string(CachebayConstants.connectionTypename),
                 CachebayConstants.connectionEdgesField: .refList([]),
@@ -875,7 +877,8 @@ public final class Optimistic: @unchecked Sendable {
     private func applyConnectionPatch(_ canonicalKey: CacheKey, _ update: [String: JSONValue]) {
         var canonical = graph.getRecord(canonicalKey) ?? [:]
         if let pageInfo = update[CachebayConstants.connectionPageInfoField]?.object,
-           let pageInfoRef = canonical[CachebayConstants.connectionPageInfoField]?.ref {
+            let pageInfoRef = canonical[CachebayConstants.connectionPageInfoField]?.ref
+        {
             graph.putRecord(pageInfoRef, pageInfo)
         }
         for (k, v) in update where k != CachebayConstants.connectionPageInfoField {
@@ -965,8 +968,7 @@ public final class Optimistic: @unchecked Sendable {
                 optimistic.captureBaseline(layer, recordId: recordId)
                 layer.entityOps.append(EntityOp(recordId: recordId, kind: .write(patch: patch, mode: mode)))
             }
-            if mode == .replace { optimistic.graph.replaceRecord(recordId, patch) }
-            else { optimistic.graph.putRecord(recordId, patch) }
+            if mode == .replace { optimistic.graph.replaceRecord(recordId, patch) } else { optimistic.graph.putRecord(recordId, patch) }
         }
 
         func patch(_ target: EntityRef, mode: EntityPatchMode, _ build: @Sendable (_ prev: [String: JSONValue]) -> [String: JSONValue]) {
@@ -982,8 +984,7 @@ public final class Optimistic: @unchecked Sendable {
                 optimistic.captureBaseline(layer, recordId: recordId)
                 layer.entityOps.append(EntityOp(recordId: recordId, kind: .write(patch: computed, mode: mode)))
             }
-            if mode == .replace { optimistic.graph.replaceRecord(recordId, computed) }
-            else { optimistic.graph.putRecord(recordId, computed) }
+            if mode == .replace { optimistic.graph.replaceRecord(recordId, computed) } else { optimistic.graph.putRecord(recordId, computed) }
         }
 
         func delete(_ target: EntityRef) {
@@ -1021,8 +1022,8 @@ public final class Optimistic: @unchecked Sendable {
             // misconfigured Optimistic instance — silently no-op
             // rather than crash.
             guard let planner = optimistic.planner,
-                  let documents = optimistic.documents,
-                  let plan = try? planner.getPlan(document, fragmentName: fragmentName)
+                let documents = optimistic.documents,
+                let plan = try? planner.getPlan(document, fragmentName: fragmentName)
             else { return }
 
             // Capture baselines for every entity record the data tree
@@ -1056,7 +1057,7 @@ public final class Optimistic: @unchecked Sendable {
             // The protocol's default impl does the same; we duplicate it
             // here because the planner check is per-call.
             guard let planner = optimistic.planner,
-                  let plan = try? planner.getPlan(document, fragmentName: fragmentName)
+                let plan = try? planner.getPlan(document, fragmentName: fragmentName)
             else {
                 patch(.key(rootId), data, mode: mode)
                 return
@@ -1362,12 +1363,14 @@ public final class Optimistic: @unchecked Sendable {
             guard let entityKey = optimistic.resolveEntityRef(ref) else { return }
             if recording { optimistic.captureBaseline(layer, recordId: entityKey) }
 
-            let op = ConnectionOp(connectionKey: canonicalKey, kind: .linkNode(
-                entityKey: entityKey,
-                meta: options.edge,
-                position: options.position,
-                anchor: options.anchor.flatMap { optimistic.resolveEntityRef($0) }
-            ))
+            let op = ConnectionOp(
+                connectionKey: canonicalKey,
+                kind: .linkNode(
+                    entityKey: entityKey,
+                    meta: options.edge,
+                    position: options.position,
+                    anchor: options.anchor.flatMap { optimistic.resolveEntityRef($0) }
+                ))
             if recording {
                 optimistic.captureConnectionBaselines(layer, canonicalKey: canonicalKey)
                 layer.connectionOps.append(op)

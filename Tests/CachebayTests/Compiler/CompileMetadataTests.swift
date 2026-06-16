@@ -219,11 +219,12 @@ final class CompileMetadataTests: XCTestCase {
         XCTAssertNotNil(commentsField?.selId)
 
         // All three levels should have unique selIds.
-        let selIds: Set<String> = Set([
-            usersField?.selId,
-            postsField?.selId,
-            commentsField?.selId,
-        ].compactMap { $0 })
+        let selIds: Set<String> = Set(
+            [
+                usersField?.selId,
+                postsField?.selId,
+                commentsField?.selId,
+            ].compactMap { $0 })
         XCTAssertEqual(selIds.count, 3)
     }
 
@@ -231,23 +232,23 @@ final class CompileMetadataTests: XCTestCase {
 
     func test_produces_same_plan_id_for_queries_differing_only_by_field_order() throws {
         let q1 = """
-        query GetUser($id: ID!) {
-          user(id: $id) {
-            id
-            name
-            email
-          }
-        }
-        """
+            query GetUser($id: ID!) {
+              user(id: $id) {
+                id
+                name
+                email
+              }
+            }
+            """
         let q2 = """
-        query GetUser($id: ID!) {
-          user(id: $id) {
-            email
-            id
-            name
-          }
-        }
-        """
+            query GetUser($id: ID!) {
+              user(id: $id) {
+                email
+                id
+                name
+              }
+            }
+            """
         let plan1 = try Compiler.compilePlan(source: q1)
         let plan2 = try Compiler.compilePlan(source: q2)
         XCTAssertEqual(plan1.id, plan2.id)
@@ -256,15 +257,15 @@ final class CompileMetadataTests: XCTestCase {
 
     func test_produces_different_plan_id_for_different_operations_with_same_fields() throws {
         let q = """
-        query GetUser($id: ID!) {
-          user(id: $id) { id email }
-        }
-        """
+            query GetUser($id: ID!) {
+              user(id: $id) { id email }
+            }
+            """
         let m = """
-        mutation UpdateUser($id: ID!) {
-          user(id: $id) { id email }
-        }
-        """
+            mutation UpdateUser($id: ID!) {
+              user(id: $id) { id email }
+            }
+            """
         let plan1 = try Compiler.compilePlan(source: q)
         let plan2 = try Compiler.compilePlan(source: m)
         XCTAssertNotEqual(plan1.id, plan2.id)
@@ -316,23 +317,23 @@ final class CompileMetadataTests: XCTestCase {
 
     func test_selId_includes_typeCondition_for_inline_fragments() throws {
         let src = """
-        query GetPosts($first: Int!) {
-          posts(first: $first) @connection {
-            edges {
-              node {
-                id
-                title
-                ... on VideoPost {
-                  video { url }
-                }
-                ... on AudioPost {
-                  audio { url }
+            query GetPosts($first: Int!) {
+              posts(first: $first) @connection {
+                edges {
+                  node {
+                    id
+                    title
+                    ... on VideoPost {
+                      video { url }
+                    }
+                    ... on AudioPost {
+                      audio { url }
+                    }
+                  }
                 }
               }
             }
-          }
-        }
-        """
+            """
         let plan = try Compiler.compilePlan(source: src)
         let postsField = plan.root.first { $0.fieldName == "posts" }
         let edgesField = postsField?.selectionSet?.first { $0.fieldName == "edges" }
@@ -353,14 +354,14 @@ final class CompileMetadataTests: XCTestCase {
 
     func test_pageArgs_includes_all_window_args_for_connection_field() throws {
         let src = """
-        query GetPosts($first: Int, $after: String, $last: Int, $before: String) {
-          posts(first: $first, after: $after, last: $last, before: $before) @connection {
-            edges {
-              node { id }
+            query GetPosts($first: Int, $after: String, $last: Int, $before: String) {
+              posts(first: $first, after: $after, last: $last, before: $before) @connection {
+                edges {
+                  node { id }
+                }
+              }
             }
-          }
-        }
-        """
+            """
         let plan = try Compiler.compilePlan(source: src)
         let postsField = plan.root.first { $0.fieldName == "posts" }
 
@@ -380,13 +381,13 @@ final class CompileMetadataTests: XCTestCase {
 
     func test_getDependencies_returns_empty_for_queries_without_args_or_connections() throws {
         let src = """
-        query GetPosts {
-          posts {
-            id
-            title
-          }
-        }
-        """
+            query GetPosts {
+              posts {
+                id
+                title
+              }
+            }
+            """
         let plan = try Compiler.compilePlan(source: src)
         let deps = plan.getDependencies(canonical: true, variables: [:])
         XCTAssertEqual(deps.count, 0)
@@ -401,16 +402,18 @@ final class CompileMetadataTests: XCTestCase {
 
     func test_getDependencies_handles_multiple_fields_with_id_arguments() throws {
         let src = """
-        query GetUserAndPost($userId: ID!, $postId: ID!) {
-          user(id: $userId) { id name }
-          post(id: $postId) { id title }
-        }
-        """
+            query GetUserAndPost($userId: ID!, $postId: ID!) {
+              user(id: $userId) { id name }
+              post(id: $postId) { id title }
+            }
+            """
         let plan = try Compiler.compilePlan(source: src)
-        let deps = plan.getDependencies(canonical: true, variables: [
-            "userId": .string("u1"),
-            "postId": .string("p1"),
-        ])
+        let deps = plan.getDependencies(
+            canonical: true,
+            variables: [
+                "userId": .string("u1"),
+                "postId": .string("p1"),
+            ])
         XCTAssertTrue(deps.contains(#"user({"id":"u1"})"#))
         XCTAssertTrue(deps.contains(#"post({"id":"p1"})"#))
         XCTAssertEqual(deps.count, 2)
@@ -427,28 +430,34 @@ final class CompileMetadataTests: XCTestCase {
 
     func test_getDependencies_tracks_parent_context_for_root_connections() throws {
         let plan = try Compiler.compilePlan(source: CompilerOps.postsQuery)
-        let deps = plan.getDependencies(canonical: true, variables: [
-            "category": .string("tech"),
-            "first": .int(10),
-        ])
+        let deps = plan.getDependencies(
+            canonical: true,
+            variables: [
+                "category": .string("tech"),
+                "first": .int(10),
+            ])
         XCTAssertTrue(deps.contains(#"@connection.posts({"category":"tech"})"#))
         XCTAssertEqual(deps.count, 1)
     }
 
     func test_getDependencies_canonical_excludes_window_args_strict_includes_them() throws {
         let plan = try Compiler.compilePlan(source: CompilerOps.postsQuery)
-        let strictDeps = plan.getDependencies(canonical: false, variables: [
-            "category": .string("tech"),
-            "sort": .string("hot"),
-            "first": .int(10),
-            "after": .string("c1"),
-        ])
-        let canonicalDeps = plan.getDependencies(canonical: true, variables: [
-            "category": .string("tech"),
-            "sort": .string("hot"),
-            "first": .int(10),
-            "after": .string("c1"),
-        ])
+        let strictDeps = plan.getDependencies(
+            canonical: false,
+            variables: [
+                "category": .string("tech"),
+                "sort": .string("hot"),
+                "first": .int(10),
+                "after": .string("c1"),
+            ])
+        let canonicalDeps = plan.getDependencies(
+            canonical: true,
+            variables: [
+                "category": .string("tech"),
+                "sort": .string("hot"),
+                "first": .int(10),
+                "after": .string("c1"),
+            ])
 
         XCTAssertTrue(strictDeps.contains(#"@.posts({"category":"tech","sort":"hot","first":10,"after":"c1"})"#))
         XCTAssertEqual(strictDeps.count, 1)

@@ -91,11 +91,12 @@ final class WebSocketReconnectTests: XCTestCase {
     }
 
     private func makeClient(_ ws: StageWSTransport) -> CachebayClient {
-        CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport(), ws: ws),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport(), ws: ws),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
     }
 
     // MARK: - Active subscriber gets an error on drop
@@ -144,7 +145,7 @@ final class WebSocketReconnectTests: XCTestCase {
             variables: [:]
         )
         let firstTask = Task<Void, Never> {
-            do { for try await _ in firstStream {} } catch { /* expected drop */ }
+            do { for try await _ in firstStream {} } catch { /* expected drop */  }
         }
         try await Task.sleep(nanoseconds: 30_000_000)
         ws.dropConnection(allowReconnect: true)
@@ -186,7 +187,7 @@ final class WebSocketReconnectTests: XCTestCase {
             variables: [:]
         )
         let firstTask = Task<Void, Never> {
-            do { for try await _ in firstStream {} } catch { /* expected drop */ }
+            do { for try await _ in firstStream {} } catch { /* expected drop */  }
         }
         try await Task.sleep(nanoseconds: 30_000_000)
         // Drop and refuse reconnect — mirrors current
@@ -239,8 +240,9 @@ final class WebSocketReconnectTests: XCTestCase {
         ws.reconnect()
         ws.reconnect()
         ws.reconnect()
-        XCTAssertEqual(ws.state, .disconnected,
-                       "reconnect() with no pending subs must not start a reconnector loop")
+        XCTAssertEqual(
+            ws.state, .disconnected,
+            "reconnect() with no pending subs must not start a reconnector loop")
     }
 
     /// `disconnect()` parks the transport in `.stopped(.userClosed)`.
@@ -253,8 +255,9 @@ final class WebSocketReconnectTests: XCTestCase {
         ws.disconnect(reason: .userClosed)
         XCTAssertEqual(ws.state, .stopped(reason: .userClosed))
         ws.reconnect()
-        XCTAssertEqual(ws.state, .disconnected,
-                       "reconnect() from .stopped with no subs must resurrect to .disconnected")
+        XCTAssertEqual(
+            ws.state, .disconnected,
+            "reconnect() from .stopped with no subs must resurrect to .disconnected")
     }
 
     /// `ReconnectPolicy.disabled` (maxAttempts: 0) — when an
@@ -290,19 +293,22 @@ final class WebSocketReconnectTests: XCTestCase {
         // pin the *struct* defaults so future bumps trip a test.
         let p = ReconnectPolicy.default
         XCTAssertEqual(p.initialDelay, 0.5, accuracy: 0.001)
-        XCTAssertEqual(p.maxDelay, 5, accuracy: 0.001,
+        XCTAssertEqual(
+            p.maxDelay, 5, accuracy: 0.001,
             "5s cap matches Phoenix/Pusher/real-time-WS norms; 30s+ HTTPS-style caps need a custom policy")
         XCTAssertEqual(p.multiplier, 2.0, accuracy: 0.001)
         XCTAssertEqual(p.jitter, 0.3, accuracy: 0.001)
         XCTAssertNil(p.maxAttempts, "default policy must retry forever")
 
         let aggressive = ReconnectPolicy.aggressive
-        XCTAssertLessThan(aggressive.initialDelay, p.initialDelay,
-                          ".aggressive must be tighter than .default")
+        XCTAssertLessThan(
+            aggressive.initialDelay, p.initialDelay,
+            ".aggressive must be tighter than .default")
         XCTAssertLessThan(aggressive.maxDelay, p.maxDelay)
 
-        XCTAssertEqual(ReconnectPolicy.disabled.maxAttempts, 0,
-                       ".disabled must set maxAttempts to 0 (refuse to retry)")
+        XCTAssertEqual(
+            ReconnectPolicy.disabled.maxAttempts, 0,
+            ".disabled must set maxAttempts to 0 (refuse to retry)")
     }
 
     /// Exponential growth + jitter in practice. Uses `FakeClock` so
@@ -312,8 +318,8 @@ final class WebSocketReconnectTests: XCTestCase {
     func test_reconnect_emitsReconnectScheduledEvents_withGrowingDelays() async throws {
         let clock = FakeClock()
         let policy = ReconnectPolicy(
-            initialDelay: 0.05,    // 50ms
-            maxDelay: 0.4,         // cap at 400ms
+            initialDelay: 0.05,  // 50ms
+            maxDelay: 0.4,  // cap at 400ms
             multiplier: 2.0,
             jitter: 0.2,
             maxAttempts: 4
@@ -344,7 +350,7 @@ final class WebSocketReconnectTests: XCTestCase {
         // suspends until we call `advance(by:)` / `releaseAllPending()`.
         let stream = ws.subscribe(WSContext(query: "subscription { x }", variables: [:]))
         let consumerTask = Task<Void, Never> {
-            do { for try await _ in stream {} } catch { /* expected */ }
+            do { for try await _ in stream {} } catch { /* expected */  }
         }
 
         // Drive the reconnector through all 4 attempts. Each attempt
@@ -361,20 +367,24 @@ final class WebSocketReconnectTests: XCTestCase {
         _ = await drainerTask.value
 
         let delays = scheduledDelays.snapshot()
-        XCTAssertEqual(delays.count, policy.maxAttempts!,
-                       "expected exactly \(policy.maxAttempts!) reconnect-scheduled events, got \(delays.count): \(delays)")
+        XCTAssertEqual(
+            delays.count, policy.maxAttempts!,
+            "expected exactly \(policy.maxAttempts!) reconnect-scheduled events, got \(delays.count): \(delays)")
         // With FakeClock there's no OS scheduling slop. Each delay
         // must be exactly `min(initial * mult^(n-1), maxDelay) * jitterFactor`,
         // bounded by [1-jitter, 1+jitter].
         for (i, d) in delays.enumerated() {
             let attempt = i + 1
-            let nominal = min(policy.initialDelay * pow(policy.multiplier, Double(attempt - 1)),
-                              policy.maxDelay)
+            let nominal = min(
+                policy.initialDelay * pow(policy.multiplier, Double(attempt - 1)),
+                policy.maxDelay)
             let lo = nominal * (1 - policy.jitter)
             let hi = nominal * (1 + policy.jitter)
-            XCTAssertGreaterThanOrEqual(d, lo,
+            XCTAssertGreaterThanOrEqual(
+                d, lo,
                 "attempt \(attempt): delay \(d)s below jitter floor \(lo)s")
-            XCTAssertLessThanOrEqual(d, hi,
+            XCTAssertLessThanOrEqual(
+                d, hi,
                 "attempt \(attempt): delay \(d)s above jitter ceiling \(hi)s")
         }
         if case .stopped(let reason) = ws.state {
@@ -402,7 +412,7 @@ final class WebSocketReconnectTests: XCTestCase {
         )
         let stream = ws2.subscribe(WSContext(query: "subscription { x }", variables: [:]))
         let consumerTask = Task<Void, Never> {
-            do { for try await _ in stream {} } catch { /* expected */ }
+            do { for try await _ in stream {} } catch { /* expected */  }
         }
         _ = await consumerTask.value
         // Give the reconnector a moment to finalize state transition
@@ -436,9 +446,11 @@ final class WebSocketReconnectTests: XCTestCase {
             url: URL(string: "wss://example.test/graphql")!
         )
         let timeout = ws.session.configuration.timeoutIntervalForRequest
-        XCTAssertLessThanOrEqual(timeout, 15,
+        XCTAssertLessThanOrEqual(
+            timeout, 15,
             "default WS connect timeout must be ~10s, not URLSession's 60s default")
-        XCTAssertGreaterThan(timeout, ReconnectPolicy.default.maxDelay,
+        XCTAssertGreaterThan(
+            timeout, ReconnectPolicy.default.maxDelay,
             "default WS connect timeout must exceed maxDelay (5s) so each backoff cycle gets a full attempt")
     }
 
@@ -479,7 +491,7 @@ final class WebSocketReconnectTests: XCTestCase {
         // registers; the awaiting Task parks in `waitForAck()`.
         let stream = ws.subscribe(WSContext(query: "subscription { x }", variables: [:]))
         let consumer = Task<Void, Never> {
-            do { for try await _ in stream {} } catch { /* expected on cancel */ }
+            do { for try await _ in stream {} } catch { /* expected on cancel */  }
         }
 
         // Let the subscribe Task register + park.
@@ -495,7 +507,8 @@ final class WebSocketReconnectTests: XCTestCase {
         let subscribes = frames.snapshot().filter {
             if case .subscribe = $0 { return true } else { return false }
         }
-        XCTAssertEqual(subscribes.count, 1,
+        XCTAssertEqual(
+            subscribes.count, 1,
             "subscribe registered during .connecting must produce exactly one wire-level `subscribe` — the caller's awaiting Task already sends it; the connection_ack replay must skip it")
 
         consumer.cancel()
@@ -529,7 +542,8 @@ final class WebSocketReconnectTests: XCTestCase {
             if case .subscribe(let id, _, _) = $0 { return id == "1" }
             return false
         }
-        XCTAssertEqual(replays.count, 1,
+        XCTAssertEqual(
+            replays.count, 1,
             ".subscribed entries must be replayed exactly once when connection_ack lands on a reconnect socket")
     }
 
@@ -572,7 +586,8 @@ final class WebSocketReconnectTests: XCTestCase {
             return nil
         }
         XCTAssertFalse(inits.isEmpty, "reconnectIfConnected:true must trigger a fresh connection_init")
-        XCTAssertEqual(inits.last?["authToken"], .string("NEW"),
+        XCTAssertEqual(
+            inits.last?["authToken"], .string("NEW"),
             "the new connection_init must carry the updated params, not the stale ones")
     }
 
@@ -591,9 +606,11 @@ final class WebSocketReconnectTests: XCTestCase {
         // Give any in-flight orchestration a moment.
         try await Task.sleep(nanoseconds: 50_000_000)
 
-        XCTAssertEqual(ws.state, .connected,
+        XCTAssertEqual(
+            ws.state, .connected,
             "reconnectIfConnected:false must not tear down a live socket")
-        XCTAssertEqual(ws.connectionParams["authToken"], .string("NEW"),
+        XCTAssertEqual(
+            ws.connectionParams["authToken"], .string("NEW"),
             "the params must still be updated for the next natural reconnect")
     }
 
@@ -656,7 +673,8 @@ final class WebSocketReconnectTests: XCTestCase {
         let pings = frames.snapshot().filter {
             if case .ping = $0 { return true } else { return false }
         }
-        XCTAssertGreaterThanOrEqual(pings.count, 3,
+        XCTAssertGreaterThanOrEqual(
+            pings.count, 3,
             "expected at least 3 ping frames after 3 intervals; got \(pings.count)")
     }
 
@@ -678,7 +696,8 @@ final class WebSocketReconnectTests: XCTestCase {
         let pongs = frames.snapshot().filter {
             if case .pong = $0 { return true } else { return false }
         }
-        XCTAssertEqual(pongs.count, 1,
+        XCTAssertEqual(
+            pongs.count, 1,
             "client must answer server ping with exactly one pong")
     }
 
@@ -717,7 +736,8 @@ final class WebSocketReconnectTests: XCTestCase {
             if case .ping = $0 { return true } else { return false }
         }.count
 
-        XCTAssertEqual(beforeDisconnect, afterDisconnect,
+        XCTAssertEqual(
+            beforeDisconnect, afterDisconnect,
             "ping timer must stop on disconnect — got \(beforeDisconnect) before, \(afterDisconnect) after")
     }
 
@@ -757,19 +777,21 @@ final class WebSocketReconnectTests: XCTestCase {
 
         let stream = ws.subscribe(WSContext(query: "subscription { x }", variables: [:]))
         let consumer = Task<Void, Never> {
-            do { for try await _ in stream {} } catch { /* expected */ }
+            do { for try await _ in stream {} } catch { /* expected */  }
         }
         try await Task.sleep(nanoseconds: 30_000_000)
 
         let afterRegister = collectSubscriptionCounts(collected.snapshot())
-        XCTAssertEqual(afterRegister, [1],
+        XCTAssertEqual(
+            afterRegister, [1],
             "subscribe() must emit subscriptionsChanged(1); got \(afterRegister)")
 
         consumer.cancel()
         try await Task.sleep(nanoseconds: 50_000_000)
 
         let afterCancel = collectSubscriptionCounts(collected.snapshot())
-        XCTAssertEqual(afterCancel, [1, 0],
+        XCTAssertEqual(
+            afterCancel, [1, 0],
             "consumer cancel must emit subscriptionsChanged(0); got \(afterCancel)")
 
         drainer.cancel()
@@ -804,7 +826,8 @@ final class WebSocketReconnectTests: XCTestCase {
         try await Task.sleep(nanoseconds: 30_000_000)
 
         let countsAfterAll = collectSubscriptionCounts(collected.snapshot())
-        XCTAssertEqual(countsAfterAll, [1, 2, 3],
+        XCTAssertEqual(
+            countsAfterAll, [1, 2, 3],
             "three sequential subscribes must emit 1, 2, 3 in order; got \(countsAfterAll)")
 
         c2.cancel()
@@ -815,7 +838,8 @@ final class WebSocketReconnectTests: XCTestCase {
         try await Task.sleep(nanoseconds: 50_000_000)
 
         let final = collectSubscriptionCounts(collected.snapshot())
-        XCTAssertEqual(final, [1, 2, 3, 2, 1, 0],
+        XCTAssertEqual(
+            final, [1, 2, 3, 2, 1, 0],
             "decrements must be monotonic; got \(final)")
 
         drainer.cancel()
@@ -838,7 +862,7 @@ final class WebSocketReconnectTests: XCTestCase {
 
         let stream = ws.subscribe(WSContext(query: "subscription { x }", variables: [:]))
         let consumer = Task<Void, Never> {
-            do { for try await _ in stream {} } catch { /* expected */ }
+            do { for try await _ in stream {} } catch { /* expected */  }
         }
         try await Task.sleep(nanoseconds: 20_000_000)
 
@@ -852,7 +876,8 @@ final class WebSocketReconnectTests: XCTestCase {
         try await Task.sleep(nanoseconds: 50_000_000)
 
         let counts = collectSubscriptionCounts(collected.snapshot())
-        XCTAssertEqual(counts, [1, 0],
+        XCTAssertEqual(
+            counts, [1, 0],
             "server `complete` must emit subscriptionsChanged(0); got \(counts)")
 
         consumer.cancel()
@@ -876,7 +901,7 @@ final class WebSocketReconnectTests: XCTestCase {
 
         let stream = ws.subscribe(WSContext(query: "subscription { x }", variables: [:]))
         let consumer = Task<Void, Never> {
-            do { for try await _ in stream {} } catch { /* expected */ }
+            do { for try await _ in stream {} } catch { /* expected */  }
         }
         try await Task.sleep(nanoseconds: 20_000_000)
         ws._testInjectInbound(#"{"type":"connection_ack"}"#)
@@ -886,7 +911,8 @@ final class WebSocketReconnectTests: XCTestCase {
         try await Task.sleep(nanoseconds: 50_000_000)
 
         let counts = collectSubscriptionCounts(collected.snapshot())
-        XCTAssertEqual(counts, [1, 0],
+        XCTAssertEqual(
+            counts, [1, 0],
             "server `error` must emit subscriptionsChanged(0); got \(counts)")
 
         consumer.cancel()
@@ -912,7 +938,7 @@ final class WebSocketReconnectTests: XCTestCase {
 
         let stream = ws.subscribe(WSContext(query: "subscription { x }", variables: [:]))
         let consumer = Task<Void, Never> {
-            do { for try await _ in stream {} } catch { /* cancel */ }
+            do { for try await _ in stream {} } catch { /* cancel */  }
         }
         try await Task.sleep(nanoseconds: 20_000_000)
 
@@ -922,7 +948,8 @@ final class WebSocketReconnectTests: XCTestCase {
         try await Task.sleep(nanoseconds: 80_000_000)
 
         let counts = collectSubscriptionCounts(collected.snapshot())
-        XCTAssertEqual(counts, [1],
+        XCTAssertEqual(
+            counts, [1],
             "markSubscriptionLive must NOT emit a count event (count is unchanged); got \(counts)")
 
         consumer.cancel()
@@ -955,7 +982,8 @@ final class WebSocketReconnectTests: XCTestCase {
         try await Task.sleep(nanoseconds: 80_000_000)
 
         let counts = collectSubscriptionCounts(collected.snapshot())
-        XCTAssertEqual(counts, [1, 2, 0],
+        XCTAssertEqual(
+            counts, [1, 2, 0],
             "disconnect() must emit a single subscriptionsChanged(0) for the bulk drain; got \(counts)")
 
         c1.cancel(); c2.cancel(); drainer.cancel()
@@ -979,7 +1007,8 @@ final class WebSocketReconnectTests: XCTestCase {
         try await Task.sleep(nanoseconds: 30_000_000)
 
         let counts = collectSubscriptionCounts(collected.snapshot())
-        XCTAssertEqual(counts, [],
+        XCTAssertEqual(
+            counts, [],
             "disconnect() with no subscriptions must NOT emit subscriptionsChanged; got \(counts)")
 
         drainer.cancel()
@@ -1003,7 +1032,7 @@ final class WebSocketReconnectTests: XCTestCase {
 
         let stream = ws.subscribe(WSContext(query: "subscription { x }", variables: [:]))
         let consumer = Task<Void, Never> {
-            do { for try await _ in stream {} } catch { /* expected */ }
+            do { for try await _ in stream {} } catch { /* expected */  }
         }
         try await Task.sleep(nanoseconds: 30_000_000)
 
@@ -1012,7 +1041,8 @@ final class WebSocketReconnectTests: XCTestCase {
         try await Task.sleep(nanoseconds: 80_000_000)
 
         let counts = collectSubscriptionCounts(collected.snapshot())
-        XCTAssertEqual(counts, [1, 0],
+        XCTAssertEqual(
+            counts, [1, 0],
             "terminal stop must drain subscriptions and emit subscriptionsChanged(0); got \(counts)")
 
         consumer.cancel()
@@ -1048,7 +1078,8 @@ final class WebSocketReconnectTests: XCTestCase {
 
         try await Task.sleep(nanoseconds: 30_000_000)
         let beforeReconnect = collectSubscriptionCounts(collected.snapshot())
-        XCTAssertEqual(beforeReconnect, [1],
+        XCTAssertEqual(
+            beforeReconnect, [1],
             "_testRegisterSubscribed sets the baseline at 1; got \(beforeReconnect)")
 
         // Provoke an unexpected disconnect via the receive-loop path
@@ -1069,7 +1100,8 @@ final class WebSocketReconnectTests: XCTestCase {
         try await Task.sleep(nanoseconds: 80_000_000)
 
         let counts = collectSubscriptionCounts(collected.snapshot())
-        XCTAssertEqual(counts, [1],
+        XCTAssertEqual(
+            counts, [1],
             "reconnect cycle must NOT emit additional subscriptionsChanged events (subs preserved); got \(counts)")
 
         drainer.cancel()
@@ -1094,7 +1126,7 @@ final class WebSocketReconnectTests: XCTestCase {
 
         let stream = ws.subscribe(WSContext(query: "subscription { x }", variables: [:]))
         let consumer = Task<Void, Never> {
-            do { for try await _ in stream {} } catch { /* cancel */ }
+            do { for try await _ in stream {} } catch { /* cancel */  }
         }
         try await Task.sleep(nanoseconds: 60_000_000)
 
@@ -1107,11 +1139,14 @@ final class WebSocketReconnectTests: XCTestCase {
             if case .connecting = $0 { return true }
             return false
         }
-        XCTAssertNotNil(countIdx,
+        XCTAssertNotNil(
+            countIdx,
             "subscriptionsChanged(1) was never emitted; events=\(events)")
-        XCTAssertNotNil(connectingIdx,
+        XCTAssertNotNil(
+            connectingIdx,
             "connecting was never emitted; events=\(events)")
-        XCTAssertLessThan(countIdx ?? .max, connectingIdx ?? .min,
+        XCTAssertLessThan(
+            countIdx ?? .max, connectingIdx ?? .min,
             "subscriptionsChanged(1) must be emitted under-lock from registerSubscription, BEFORE the spawned Task emits .connecting; events=\(events)")
 
         consumer.cancel()
@@ -1159,7 +1194,7 @@ final class WebSocketReconnectTests: XCTestCase {
         // Subscribe to provoke a connect attempt against the dead URL.
         let stream = ws.subscribe(WSContext(query: "subscription { x }", variables: [:]))
         let consumer = Task<Void, Never> {
-            do { for try await _ in stream {} } catch { /* expected */ }
+            do { for try await _ in stream {} } catch { /* expected */  }
         }
         _ = await consumer.value
         _ = await drainer.value
@@ -1182,7 +1217,8 @@ final class WebSocketReconnectTests: XCTestCase {
             }
         }
         maxDisconnectsInAnyAttempt = max(maxDisconnectsInAnyAttempt, disconnectsThisAttempt)
-        XCTAssertLessThanOrEqual(maxDisconnectsInAnyAttempt, 1,
+        XCTAssertLessThanOrEqual(
+            maxDisconnectsInAnyAttempt, 1,
             "each physical socket failure must emit AT MOST ONE `.disconnected` event — got \(maxDisconnectsInAnyAttempt) in a single attempt; events=\(events)")
     }
 
@@ -1196,9 +1232,11 @@ final class WebSocketReconnectTests: XCTestCase {
             url: URL(string: "wss://example.test/graphql")!,
             session: custom
         )
-        XCTAssertTrue(ws.session === custom,
+        XCTAssertTrue(
+            ws.session === custom,
             "explicit session must be used as-is, not replaced")
-        XCTAssertEqual(ws.session.configuration.timeoutIntervalForRequest, 42,
+        XCTAssertEqual(
+            ws.session.configuration.timeoutIntervalForRequest, 42,
             "explicit session's timeoutIntervalForRequest must not be mutated")
     }
 }

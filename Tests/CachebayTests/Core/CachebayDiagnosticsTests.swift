@@ -20,10 +20,12 @@ final class CachebayDiagnosticsTests: XCTestCase {
         CachebayDiagnostics.sink = { box.lines.append($0) }
         CachebayDiagnostics.decodeMiss("Edges", "required field 'cursor' did not decode")
         CachebayDiagnostics.materializeMiss("record Cook:1 has no field 'title'")
-        XCTAssertTrue(box.lines.contains { $0.contains("typed-decode miss") && $0.contains("Edges") },
-                      "decode miss must route to the sink; got \(box.lines)")
-        XCTAssertTrue(box.lines.contains { $0.contains("materialize miss") && $0.contains("Cook:1") },
-                      "materialize miss must route to the SAME sink; got \(box.lines)")
+        XCTAssertTrue(
+            box.lines.contains { $0.contains("typed-decode miss") && $0.contains("Edges") },
+            "decode miss must route to the sink; got \(box.lines)")
+        XCTAssertTrue(
+            box.lines.contains { $0.contains("materialize miss") && $0.contains("Cook:1") },
+            "materialize miss must route to the SAME sink; got \(box.lines)")
     }
 
     func test_strictAssert_defaultsOff_soAMissNeverCrashes() {
@@ -47,19 +49,22 @@ final class CachebayDiagnosticsTests: XCTestCase {
     func test_realMaterializeMiss_reachesTheSink() throws {
         let box = Box()
         CachebayDiagnostics.sink = { box.lines.append($0) }
-        let client = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
 
         // Seed a Cook with no `project` object field…
         try client.writeQuery(
             query: "query { cook { __typename id } }",
             variables: [:],
-            data: .object(["cook": .object([
-                CachebayConstants.typenameField: .string("Cook"), "id": .string("c1"),
-            ])])
+            data: .object([
+                "cook": .object([
+                    CachebayConstants.typenameField: .string("Cook"), "id": .string("c1"),
+                ])
+            ])
         )
         // …then read a query that DOES select `project { … }` on it → miss.
         _ = try? client.readQuery(

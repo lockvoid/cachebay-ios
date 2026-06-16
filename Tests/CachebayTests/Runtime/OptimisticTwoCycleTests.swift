@@ -15,11 +15,12 @@ import XCTest
 final class OptimisticTwoCycleTests: XCTestCase {
 
     private func makeClient() -> CachebayClient {
-        CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
     }
 
     // MARK: - Entity patch with commit-phase data
@@ -63,11 +64,13 @@ final class OptimisticTwoCycleTests: XCTestCase {
         // Optimistic closure: write temp entity + link temp id.
         let tempId = "tmp:1"
         let tx = client.modifyOptimistic { b in
-            b.patch(.key("Post:\(tempId)"), [
-                CachebayConstants.typenameField: .string("Post"),
-                "id": .string(tempId),
-                "title": .string("Drafting…"),
-            ], mode: .merge)
+            b.patch(
+                .key("Post:\(tempId)"),
+                [
+                    CachebayConstants.typenameField: .string("Post"),
+                    "id": .string(tempId),
+                    "title": .string("Drafting…"),
+                ], mode: .merge)
             b.connection(selector).linkNode(
                 .key("Post:\(tempId)"),
                 options: LinkNodeOptions(position: .start)
@@ -86,11 +89,13 @@ final class OptimisticTwoCycleTests: XCTestCase {
         let realId = "p9"
         let realTitle = "From Server"
         tx.commit { b in
-            b.patch(.key("Post:\(realId)"), [
-                CachebayConstants.typenameField: .string("Post"),
-                "id": .string(realId),
-                "title": .string(realTitle),
-            ], mode: .merge)
+            b.patch(
+                .key("Post:\(realId)"),
+                [
+                    CachebayConstants.typenameField: .string("Post"),
+                    "id": .string(realId),
+                    "title": .string(realTitle),
+                ], mode: .merge)
             b.connection(selector).linkNode(
                 .key("Post:\(realId)"),
                 options: LinkNodeOptions(position: .start)

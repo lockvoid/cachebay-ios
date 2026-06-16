@@ -3,14 +3,15 @@ import XCTest
 
 final class CompilerTests: XCTestCase {
     func test_compile_simple_query() throws {
-        let plan = try Compiler.compilePlan(source: """
-        query Foo($id: ID!) {
-            post(id: $id) {
-                id
-                title
-            }
-        }
-        """)
+        let plan = try Compiler.compilePlan(
+            source: """
+                query Foo($id: ID!) {
+                    post(id: $id) {
+                        id
+                        title
+                    }
+                }
+                """)
         XCTAssertEqual(plan.operation, .query)
         XCTAssertEqual(plan.rootTypename, "Query")
         XCTAssertEqual(plan.root.count, 1)
@@ -26,15 +27,16 @@ final class CompilerTests: XCTestCase {
     }
 
     func test_compile_with_connection_directive() throws {
-        let plan = try Compiler.compilePlan(source: """
-        query Posts($category: String, $first: Int, $after: String) {
-            posts(category: $category, first: $first, after: $after)
-                @connection(mode: "infinite", filters: ["category"]) {
-                pageInfo { endCursor hasNextPage }
-                edges { cursor node { id title } }
-            }
-        }
-        """)
+        let plan = try Compiler.compilePlan(
+            source: """
+                query Posts($category: String, $first: Int, $after: String) {
+                    posts(category: $category, first: $first, after: $after)
+                        @connection(mode: "infinite", filters: ["category"]) {
+                        pageInfo { endCursor hasNextPage }
+                        edges { cursor node { id title } }
+                    }
+                }
+                """)
         XCTAssertEqual(plan.root.count, 1)
         let posts = plan.root[0]
         XCTAssertTrue(posts.isConnection)
@@ -49,14 +51,15 @@ final class CompilerTests: XCTestCase {
     }
 
     func test_var_masks() throws {
-        let plan = try Compiler.compilePlan(source: """
-        query Posts($category: String, $first: Int, $after: String) {
-            posts(category: $category, first: $first, after: $after)
-                @connection(filters: ["category"]) {
-                edges { node { id } }
-            }
-        }
-        """)
+        let plan = try Compiler.compilePlan(
+            source: """
+                query Posts($category: String, $first: Int, $after: String) {
+                    posts(category: $category, first: $first, after: $after)
+                        @connection(filters: ["category"]) {
+                        edges { node { id } }
+                    }
+                }
+                """)
         XCTAssertEqual(Set(plan.varMask.strict), Set(["category", "first", "after"]))
         XCTAssertEqual(Set(plan.varMask.canonical), Set(["category"]))
         XCTAssertEqual(plan.windowArgs, Set(["first", "after"]))
@@ -70,14 +73,15 @@ final class CompilerTests: XCTestCase {
     }
 
     func test_connection_canonical_key() throws {
-        let plan = try Compiler.compilePlan(source: """
-        query Posts($category: String, $first: Int, $after: String) {
-            posts(category: $category, first: $first, after: $after)
-                @connection(filters: ["category"]) {
-                edges { node { id } }
-            }
-        }
-        """)
+        let plan = try Compiler.compilePlan(
+            source: """
+                query Posts($category: String, $first: Int, $after: String) {
+                    posts(category: $category, first: $first, after: $after)
+                        @connection(filters: ["category"]) {
+                        edges { node { id } }
+                    }
+                }
+                """)
         let field = plan.root[0]
         let vars: [String: JSONValue] = ["category": "tech", "first": 10, "after": "c2"]
         let canonical = Keys.buildConnectionCanonicalKey(field: field, parentId: CachebayConstants.rootID, variables: vars)
@@ -90,13 +94,14 @@ final class CompilerTests: XCTestCase {
     }
 
     func test_fragment_compile() throws {
-        let plan = try Compiler.compilePlan(source: """
-        fragment PostFields on Post {
-            id
-            title
-            author { id name }
-        }
-        """)
+        let plan = try Compiler.compilePlan(
+            source: """
+                fragment PostFields on Post {
+                    id
+                    title
+                    author { id name }
+                }
+                """)
         XCTAssertEqual(plan.operation, .fragment)
         XCTAssertEqual(plan.rootTypename, "Post")
         // __typename is injected at the fragment root

@@ -15,13 +15,15 @@ final class LexerTests: XCTestCase {
 
     func test_names_punctuation() throws {
         let t = try tokens("query Foo { user(id: 1) @cached }")
-        XCTAssertEqual(t.map(\.kind), [
-            .name, .name, .brace(open: true),
-            .name, .paren(open: true), .name, .colon, .int, .paren(open: false),
-            .at, .name,
-            .brace(open: false),
-            .eof,
-        ])
+        XCTAssertEqual(
+            t.map(\.kind),
+            [
+                .name, .name, .brace(open: true),
+                .name, .paren(open: true), .name, .colon, .int, .paren(open: false),
+                .at, .name,
+                .brace(open: false),
+                .eof,
+            ])
     }
 
     func test_string_with_escapes() throws {
@@ -32,11 +34,11 @@ final class LexerTests: XCTestCase {
 
     func test_block_string_indent_strip() throws {
         let source = """
-        \"\"\"
-          hello
-            world
-        \"\"\"
-        """
+            \"\"\"
+              hello
+                world
+            \"\"\"
+            """
         let t = try tokens(source)
         XCTAssertEqual(t[0].kind, .blockString)
         XCTAssertEqual(t[0].value, "hello\n  world")
@@ -54,9 +56,9 @@ final class LexerTests: XCTestCase {
 
     func test_comments_and_comma_whitespace() throws {
         let source = """
-        # this is a comment
-        { a, b }
-        """
+            # this is a comment
+            { a, b }
+            """
         let t = try tokens(source)
         XCTAssertEqual(t.map(\.kind), [.brace(open: true), .name, .name, .brace(open: false), .eof])
     }

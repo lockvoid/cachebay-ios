@@ -8,18 +8,19 @@ import XCTest
 final class OperationsMutationTests: XCTestCase {
 
     private let createPostMutation = """
-    mutation CreatePost($title: String!) {
-        createPost(title: $title) { id title }
-    }
-    """
+        mutation CreatePost($title: String!) {
+            createPost(title: $title) { id title }
+        }
+        """
 
     private func makeClient(suspensionTimeout: TimeInterval = 0) -> (CachebayClient, MockHTTPTransport) {
         let http = MockHTTPTransport()
-        let client = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: http),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: suspensionTimeout
-        ))
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: http),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: suspensionTimeout
+            ))
         return (client, http)
     }
 
@@ -30,13 +31,15 @@ final class OperationsMutationTests: XCTestCase {
     /// the graph (proves normalize was called with mutation rootId).
     func test_executeMutation_writesResultToCache() async throws {
         let (client, http) = makeClient()
-        http.whenQueryContains("createPost", respondWith: .object([
-            "createPost": .object([
-                "__typename": "Post",
-                "id": "p1",
-                "title": "Hello",
-            ])
-        ]))
+        http.whenQueryContains(
+            "createPost",
+            respondWith: .object([
+                "createPost": .object([
+                    "__typename": "Post",
+                    "id": "p1",
+                    "title": "Hello",
+                ])
+            ]))
 
         let result = try await client.executeMutation(query: createPostMutation, variables: ["title": "Hello"])
         XCTAssertNil(result.error)
@@ -92,13 +95,14 @@ final class OperationsMutationTests: XCTestCase {
         let counter = AtomicCounter()
         http.whenQueryContains("createPost") { _ in
             let n = counter.increment()
-            return OperationResult(data: .object([
-                "createPost": .object([
-                    "__typename": "Post",
-                    "id": .string("p\(n)"),
-                    "title": .string("Title \(n)"),
-                ])
-            ]))
+            return OperationResult(
+                data: .object([
+                    "createPost": .object([
+                        "__typename": "Post",
+                        "id": .string("p\(n)"),
+                        "title": .string("Title \(n)"),
+                    ])
+                ]))
         }
 
         let r1 = try await client.executeMutation(query: createPostMutation, variables: ["title": "First"])
@@ -120,13 +124,14 @@ final class OperationsMutationTests: XCTestCase {
         let counter = AtomicCounter()
         http.whenQueryContains("createPost") { _ in
             let n = counter.increment()
-            return OperationResult(data: .object([
-                "createPost": .object([
-                    "__typename": "Post",
-                    "id": .string("dup-\(n)"),
-                    "title": "Same",
-                ])
-            ]))
+            return OperationResult(
+                data: .object([
+                    "createPost": .object([
+                        "__typename": "Post",
+                        "id": .string("dup-\(n)"),
+                        "title": "Same",
+                    ])
+                ]))
         }
 
         let r1 = try await client.executeMutation(query: createPostMutation, variables: ["title": "Same"])
@@ -145,9 +150,11 @@ final class OperationsMutationTests: XCTestCase {
     /// the response can be normalised.
     func test_executeMutation_sendsNetworkQueryWithTypename_toTransport() async throws {
         let (client, http) = makeClient()
-        http.whenQueryContains("createPost", respondWith: .object([
-            "createPost": .object(["__typename": "Post", "id": "p1", "title": "Hi"])
-        ]))
+        http.whenQueryContains(
+            "createPost",
+            respondWith: .object([
+                "createPost": .object(["__typename": "Post", "id": "p1", "title": "Hi"])
+            ]))
         _ = try await client.executeMutation(query: createPostMutation, variables: ["title": "Hi"])
 
         XCTAssertEqual(http.calls.count, 1)
@@ -168,13 +175,15 @@ final class OperationsMutationTests: XCTestCase {
         let (client, http) = makeClient()
         // Server returns a Post with extra `__typename` baked in. After
         // normalise/materialise, the same fields should round-trip back.
-        http.whenQueryContains("createPost", respondWith: .object([
-            "createPost": .object([
-                "__typename": "Post",
-                "id": "p1",
-                "title": "Hi",
-            ])
-        ]))
+        http.whenQueryContains(
+            "createPost",
+            respondWith: .object([
+                "createPost": .object([
+                    "__typename": "Post",
+                    "id": "p1",
+                    "title": "Hi",
+                ])
+            ]))
         let r = try await client.executeMutation(query: createPostMutation, variables: ["title": "Hi"])
         XCTAssertEqual(r.data?["createPost"]?["id"]?.string, "p1")
         XCTAssertEqual(r.data?["createPost"]?["title"]?.string, "Hi")
@@ -193,9 +202,11 @@ final class OperationsMutationTests: XCTestCase {
         let postQuery = "query Post($id: ID!) { post(id: $id) { id title } }"
 
         // Seed Post:p1.
-        try client.writeQuery(query: postQuery, variables: ["id": "p1"], data: .object([
-            "post": .object(["__typename": "Post", "id": "p1", "title": "Original"])
-        ]))
+        try client.writeQuery(
+            query: postQuery, variables: ["id": "p1"],
+            data: .object([
+                "post": .object(["__typename": "Post", "id": "p1", "title": "Original"])
+            ]))
 
         let received = CaptureBox<[JSONValue]>(value: [])
         let handle = try client.watchQuery(
@@ -209,17 +220,19 @@ final class OperationsMutationTests: XCTestCase {
         XCTAssertEqual(received.value.count, 1)
 
         let updateMutation = """
-        mutation UpdatePost($id: ID!, $title: String!) {
-            updatePost(id: $id, title: $title) { id title }
-        }
-        """
-        http.whenQueryContains("updatePost", respondWith: .object([
-            "updatePost": .object([
-                "__typename": "Post",
-                "id": "p1",
-                "title": "Mutated",
-            ])
-        ]))
+            mutation UpdatePost($id: ID!, $title: String!) {
+                updatePost(id: $id, title: $title) { id title }
+            }
+            """
+        http.whenQueryContains(
+            "updatePost",
+            respondWith: .object([
+                "updatePost": .object([
+                    "__typename": "Post",
+                    "id": "p1",
+                    "title": "Mutated",
+                ])
+            ]))
 
         _ = try await client.executeMutation(
             query: updateMutation,
@@ -240,9 +253,11 @@ final class OperationsMutationTests: XCTestCase {
     func test_executeMutation_watcherFanoutFires_beforeOnDataReturns() async throws {
         let (client, http) = makeClient()
         let postQuery = "query Post($id: ID!) { post(id: $id) { id title } }"
-        try client.writeQuery(query: postQuery, variables: ["id": "p1"], data: .object([
-            "post": .object(["__typename": "Post", "id": "p1", "title": "Original"])
-        ]))
+        try client.writeQuery(
+            query: postQuery, variables: ["id": "p1"],
+            data: .object([
+                "post": .object(["__typename": "Post", "id": "p1", "title": "Original"])
+            ]))
 
         let watcherTitleAtMutationCallback = CaptureBox<[String]>(value: [])
         let watcherFires = CaptureBox<[String]>(value: [])
@@ -258,13 +273,15 @@ final class OperationsMutationTests: XCTestCase {
         )
 
         let updateMutation = """
-        mutation UpdatePost($id: ID!, $title: String!) {
-            updatePost(id: $id, title: $title) { id title }
-        }
-        """
-        http.whenQueryContains("updatePost", respondWith: .object([
-            "updatePost": .object(["__typename": "Post", "id": "p1", "title": "Mutated"])
-        ]))
+            mutation UpdatePost($id: ID!, $title: String!) {
+                updatePost(id: $id, title: $title) { id title }
+            }
+            """
+        http.whenQueryContains(
+            "updatePost",
+            respondWith: .object([
+                "updatePost": .object(["__typename": "Post", "id": "p1", "title": "Mutated"])
+            ]))
 
         _ = try await client.executeMutation(
             query: updateMutation,
@@ -296,20 +313,24 @@ final class OperationsMutationTests: XCTestCase {
     func test_executeMutation_invalidatesMaterializeCache_whenNoWatchers() async throws {
         let (client, http) = makeClient()
         let postQuery = "query Post($id: ID!) { post(id: $id) { id title } }"
-        try client.writeQuery(query: postQuery, variables: ["id": "p1"], data: .object([
-            "post": .object(["__typename": "Post", "id": "p1", "title": "Original"])
-        ]))
+        try client.writeQuery(
+            query: postQuery, variables: ["id": "p1"],
+            data: .object([
+                "post": .object(["__typename": "Post", "id": "p1", "title": "Original"])
+            ]))
         // Force materialize cache to populate.
         _ = client.readQuery(query: postQuery, variables: ["id": "p1"])
 
         let updateMutation = """
-        mutation UpdatePost($id: ID!, $title: String!) {
-            updatePost(id: $id, title: $title) { id title }
-        }
-        """
-        http.whenQueryContains("updatePost", respondWith: .object([
-            "updatePost": .object(["__typename": "Post", "id": "p1", "title": "MutationApplied"])
-        ]))
+            mutation UpdatePost($id: ID!, $title: String!) {
+                updatePost(id: $id, title: $title) { id title }
+            }
+            """
+        http.whenQueryContains(
+            "updatePost",
+            respondWith: .object([
+                "updatePost": .object(["__typename": "Post", "id": "p1", "title": "MutationApplied"])
+            ]))
 
         _ = try await client.executeMutation(
             query: updateMutation,
@@ -331,9 +352,11 @@ final class OperationsMutationTests: XCTestCase {
     /// Mirrors web `invokes onData callback with mutation result`.
     func test_executeMutation_invokesOnData() async throws {
         let (client, http) = makeClient()
-        http.whenQueryContains("createPost", respondWith: .object([
-            "createPost": .object(["__typename": "Post", "id": "p1", "title": "Hello"])
-        ]))
+        http.whenQueryContains(
+            "createPost",
+            respondWith: .object([
+                "createPost": .object(["__typename": "Post", "id": "p1", "title": "Hello"])
+            ]))
 
         let datas = CaptureBox<[JSONValue]>(value: [])
         _ = try await client.executeMutation(
@@ -370,9 +393,11 @@ final class OperationsMutationTests: XCTestCase {
     /// (smoke test — no crash with nil callbacks).
     func test_executeMutation_noCallbacks_stillReturnsResult() async throws {
         let (client, http) = makeClient()
-        http.whenQueryContains("createPost", respondWith: .object([
-            "createPost": .object(["__typename": "Post", "id": "p1", "title": "Hi"])
-        ]))
+        http.whenQueryContains(
+            "createPost",
+            respondWith: .object([
+                "createPost": .object(["__typename": "Post", "id": "p1", "title": "Hi"])
+            ]))
         let r = try await client.executeMutation(query: createPostMutation, variables: ["title": "Hi"])
         XCTAssertNotNil(r.data)
     }
@@ -385,23 +410,25 @@ final class OperationsMutationTests: XCTestCase {
     func test_executeMutation_handlesExplicitNullFields() async throws {
         let (client, http) = makeClient()
         let mutationWithNull = """
-        mutation CreateUpload($input: Input!) {
-            createUpload(input: $input) {
-                directUpload { uploadUrl }
-                errors { message }
+            mutation CreateUpload($input: Input!) {
+                createUpload(input: $input) {
+                    directUpload { uploadUrl }
+                    errors { message }
+                }
             }
-        }
-        """
-        http.whenQueryContains("createUpload", respondWith: .object([
-            "createUpload": .object([
-                "__typename": "CreateUploadPayload",
-                "directUpload": .object([
-                    "__typename": "DirectUpload",
-                    "uploadUrl": "https://example.com/u",
-                ]),
-                "errors": .null,
-            ])
-        ]))
+            """
+        http.whenQueryContains(
+            "createUpload",
+            respondWith: .object([
+                "createUpload": .object([
+                    "__typename": "CreateUploadPayload",
+                    "directUpload": .object([
+                        "__typename": "DirectUpload",
+                        "uploadUrl": "https://example.com/u",
+                    ]),
+                    "errors": .null,
+                ])
+            ]))
 
         let r = try await client.executeMutation(
             query: mutationWithNull,
@@ -468,4 +495,3 @@ final class AtomicCounter: @unchecked Sendable {
         return n
     }
 }
-

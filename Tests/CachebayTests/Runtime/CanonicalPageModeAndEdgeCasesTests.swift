@@ -17,25 +17,25 @@ final class CanonicalPageModeAndEdgeCasesTests: XCTestCase {
     }
 
     private let tagsQueryPage = """
-    query Tags($first: Int, $after: String) {
-        tags(first: $first, after: $after) @connection(mode: "page") {
-            __typename
-            totalCount
-            pageInfo { __typename startCursor endCursor hasPreviousPage hasNextPage }
-            edges { __typename cursor node { __typename id name } }
+        query Tags($first: Int, $after: String) {
+            tags(first: $first, after: $after) @connection(mode: "page") {
+                __typename
+                totalCount
+                pageInfo { __typename startCursor endCursor hasPreviousPage hasNextPage }
+                edges { __typename cursor node { __typename id name } }
+            }
         }
-    }
-    """
+        """
 
     private let postsQuery = """
-    query Posts($first: Int, $after: String) {
-        posts(first: $first, after: $after) @connection(mode: "infinite") {
-            __typename
-            pageInfo { __typename startCursor endCursor hasPreviousPage hasNextPage }
-            edges { __typename cursor node { __typename id title } }
+        query Posts($first: Int, $after: String) {
+            posts(first: $first, after: $after) @connection(mode: "infinite") {
+                __typename
+                pageInfo { __typename startCursor endCursor hasPreviousPage hasNextPage }
+                edges { __typename cursor node { __typename id title } }
+            }
         }
-    }
-    """
+        """
 
     private func buildTags(
         ids: [String],
@@ -48,7 +48,7 @@ final class CanonicalPageModeAndEdgeCasesTests: XCTestCase {
             .object([
                 "__typename": "TagEdge",
                 "cursor": .string(id),
-                "node": .object(["__typename": "Tag", "id": .string(id), "name": .string(id)])
+                "node": .object(["__typename": "Tag", "id": .string(id), "name": .string(id)]),
             ])
         }
         var conn: [String: JSONValue] = [
@@ -82,9 +82,11 @@ final class CanonicalPageModeAndEdgeCasesTests: XCTestCase {
         let (graph, planner, _, docs) = makeStack()
         let plan = try planner.getPlan(.source(tagsQueryPage))
 
-        docs.normalize(plan: plan, variables: ["first": 10], data: buildTags(
-            ids: ["t1", "t2", "t3"], startCursor: "t1", endCursor: "t3", hasNext: false, totalCount: 3
-        ))
+        docs.normalize(
+            plan: plan, variables: ["first": 10],
+            data: buildTags(
+                ids: ["t1", "t2", "t3"], startCursor: "t1", endCursor: "t3", hasNext: false, totalCount: 3
+            ))
 
         let canonicalKey: CacheKey = "@connection.tags({})"
         XCTAssertEqual(canonicalNodeIds(graph, canonicalKey), ["t1", "t2", "t3"])
@@ -102,16 +104,21 @@ final class CanonicalPageModeAndEdgeCasesTests: XCTestCase {
         let plan = try planner.getPlan(.source(tagsQueryPage))
         let canonicalKey: CacheKey = "@connection.tags({})"
 
-        docs.normalize(plan: plan, variables: ["first": 10], data: buildTags(
-            ids: ["t1", "t2"], hasNext: true
-        ))
+        docs.normalize(
+            plan: plan, variables: ["first": 10],
+            data: buildTags(
+                ids: ["t1", "t2"], hasNext: true
+            ))
         XCTAssertEqual(canonicalNodeIds(graph, canonicalKey), ["t1", "t2"])
 
         // Page-mode second fetch must REPLACE — not append.
-        docs.normalize(plan: plan, variables: ["first": 10, "after": "t2"], data: buildTags(
-            ids: ["t3", "t4", "t5"], hasNext: false
-        ))
-        XCTAssertEqual(canonicalNodeIds(graph, canonicalKey), ["t3", "t4", "t5"],
+        docs.normalize(
+            plan: plan, variables: ["first": 10, "after": "t2"],
+            data: buildTags(
+                ids: ["t3", "t4", "t5"], hasNext: false
+            ))
+        XCTAssertEqual(
+            canonicalNodeIds(graph, canonicalKey), ["t3", "t4", "t5"],
             "page mode replaces canonical with the latest page snapshot, no merging")
     }
 
@@ -120,14 +127,18 @@ final class CanonicalPageModeAndEdgeCasesTests: XCTestCase {
         let plan = try planner.getPlan(.source(tagsQueryPage))
         let canonicalKey: CacheKey = "@connection.tags({})"
 
-        docs.normalize(plan: plan, variables: ["first": 10], data: buildTags(
-            ids: ["t1"], hasNext: false, totalCount: 1
-        ))
+        docs.normalize(
+            plan: plan, variables: ["first": 10],
+            data: buildTags(
+                ids: ["t1"], hasNext: false, totalCount: 1
+            ))
         XCTAssertEqual(graph.getField(canonicalKey, "totalCount")?.int, 1)
 
-        docs.normalize(plan: plan, variables: ["first": 10], data: buildTags(
-            ids: ["t1", "t2"], hasNext: false, totalCount: 2
-        ))
+        docs.normalize(
+            plan: plan, variables: ["first": 10],
+            data: buildTags(
+                ids: ["t1", "t2"], hasNext: false, totalCount: 2
+            ))
         XCTAssertEqual(graph.getField(canonicalKey, "totalCount")?.int, 2)
     }
 
@@ -169,7 +180,7 @@ final class CanonicalPageModeAndEdgeCasesTests: XCTestCase {
             .object([
                 "__typename": "PostEdge",
                 "cursor": .string("p1"),
-                "node": .object(["__typename": "Post", "id": .string("p1"), "title": .string("p1")])
+                "node": .object(["__typename": "Post", "id": .string("p1"), "title": .string("p1")]),
             ])
         ]
         let payload: JSONValue = .object([
@@ -201,20 +212,22 @@ final class CanonicalPageModeAndEdgeCasesTests: XCTestCase {
             .object([
                 "__typename": "PostEdge",
                 "cursor": .string(id),
-                "node": .object(["__typename": "Post", "id": .string(id), "title": .string(id)])
+                "node": .object(["__typename": "Post", "id": .string(id), "title": .string(id)]),
             ])
         }
-        docs.normalize(plan: plan, variables: ["first": 3], data: .object([
-            "posts": .object([
-                "__typename": "PostConnection",
-                "pageInfo": .object([
-                    "__typename": "PageInfo",
-                    "startCursor": .null, "endCursor": .null,
-                    "hasPreviousPage": .bool(false), "hasNextPage": .bool(false),
-                ]),
-                "edges": .array(firstEdges),
-            ])
-        ]))
+        docs.normalize(
+            plan: plan, variables: ["first": 3],
+            data: .object([
+                "posts": .object([
+                    "__typename": "PostConnection",
+                    "pageInfo": .object([
+                        "__typename": "PageInfo",
+                        "startCursor": .null, "endCursor": .null,
+                        "hasPreviousPage": .bool(false), "hasNextPage": .bool(false),
+                    ]),
+                    "edges": .array(firstEdges),
+                ])
+            ]))
         XCTAssertEqual(canonicalNodeIds(graph, canonicalKey), ["p1", "p2", "p3"])
 
         // Refetch leader (no after) — completely different IDs replace canonical.
@@ -222,21 +235,24 @@ final class CanonicalPageModeAndEdgeCasesTests: XCTestCase {
             .object([
                 "__typename": "PostEdge",
                 "cursor": .string(id),
-                "node": .object(["__typename": "Post", "id": .string(id), "title": .string(id)])
+                "node": .object(["__typename": "Post", "id": .string(id), "title": .string(id)]),
             ])
         }
-        docs.normalize(plan: plan, variables: ["first": 3], data: .object([
-            "posts": .object([
-                "__typename": "PostConnection",
-                "pageInfo": .object([
-                    "__typename": "PageInfo",
-                    "startCursor": .null, "endCursor": .null,
-                    "hasPreviousPage": .bool(false), "hasNextPage": .bool(true),
-                ]),
-                "edges": .array(secondEdges),
-            ])
-        ]))
-        XCTAssertEqual(canonicalNodeIds(graph, canonicalKey), ["p100", "p101"],
+        docs.normalize(
+            plan: plan, variables: ["first": 3],
+            data: .object([
+                "posts": .object([
+                    "__typename": "PostConnection",
+                    "pageInfo": .object([
+                        "__typename": "PageInfo",
+                        "startCursor": .null, "endCursor": .null,
+                        "hasPreviousPage": .bool(false), "hasNextPage": .bool(true),
+                    ]),
+                    "edges": .array(secondEdges),
+                ])
+            ]))
+        XCTAssertEqual(
+            canonicalNodeIds(graph, canonicalKey), ["p100", "p101"],
             "leader refetch with new ids must replace canonical")
     }
 
@@ -308,7 +324,8 @@ final class CanonicalPageModeAndEdgeCasesTests: XCTestCase {
         docs.normalize(plan: plan, variables: ["first": 2], data: payload)
 
         // Only the edge with a node ref shows up.
-        XCTAssertEqual(canonicalNodeIds(graph, canonicalKey), ["p1"],
+        XCTAssertEqual(
+            canonicalNodeIds(graph, canonicalKey), ["p1"],
             "edges without a node ref must be skipped silently")
     }
 
@@ -323,27 +340,31 @@ final class CanonicalPageModeAndEdgeCasesTests: XCTestCase {
             .object([
                 "__typename": "PostEdge",
                 "cursor": .string(id),
-                "node": .object(["__typename": "Post", "id": .string(id), "title": .string(id)])
+                "node": .object(["__typename": "Post", "id": .string(id), "title": .string(id)]),
             ])
         }
-        docs.normalize(plan: plan, variables: ["first": 1], data: .object([
-            "posts": .object([
-                "__typename": "PostConnection",
-                "pageInfo": .object([
-                    "__typename": "PageInfo",
-                    "startCursor": .string("p1"),
-                    "endCursor": .string("p1"),
-                    "hasPreviousPage": .null,
-                    "hasNextPage": .null,
-                ]),
-                "edges": .array(edges),
-            ])
-        ]))
+        docs.normalize(
+            plan: plan, variables: ["first": 1],
+            data: .object([
+                "posts": .object([
+                    "__typename": "PostConnection",
+                    "pageInfo": .object([
+                        "__typename": "PageInfo",
+                        "startCursor": .string("p1"),
+                        "endCursor": .string("p1"),
+                        "hasPreviousPage": .null,
+                        "hasNextPage": .null,
+                    ]),
+                    "edges": .array(edges),
+                ])
+            ]))
 
         let pageInfoKey = "\(canonicalKey).pageInfo"
-        XCTAssertEqual(graph.getField(pageInfoKey, "hasPreviousPage")?.bool, false,
+        XCTAssertEqual(
+            graph.getField(pageInfoKey, "hasPreviousPage")?.bool, false,
             "web coerces hasPreviousPage:null → false")
-        XCTAssertEqual(graph.getField(pageInfoKey, "hasNextPage")?.bool, false,
+        XCTAssertEqual(
+            graph.getField(pageInfoKey, "hasNextPage")?.bool, false,
             "web coerces hasNextPage:null → false")
     }
 }

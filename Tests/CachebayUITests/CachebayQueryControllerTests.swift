@@ -41,10 +41,12 @@ final class CachebayQueryControllerTests: XCTestCase {
         let client = CachebayClient(options: CachebayOptions(transport: Transport(http: NoopHTTP())))
         client.graph.putRecord("Cook:c1", ["__typename": .string("Cook"), "id": .string("c1"), "title": .string("Pasta")])
         client.graph.putRecord("Cook:c2", ["__typename": .string("Cook"), "id": .string("c2"), "title": .string("Soup")])
-        client.graph.putRecord(CachebayConstants.rootID, [
-            "cook({\"id\":\"c1\"})": .ref("Cook:c1"),
-            "cook({\"id\":\"c2\"})": .ref("Cook:c2"),
-        ])
+        client.graph.putRecord(
+            CachebayConstants.rootID,
+            [
+                "cook({\"id\":\"c1\"})": .ref("Cook:c1"),
+                "cook({\"id\":\"c2\"})": .ref("Cook:c2"),
+            ])
         return client
     }
 
@@ -71,7 +73,7 @@ final class CachebayQueryControllerTests: XCTestCase {
         let client = makeClient()
         let controller = CachebayQueryController<GetCook>()
         controller.sync(client: client, variables: .init(id: "c1"))
-        controller.sync(client: client, variables: .init(id: "c1"))   // unchanged -> no resubscribe
+        controller.sync(client: client, variables: .init(id: "c1"))  // unchanged -> no resubscribe
         XCTAssertEqual(controller.data?.cook?.title, "Pasta")
         XCTAssertEqual(controller.phase, .loaded)
     }

@@ -24,40 +24,48 @@ final class OptimisticEdgeDecodabilityTests: XCTestCase {
     private let canonicalKey: CacheKey = "@connection.projects({})"
 
     private func makeClient() -> CachebayClient {
-        CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
     }
 
     /// Seed a connection that already holds two server edges whose edge type is the
     /// schema's connection-specific edge name (NOT "<Node>Edge").
     private func seedServerConnection(_ client: CachebayClient, edgeTypename: String) {
         for id in ["1", "2"] {
-            client.graph.replaceRecord("Project:\(id)", [
-                CachebayConstants.typenameField: .string("Project"),
-                "id": .string(id),
-            ])
-            client.graph.replaceRecord("srvEdge\(id)", [
-                CachebayConstants.typenameField: .string(edgeTypename),
-                "cursor": .string("c\(id)"),
-                CachebayConstants.connectionNodeField: .ref("Project:\(id)"),
-            ])
+            client.graph.replaceRecord(
+                "Project:\(id)",
+                [
+                    CachebayConstants.typenameField: .string("Project"),
+                    "id": .string(id),
+                ])
+            client.graph.replaceRecord(
+                "srvEdge\(id)",
+                [
+                    CachebayConstants.typenameField: .string(edgeTypename),
+                    "cursor": .string("c\(id)"),
+                    CachebayConstants.connectionNodeField: .ref("Project:\(id)"),
+                ])
         }
-        client.graph.replaceRecord(canonicalKey, [
-            CachebayConstants.typenameField: .string(CachebayConstants.connectionTypename),
-            CachebayConstants.connectionEdgesField: .refList(["srvEdge1", "srvEdge2"]),
-        ])
+        client.graph.replaceRecord(
+            canonicalKey,
+            [
+                CachebayConstants.typenameField: .string(CachebayConstants.connectionTypename),
+                CachebayConstants.connectionEdgesField: .refList(["srvEdge1", "srvEdge2"]),
+            ])
     }
 
     private func optimisticallyLinkProject3(_ client: CachebayClient) {
         client.modifyOptimistic { b in
             b.connection(ConnectionSelector(key: "projects"))
-                .linkNode(.object([
-                    CachebayConstants.typenameField: .string("Project"),
-                    "id": .string("3"),
-                ]), options: LinkNodeOptions(position: .start))
+                .linkNode(
+                    .object([
+                        CachebayConstants.typenameField: .string("Project"),
+                        "id": .string("3"),
+                    ]), options: LinkNodeOptions(position: .start))
         }.dispose()
     }
 
@@ -105,16 +113,20 @@ final class OptimisticEdgeDecodabilityTests: XCTestCase {
     /// reads it.
     func test_optimisticEdge_emptyConnection_usesStampedEdgeTypename() throws {
         let client = makeClient()
-        client.graph.replaceRecord("Project:3", [
-            CachebayConstants.typenameField: .string("Project"), "id": .string("3"),
-        ])
+        client.graph.replaceRecord(
+            "Project:3",
+            [
+                CachebayConstants.typenameField: .string("Project"), "id": .string("3"),
+            ])
         // Empty connection, but stamped with its authoritative edge type (what
         // `Canonical.updateConnection` writes from the plan on normalize).
-        client.graph.replaceRecord(canonicalKey, [
-            CachebayConstants.typenameField: .string(CachebayConstants.connectionTypename),
-            CachebayConstants.connectionEdgesField: .refList([]),
-            CachebayConstants.connectionEdgeTypenameField: .string("QueryProjectsConnectionEdge"),
-        ])
+        client.graph.replaceRecord(
+            canonicalKey,
+            [
+                CachebayConstants.typenameField: .string(CachebayConstants.connectionTypename),
+                CachebayConstants.connectionEdgesField: .refList([]),
+                CachebayConstants.connectionEdgeTypenameField: .string("QueryProjectsConnectionEdge"),
+            ])
 
         optimisticallyLinkProject3(client)
 
@@ -132,9 +144,11 @@ final class OptimisticEdgeDecodabilityTests: XCTestCase {
     /// not silent.
     func test_optimisticEdge_unstampedEmptyConnection_fallsBackToGuess() throws {
         let client = makeClient()
-        client.graph.replaceRecord("Project:3", [
-            CachebayConstants.typenameField: .string("Project"), "id": .string("3"),
-        ])
+        client.graph.replaceRecord(
+            "Project:3",
+            [
+                CachebayConstants.typenameField: .string("Project"), "id": .string("3"),
+            ])
         optimisticallyLinkProject3(client)
 
         let edges = client.graph.getField(canonicalKey, CachebayConstants.connectionEdgesField)?.refList ?? []
@@ -151,17 +165,23 @@ final class OptimisticEdgeDecodabilityTests: XCTestCase {
 final class ConnectionEdgeTypenameStampTests: XCTestCase {
 
     private func connectionField(edgeTypename: String?) -> PlanField {
-        let edges = PlanField.make(responseKey: "edges", fieldName: "edges", children: [
-            PlanField.make(responseKey: "__typename", fieldName: "__typename"),
-            PlanField.make(responseKey: "cursor", fieldName: "cursor"),
-            PlanField.make(responseKey: "node", fieldName: "node", children: [
+        let edges = PlanField.make(
+            responseKey: "edges", fieldName: "edges",
+            children: [
                 PlanField.make(responseKey: "__typename", fieldName: "__typename"),
-                PlanField.make(responseKey: "id", fieldName: "id"),
-            ]),
-        ])
-        let pageInfo = PlanField.make(responseKey: "pageInfo", fieldName: "pageInfo", children: [
-            PlanField.make(responseKey: "__typename", fieldName: "__typename"),
-        ])
+                PlanField.make(responseKey: "cursor", fieldName: "cursor"),
+                PlanField.make(
+                    responseKey: "node", fieldName: "node",
+                    children: [
+                        PlanField.make(responseKey: "__typename", fieldName: "__typename"),
+                        PlanField.make(responseKey: "id", fieldName: "id"),
+                    ]),
+            ])
+        let pageInfo = PlanField.make(
+            responseKey: "pageInfo", fieldName: "pageInfo",
+            children: [
+                PlanField.make(responseKey: "__typename", fieldName: "__typename")
+            ])
         return PlanField.make(
             responseKey: "projects", fieldName: "projects",
             isConnection: true, connectionKey: "projects", connectionMode: .page,
@@ -176,11 +196,13 @@ final class ConnectionEdgeTypenameStampTests: XCTestCase {
         let parentId = CachebayConstants.rootID
         graph.replaceRecord("pi", [CachebayConstants.typenameField: .string("PageInfo")])
         let pageKey: CacheKey = "testPage"
-        graph.replaceRecord(pageKey, [
-            CachebayConstants.typenameField: .string("QueryProjectsConnection"),
-            CachebayConstants.connectionEdgesField: .refList([]),
-            CachebayConstants.connectionPageInfoField: .ref("pi"),
-        ])
+        graph.replaceRecord(
+            pageKey,
+            [
+                CachebayConstants.typenameField: .string("QueryProjectsConnection"),
+                CachebayConstants.connectionEdgesField: .refList([]),
+                CachebayConstants.connectionPageInfoField: .ref("pi"),
+            ])
         canonical.updateConnection(field: field, parentId: parentId, variables: [:], pageKey: pageKey)
         return Keys.buildConnectionCanonicalKey(field: field, parentId: parentId, variables: [:])
     }

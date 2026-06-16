@@ -50,11 +50,13 @@ final class JSONValueYYJSONTests: XCTestCase {
 
     func test_nestedAndArrays() throws {
         let v = try parse(#"{"a":[1,2,{"b":"x"}],"c":null,"d":true}"#)
-        XCTAssertEqual(v, .object([
-            "a": .array([.int(1), .int(2), .object(["b": .string("x")])]),
-            "c": .null,
-            "d": .bool(true),
-        ]))
+        XCTAssertEqual(
+            v,
+            .object([
+                "a": .array([.int(1), .int(2), .object(["b": .string("x")])]),
+                "c": .null,
+                "d": .bool(true),
+            ]))
     }
 
     func test_emptyContainers() throws {
@@ -89,8 +91,9 @@ final class JSONValueYYJSONTests: XCTestCase {
         // from(json:) is the server/response path: a literal {"__ref":…} object
         // must stay an object (only the store-decode path restores sentinels).
         XCTAssertEqual(try parse(#"{"__ref":"User:1"}"#), .object(["__ref": .string("User:1")]))
-        XCTAssertEqual(try parse(#"{"__refs":["A","B"]}"#),
-                       .object(["__refs": .array([.string("A"), .string("B")])]))
+        XCTAssertEqual(
+            try parse(#"{"__refs":["A","B"]}"#),
+            .object(["__refs": .array([.string("A"), .string("B")])]))
     }
 
     // Duplicate keys are spec-implementation-defined and never occur in GraphQL

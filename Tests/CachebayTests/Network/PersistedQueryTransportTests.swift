@@ -1,7 +1,7 @@
 import XCTest
 @testable import Cachebay
 #if canImport(FoundationNetworking)
-import FoundationNetworking
+    import FoundationNetworking
 #endif
 
 /// Automatic Persisted Queries (APQ) on `URLSessionHTTPTransport`.

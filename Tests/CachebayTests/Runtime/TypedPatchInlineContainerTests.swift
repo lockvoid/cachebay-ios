@@ -25,14 +25,15 @@ private enum ProjectFields: CachebayFragment {
     typealias Data = ProjectFieldsData
     static let fragmentName = "ProjectFields"
     static let onTypename = "Project"
-    static let document: QueryDocument = .source("""
-    fragment ProjectFields on Project {
-        __typename
-        id
-        title
-        settings { __typename exportQuality captionStyle }
-    }
-    """)
+    static let document: QueryDocument = .source(
+        """
+        fragment ProjectFields on Project {
+            __typename
+            id
+            title
+            settings { __typename exportQuality captionStyle }
+        }
+        """)
     static var __cachebayFieldNames: [AnyKeyPath: String] { ProjectFieldsData.__cachebayFieldNames }
 }
 
@@ -54,23 +55,25 @@ private enum ProjectWithTagsFields: CachebayFragment {
     typealias Data = ProjectWithTagsData
     static let fragmentName = "ProjectWithTagsFields"
     static let onTypename = "Project"
-    static let document: QueryDocument = .source("""
-    fragment ProjectWithTagsFields on Project {
-        __typename
-        id
-        tags { __typename label weight }
-    }
-    """)
+    static let document: QueryDocument = .source(
+        """
+        fragment ProjectWithTagsFields on Project {
+            __typename
+            id
+            tags { __typename label weight }
+        }
+        """)
     static var __cachebayFieldNames: [AnyKeyPath: String] { ProjectWithTagsData.__cachebayFieldNames }
 }
 
 final class TypedPatchInlineContainerTests: XCTestCase {
     private func makeClient() -> CachebayClient {
-        CachebayClient(options: CachebayOptions(
-            transport: Transport(http: MockHTTPTransport()),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: 0
-        ))
+        CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport()),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
     }
 
     private static func makeProjectData(exportQuality: String = "720p") -> ProjectFields.Data {
@@ -102,7 +105,8 @@ final class TypedPatchInlineContainerTests: XCTestCase {
                 $0.set(\.settings, .init(exportQuality: "1080p", captionStyle: "default"))
             }
         }
-        XCTAssertEqual(client.graph.getRecord("Project:p1")?["settings"], .ref("Project:p1.settings"),
+        XCTAssertEqual(
+            client.graph.getRecord("Project:p1")?["settings"], .ref("Project:p1.settings"),
             "typed patch on an inline-container field must produce a .ref, not an embedded .object")
         XCTAssertEqual(client.graph.getRecord("Project:p1.settings")?["exportQuality"], .string("1080p"))
     }
@@ -137,7 +141,8 @@ final class TypedPatchInlineContainerTests: XCTestCase {
 
         tx.revert()
 
-        XCTAssertEqual(client.graph.getRecord("Project:p1.settings")?["exportQuality"], .string("720p"),
+        XCTAssertEqual(
+            client.graph.getRecord("Project:p1.settings")?["exportQuality"], .string("720p"),
             "revert must restore the inline container's baseline")
         XCTAssertEqual(client.graph.getRecord("Project:p1")?["settings"], .ref("Project:p1.settings"))
     }
@@ -181,10 +186,12 @@ final class TypedPatchInlineContainerTests: XCTestCase {
     func test_typedPatch_inlineContainerList_producesRefListShape() {
         let client = makeClient()
         client.modifyOptimistic { b in
-            b.writeFragment(fragment: ProjectWithTagsFields.self, id: "p1", data: .init(
-                id: "p1",
-                tags: [.init(label: "a", weight: 1), .init(label: "b", weight: 2)]
-            ))
+            b.writeFragment(
+                fragment: ProjectWithTagsFields.self, id: "p1",
+                data: .init(
+                    id: "p1",
+                    tags: [.init(label: "a", weight: 1), .init(label: "b", weight: 2)]
+                ))
         }
         client.modifyOptimistic { b in
             b.patch(fragment: ProjectWithTagsFields.self, id: "p1") {

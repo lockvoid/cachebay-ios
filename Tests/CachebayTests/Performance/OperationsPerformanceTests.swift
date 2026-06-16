@@ -19,11 +19,12 @@ final class OperationsPerformanceTests: XCTestCase {
         suspensionTimeout: TimeInterval = 0
     ) -> (CachebayClient, MockHTTPTransport) {
         let http = MockHTTPTransport()
-        let client = CachebayClient(options: CachebayOptions(
-            transport: Transport(http: http),
-            cachePolicy: .cacheFirst,
-            suspensionTimeout: suspensionTimeout
-        ))
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: http),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: suspensionTimeout
+            ))
         return (client, http)
     }
 
@@ -195,13 +196,14 @@ final class OperationsPerformanceTests: XCTestCase {
         let (client, http) = makeClient()
         http.whenQueryContains("user") { vars in
             let id = vars["id"]?.string ?? "0"
-            return OperationResult(data: .object([
-                "user": .object([
-                    "__typename": "User",
-                    "id": .string(id),
-                    "name": .string("User \(id)"),
-                ])
-            ]))
+            return OperationResult(
+                data: .object([
+                    "user": .object([
+                        "__typename": "User",
+                        "id": .string(id),
+                        "name": .string("User \(id)"),
+                    ])
+                ]))
         }
 
         struct W { let box: CaptureBox<[JSONValue]>; let handle: WatchQueryHandle }
@@ -243,32 +245,33 @@ final class OperationsPerformanceTests: XCTestCase {
     func test_pagination_fivePages_singleWatcher_emitsFiveTimes() async throws {
         let (client, http) = makeClient()
         let pagedQuery = """
-        query GetPosts($after: String) {
-            posts(after: $after) @connection(key: "posts") {
-                edges { cursor node { id __typename } }
-                pageInfo { endCursor hasNextPage }
+            query GetPosts($after: String) {
+                posts(after: $after) @connection(key: "posts") {
+                    edges { cursor node { id __typename } }
+                    pageInfo { endCursor hasNextPage }
+                }
             }
-        }
-        """
+            """
         http.whenQueryContains("posts") { vars in
             let after = vars["after"]?.string ?? "init"
-            return OperationResult(data: .object([
-                "posts": .object([
-                    "__typename": "PostConnection",
-                    "edges": .array([
-                        .object([
-                            "__typename": "PostEdge",
-                            "cursor": .string("c-\(after)"),
-                            "node": .object(["__typename": "Post", "id": .string("p-\(after)")]),
-                        ])
-                    ]),
-                    "pageInfo": .object([
-                        "__typename": "PageInfo",
-                        "endCursor": .string("c-\(after)"),
-                        "hasNextPage": true,
+            return OperationResult(
+                data: .object([
+                    "posts": .object([
+                        "__typename": "PostConnection",
+                        "edges": .array([
+                            .object([
+                                "__typename": "PostEdge",
+                                "cursor": .string("c-\(after)"),
+                                "node": .object(["__typename": "Post", "id": .string("p-\(after)")]),
+                            ])
+                        ]),
+                        "pageInfo": .object([
+                            "__typename": "PageInfo",
+                            "endCursor": .string("c-\(after)"),
+                            "hasNextPage": true,
+                        ]),
                     ])
-                ])
-            ]))
+                ]))
         }
 
         let emissions = CaptureBox<[JSONValue]>(value: [])
@@ -303,15 +306,17 @@ final class OperationsPerformanceTests: XCTestCase {
     /// watcher (none in this test → just verify mutation completes once).
     func test_executeMutation_singleNormalize_singleResult() async throws {
         let (client, http) = makeClient()
-        http.whenQueryContains("createUser", respondWith: .object([
-            "createUser": .object([
-                "__typename": "User", "id": "2", "name": "Bob",
-            ])
-        ]))
+        http.whenQueryContains(
+            "createUser",
+            respondWith: .object([
+                "createUser": .object([
+                    "__typename": "User", "id": "2", "name": "Bob",
+                ])
+            ]))
 
         let mutation = """
-        mutation CreateUser($name: String!) { createUser(name: $name) { id name } }
-        """
+            mutation CreateUser($name: String!) { createUser(name: $name) { id name } }
+            """
         let result = try await client.executeMutation(
             query: mutation,
             variables: ["name": "Bob"]

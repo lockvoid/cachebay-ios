@@ -11,9 +11,10 @@ import XCTest
 final class InspectTests: XCTestCase {
 
     private func makeStack() -> (Graph, Inspect) {
-        let graph = Graph(options: GraphOptions(keys: [
-            "User": { _, obj in obj["id"]?.string }
-        ]))
+        let graph = Graph(
+            options: GraphOptions(keys: [
+                "User": { _, obj in obj["id"]?.string }
+            ]))
         return (graph, Inspect(graph: graph))
     }
 
@@ -24,10 +25,12 @@ final class InspectTests: XCTestCase {
     /// `Inspect.getConnectionKeys` only inspects record key shapes,
     /// not the contents.
     private func writePage(_ graph: Graph, key: CacheKey, edgeRefs: [CacheKey] = []) {
-        graph.putRecord(key, [
-            "__typename": .string("PostConnection"),
-            CachebayConstants.connectionEdgesField: .refList(edgeRefs),
-        ])
+        graph.putRecord(
+            key,
+            [
+                "__typename": .string("PostConnection"),
+                CachebayConstants.connectionEdgesField: .refList(edgeRefs),
+            ])
         graph.flush()
     }
 
@@ -94,10 +97,12 @@ final class InspectTests: XCTestCase {
         writePage(graph, key: pageC)
 
         let keys = inspect.getConnectionKeys(parent: .root, key: "posts").sorted()
-        XCTAssertEqual(keys, [
-            "@connection.posts({\"category\":\"lifestyle\"})",
-            "@connection.posts({\"category\":\"tech\"})",
-        ])
+        XCTAssertEqual(
+            keys,
+            [
+                "@connection.posts({\"category\":\"lifestyle\"})",
+                "@connection.posts({\"category\":\"tech\"})",
+            ])
     }
 
     func test_getConnectionKeys_scopedByEntityParent() {

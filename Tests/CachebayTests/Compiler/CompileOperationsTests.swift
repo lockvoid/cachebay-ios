@@ -46,10 +46,12 @@ final class CompileOperationsTests: XCTestCase {
             "role": .string("admin"),
             "first": .int(2),
         ])
-        XCTAssertEqual(usersArgs, [
-            "role": .string("admin"),
-            "first": .int(2),
-        ])
+        XCTAssertEqual(
+            usersArgs,
+            [
+                "role": .string("admin"),
+                "first": .int(2),
+            ])
 
         XCTAssertEqual(users.expectedArgNames, ["role", "first", "after", "last", "before"])
 
@@ -80,11 +82,13 @@ final class CompileOperationsTests: XCTestCase {
             "postsFirst": .int(2),
             "postsAfter": .null,
         ])
-        XCTAssertEqual(postsArgs, [
-            "category": .string("tech"),
-            "first": .int(2),
-            "after": .null,
-        ])
+        XCTAssertEqual(
+            postsArgs,
+            [
+                "category": .string("tech"),
+                "first": .int(2),
+                "after": .null,
+            ])
 
         XCTAssertEqual(posts.expectedArgNames, ["category", "sort", "first", "after", "last", "before"])
 
@@ -132,31 +136,37 @@ final class CompileOperationsTests: XCTestCase {
             "usersFirst": .int(2),
             "usersAfter": .string("u1"),
         ])
-        XCTAssertEqual(usersArgs, [
-            "role": .string("dj"),
-            "first": .int(2),
-            "after": .string("u1"),
-        ])
+        XCTAssertEqual(
+            usersArgs,
+            [
+                "role": .string("dj"),
+                "first": .int(2),
+                "after": .string("u1"),
+            ])
 
         let postsArgs = posts.buildArgs([
             "postsCategory": .string("tech"),
             "postsFirst": .int(1),
             "postsAfter": .null,
         ])
-        XCTAssertEqual(postsArgs, [
-            "category": .string("tech"),
-            "first": .int(1),
-            "after": .null,
-        ])
+        XCTAssertEqual(
+            postsArgs,
+            [
+                "category": .string("tech"),
+                "first": .int(1),
+                "after": .null,
+            ])
 
         let commentsArgs = comments.buildArgs([
             "commentsFirst": .int(3),
             "commentsAfter": .string("c2"),
         ])
-        XCTAssertEqual(commentsArgs, [
-            "first": .int(3),
-            "after": .string("c2"),
-        ])
+        XCTAssertEqual(
+            commentsArgs,
+            [
+                "first": .int(3),
+                "after": .string("c2"),
+            ])
 
         XCTAssertEqual(collectConnectionDirectives(plan.networkQuery), [])
         XCTAssertTrue(hasTypenames(plan.networkQuery))
@@ -187,27 +197,27 @@ final class CompileOperationsTests: XCTestCase {
 
     func test_inline_fragments_on_implementors_set_typeCondition_on_fields() throws {
         let src = """
-        query Query {
-          posts(first: 10) @connection {
-            edges {
-              node {
-                id
-                title
+            query Query {
+              posts(first: 10) @connection {
+                edges {
+                  node {
+                    id
+                    title
 
-                ... on VideoPost {
-                  video { key mediaUrl }
-                }
+                    ... on VideoPost {
+                      video { key mediaUrl }
+                    }
 
-                ... on AudioPost {
-                  audio { key mediaUrl }
+                    ... on AudioPost {
+                      audio { key mediaUrl }
+                    }
+                  }
                 }
+                pageInfo { hasNextPage }
+                totalCount
               }
             }
-            pageInfo { hasNextPage }
-            totalCount
-          }
-        }
-        """
+            """
         let plan = try Compiler.compilePlan(source: src)
 
         XCTAssertEqual(plan.operation, .query)
@@ -244,26 +254,26 @@ final class CompileOperationsTests: XCTestCase {
 
     func test_fragment_spreads_on_implementors_set_typeCondition_on_fields() throws {
         let src = """
-        fragment VideoFrag on VideoPost {
-          video { key mediaUrl }
-        }
+            fragment VideoFrag on VideoPost {
+              video { key mediaUrl }
+            }
 
-        fragment AudioFrag on AudioPost {
-          audio { key mediaUrl }
-        }
+            fragment AudioFrag on AudioPost {
+              audio { key mediaUrl }
+            }
 
-        query Query {
-          posts(first: 5) @connection {
-            edges {
-              node {
-                id
-                ...VideoFrag
-                ...AudioFrag
+            query Query {
+              posts(first: 5) @connection {
+                edges {
+                  node {
+                    id
+                    ...VideoFrag
+                    ...AudioFrag
+                  }
+                }
               }
             }
-          }
-        }
-        """
+            """
         let plan = try Compiler.compilePlan(source: src)
         XCTAssertTrue(hasTypenames(plan.networkQuery))
         XCTAssertEqual(collectConnectionDirectives(plan.networkQuery), [])
@@ -286,23 +296,23 @@ final class CompileOperationsTests: XCTestCase {
 
     func test_includes_typename_in_pageInfo_when_using_fragment_spreads() throws {
         let src = """
-        fragment PageInfoFields on PageInfo {
-          startCursor
-          endCursor
-          hasNextPage
-          hasPreviousPage
-        }
-
-        query Posts($first: Int) {
-          posts(first: $first) @connection {
-            pageInfo { ...PageInfoFields }
-            edges {
-              cursor
-              node { id title }
+            fragment PageInfoFields on PageInfo {
+              startCursor
+              endCursor
+              hasNextPage
+              hasPreviousPage
             }
-          }
-        }
-        """
+
+            query Posts($first: Int) {
+              posts(first: $first) @connection {
+                pageInfo { ...PageInfoFields }
+                edges {
+                  cursor
+                  node { id title }
+                }
+              }
+            }
+            """
         let plan = try Compiler.compilePlan(source: src)
 
         let posts = try XCTUnwrap(plan.rootSelectionMap["posts"])
