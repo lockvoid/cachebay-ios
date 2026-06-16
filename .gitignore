@@ -17,6 +17,10 @@ Icon?
 .build/
 .swiftpm/
 Package.resolved
+
+# cachebay-cli prebuilt artifact bundle (built by scripts/build-cli-bundle.sh;
+# shipped via GitHub Releases, never committed)
+Artifacts/
 *.xcodeproj/xcuserdata/
 *.xcworkspace/xcuserdata/
 

@@ -237,6 +237,35 @@ The codegen is a build-time tool. Apple's iOS apps don't need the parser at runt
 - We get `apollo-compiler`'s spec-compliant validation + great diagnostics for free.
 - No xcframework — the CLI is a regular Mac binary, distributed via Homebrew/Releases like `swiftgen` or `swiftlint`.
 
+## SwiftPM plugin — `swift package cachebay-codegen`
+
+You don't have to install `cachebay-cli` by hand. It ships as a prebuilt
+`binaryTarget` artifact bundle driven by the **`CachebayCodegen` command
+plugin** (the SwiftLint / Mozilla `rust-components` pattern), so consumers run
+codegen with zero install:
+
+```sh
+swift package --allow-writing-to-package-directory cachebay-codegen \
+  --schema path/to/schema.graphql \
+  --operations path/to/GraphQL \
+  --output path/to/Generated \
+  [--namespace API] [--config path/to/cachebay.config.json]
+```
+
+SwiftPM downloads the notarized CLI that matches the package version (Xcode:
+right-click → **cachebay-codegen**). Because the binary is pinned in
+`Package.swift`, the CLI and runtime can never drift.
+
+The mode is chosen by the `CACHEBAY_CLI` env var — `off` (default: plugin
+absent, `swift build`/`test` untouched), `local` (use a locally-built
+`Artifacts/cachebay-cli.artifactbundle` via `scripts/build-cli-bundle.sh`), or
+`release` (download from the GitHub Release). During CLI development set
+`CACHEBAY_CLI_PATH=cli/target/release/cachebay-cli` to skip the bundle entirely.
+
+The full two-case workflow + the release-pipeline runbook (GitHub Action,
+signing/notarization, the checksum chicken-and-egg) live in
+**[TOOLCHAIN.md](./TOOLCHAIN.md)**.
+
 ## Next steps
 
 - [SETUP.md](./SETUP.md) — wire transports + identity + storage.
