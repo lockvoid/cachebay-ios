@@ -22,6 +22,10 @@ fragment SpellTagBits on Spell {
 }
 """
 
+    /// SHA-256 of `networkQuery`, for Automatic Persisted Queries. Hashed at
+    /// build time over the exact wire string; stable across builds.
+    public static let persistedQueryHash: String = "9fe7cb876316005310f0f0ecb24890a15011d6254819426342f6d24b1427b150"
+
     public static let cachePlan: CachePlan = CachePlan.make(
         operation: .fragment,
         rootTypename: "Spell",
@@ -36,6 +40,7 @@ fragment SpellTagBits on Spell {
             ),
         ],
         networkQuery: networkQuery,
+        persistedHash: persistedQueryHash,
         strictVars: [],
         canonicalVars: [],
         windowArgs: Set([])

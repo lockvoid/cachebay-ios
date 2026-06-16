@@ -66,6 +66,10 @@ fragment ElementFields on Element {
 }
 """
 
+    /// SHA-256 of `networkQuery`, for Automatic Persisted Queries. Hashed at
+    /// build time over the exact wire string; stable across builds.
+    public static let persistedQueryHash: String = "c5ab4c229debe92119f4a2e3a12e9f23c797c0a724cd75cc880a524e5eb217f7"
+
     public static let cachePlan: CachePlan = CachePlan.make(
         operation: .fragment,
         rootTypename: "Element",
@@ -108,6 +112,7 @@ fragment ElementFields on Element {
             ),
         ],
         networkQuery: networkQuery,
+        persistedHash: persistedQueryHash,
         strictVars: [],
         canonicalVars: [],
         windowArgs: Set([])
