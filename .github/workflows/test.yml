@@ -42,10 +42,17 @@ jobs:
         run: swift test --skip-build
 
   lint:
-    name: SwiftFormat (lint)
+    # Apple's swift-format, bundled in the toolchain — no brew, no third-party
+    # action. Informational only (continue-on-error): it surfaces style findings
+    # but never blocks the build. Tune via `.swift-format`. To adopt enforcing
+    # later: run `swift format --in-place --recursive Sources Tests` once, commit
+    # the diff, then drop `continue-on-error`.
+    name: swift format (lint, non-blocking)
     runs-on: macos-15
-    if: false  # enable once a swiftformat config is in place
     steps:
       - uses: actions/checkout@v5
-      - run: brew install swiftformat
-      - run: swiftformat --lint Sources Tests
+      - name: Select newest Xcode (Swift 6.2 bundles swift-format)
+        run: sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+      - name: swift format lint
+        continue-on-error: true
+        run: swift format lint --strict --parallel --recursive Sources Tests

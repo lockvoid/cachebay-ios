@@ -1,0 +1,11 @@
+{
+  "lineLength": 120,
+  "indentation": {
+    "spaces": 4
+  },
+  "respectsExistingLineBreaks": true,
+  "rules": {
+    "OrderedImports": false,
+    "NoBlockComments": false
+  }
+}
