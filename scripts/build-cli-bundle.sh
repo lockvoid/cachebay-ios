@@ -82,7 +82,10 @@ if [[ "$SIGN" == "1" ]]; then
 fi
 
 echo "==> checksum"
-CHECKSUM="$(swift package --package-path "$ROOT" compute-checksum "$ZIP")"
+# SwiftPM's binaryTarget checksum is just the SHA-256 of the zip, so `shasum`
+# matches `swift package compute-checksum` — and keeps the release pipeline
+# free of any Swift-toolchain dependency (Rust + shasum only).
+CHECKSUM="$(shasum -a 256 "$ZIP" | awk '{print $1}')"
 echo "$CHECKSUM" > "$OUT/cachebay-cli.artifactbundle.zip.sha256"
 echo
 echo "bundle:   $BUNDLE"

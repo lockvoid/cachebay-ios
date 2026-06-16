@@ -1,14 +1,18 @@
 name: Release cachebay-cli
 
-# Builds, signs, and notarizes the macOS-universal `cachebay-cli` artifact
-# bundle, publishes it on a GitHub Release, and pins Package.swift to it so
-# consumers get the codegen plugin with zero install.
+# Tag-triggered: push a `vX.Y.Z` tag and this builds, signs, and notarizes the
+# macOS-universal `cachebay-cli` artifact bundle, publishes it on the Release,
+# and pins Package.swift to it (checksum) so consumers get the codegen plugin
+# with zero install.
 #
-# Trigger MANUALLY (workflow_dispatch) with the version — this avoids the
-# binaryTarget checksum chicken-and-egg: we compute the checksum, commit it to
-# Package.swift, THEN create the tag + release pointing at that commit.
+# The binaryTarget checksum must live IN the tagged commit's Package.swift, but
+# it's only known after building the artifact — so we build, commit the
+# checksum to main, then FORCE-MOVE the tag onto that commit. Pushes use
+# GITHUB_TOKEN, whose events don't trigger new runs, so there's no loop.
 #
-# Required repo secrets (Settings → Secrets and variables → Actions):
+# (workflow_dispatch is kept for manual re-runs.)
+#
+# Required repo secrets:
 #   APPLE_CERT_P12_BASE64    base64 of a "Developer ID Application" .p12
 #   APPLE_CERT_P12_PASSWORD  its password
 #   APPLE_SIGN_IDENTITY      e.g. "Developer ID Application: LockVoid (TEAMID)"
@@ -17,33 +21,58 @@ name: Release cachebay-cli
 #   APPLE_NOTARY_KEY_P8      contents of the AuthKey_XXXX.p8
 
 on:
+  push:
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version, e.g. 1.2.0 (no leading v)"
+        description: "Version without leading v (manual re-run, e.g. 1.2.1)"
         required: true
 
 permissions:
-  contents: write   # commit Package.swift, push tag, create the release
+  contents: write   # commit Package.swift, move the tag, create the release
 
 jobs:
   release-cli:
-    runs-on: macos-15
+    runs-on: macos-15   # cargo + codesign + notarytool + shasum; no Swift needed
     steps:
       - uses: actions/checkout@v4
         with:
           ref: main
+          fetch-depth: 0   # need full history + tags to move the tag
 
-      - name: Rust toolchain (arm64 + x86_64)
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - name: Resolve version / tag
+        id: ver
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"   # strip leading v from the pushed tag
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION"   >> "$GITHUB_OUTPUT"
+
+      - name: Add Rust targets (rustup is preinstalled on macOS runners)
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
       - name: Import Developer ID signing certificate
-        uses: apple-actions/import-codesign-certs@v3
-        with:
-          p12-file-base64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
-          p12-password: ${{ secrets.APPLE_CERT_P12_PASSWORD }}
+        # Built-in `security` — no third-party action.
+        env:
+          CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          CERT_P12_PASSWORD: ${{ secrets.APPLE_CERT_P12_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYPASS="$(openssl rand -hex 16)"
+          security create-keychain -p "$KEYPASS" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYPASS" "$KEYCHAIN"
+          echo "$CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$CERT_P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYPASS" "$KEYCHAIN"
+          # Put our keychain first in the search list so codesign finds the identity.
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
 
       - name: Store notarytool credentials
         run: |
@@ -59,37 +88,30 @@ jobs:
           CACHEBAY_NOTARY_PROFILE: cachebay-notary
         run: scripts/build-cli-bundle.sh --sign
 
-      - name: Pin Package.swift to this release
-        id: pin
+      - name: Pin Package.swift, move tag, publish
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          VERSION="${{ github.event.inputs.version }}"
-          TAG="v$VERSION"
-          CHECKSUM="$(cat Artifacts/cachebay-cli.artifactbundle.zip.sha256)"
+          TAG="${{ steps.ver.outputs.tag }}"
+          ZIP="Artifacts/cachebay-cli.artifactbundle.zip"
+          CHECKSUM="$(cat "$ZIP.sha256")"
+
           /usr/bin/sed -i '' \
-            -e "s|^let defaultCLIMode = .*|let defaultCLIMode = \"release\"|" \
+            -e 's|^let defaultCLIMode = .*|let defaultCLIMode = "release"|' \
             -e "s|^let cliReleaseTag = .*|let cliReleaseTag = \"$TAG\"|" \
             -e "s|^let cliReleaseChecksum = .*|let cliReleaseChecksum = \"$CHECKSUM\"|" \
             Package.swift
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "Pinned $TAG / $CHECKSUM"
 
-      - name: Commit + tag
-        run: |
-          TAG="${{ steps.pin.outputs.tag }}"
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Package.swift
           git commit -m "chore(release): pin cachebay-cli artifact for $TAG"
-          git push origin main
-          git tag -a "$TAG" -m "$TAG"
-          git push origin "$TAG"
+          git push origin HEAD:main
+          # Move the tag onto the checksum commit (GITHUB_TOKEN push → no re-run).
+          git tag -f "$TAG"
+          git push -f origin "$TAG"
 
-      - name: Create GitHub Release + upload bundle
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          TAG="${{ steps.pin.outputs.tag }}"
-          gh release create "$TAG" \
-            Artifacts/cachebay-cli.artifactbundle.zip \
+          gh release create "$TAG" "$ZIP" \
             --title "$TAG" \
-            --notes "cachebay-cli $TAG — macOS-universal, signed + notarized. Used by the CachebayCodegen SwiftPM plugin."
+            --notes "cachebay-cli $TAG — macOS-universal, signed + notarized. Used by the CachebayCodegen SwiftPM plugin." \
+            || gh release upload "$TAG" "$ZIP" --clobber

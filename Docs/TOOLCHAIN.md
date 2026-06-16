@@ -55,20 +55,31 @@ In Xcode: right-click the package → **cachebay-codegen**. The binary is pinned
 
 ## Cutting a release (first run = activation)
 
-Run the **Release cachebay-cli** workflow (`.github/workflows/release-cli.yml`)
-from *Actions → Run workflow* with the version (e.g. `1.2.0`). It:
+**Push a `vX.Y.Z` tag** — the **Release cachebay-cli** workflow
+(`.github/workflows/release-cli.yml`) does the rest:
+
+```sh
+git tag v1.2.1 && git push origin v1.2.1
+```
 
 1. cross-compiles arm64 + x86_64, `lipo`s a universal binary, assembles the
    `.artifactbundle`;
 2. **codesigns (Developer ID, hardened runtime) + notarizes** it;
-3. computes the SwiftPM checksum;
+3. checksums the zip (`shasum`);
 4. edits `Package.swift` — flips `defaultCLIMode = "release"`, sets
-   `cliReleaseTag` + `cliReleaseChecksum` — commits to `main`, tags, and creates
-   the Release with the bundle attached.
+   `cliReleaseTag` + `cliReleaseChecksum` — commits to `main`, **force-moves the
+   tag onto that commit**, and creates the Release with the bundle attached.
 
-After the first successful run `defaultCLIMode` is `release`, so consumers need
-no env var. Committing the checksum *before* tagging sidesteps the binaryTarget
-checksum chicken-and-egg.
+The checksum must live in the *tagged* commit's `Package.swift` but isn't known
+until the artifact is built, so the workflow builds → commits → force-moves the
+tag. Those pushes use `GITHUB_TOKEN`, whose events don't trigger new runs, so
+there's no loop. After the first run `defaultCLIMode` is `release` and consumers
+need no env var. (`workflow_dispatch` with a `version` input is kept for manual
+re-runs.)
+
+> If `main` is branch-protected against direct pushes, give this workflow a
+> bypass (or have it open a PR for the `Package.swift` pin) — the commit step
+> pushes straight to `main`.
 
 **Required repo secrets:** `APPLE_CERT_P12_BASE64`, `APPLE_CERT_P12_PASSWORD`,
 `APPLE_SIGN_IDENTITY`, `APPLE_NOTARY_KEY_ID`, `APPLE_NOTARY_ISSUER_ID`,

@@ -16,11 +16,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Swift version
-        # No xcode-select — use the runner's default Xcode 16.x.
-        # If the default Xcode ever drops below 16, pin via
-        # `maxim-lobanov/setup-xcode@v1` with `xcode-version: '16.0'`.
-        run: swift --version
+      # Package.swift is `swift-tools-version:6.2` (Xcode 26). The runner's
+      # DEFAULT Xcode is 16.x → Swift 6.1, which can't even load a 6.2 manifest
+      # ("package is using Swift tools version 6.2.0 but the installed version
+      # is 6.1.0"). GitHub images install multiple Xcodes at /Applications;
+      # select the newest with built-in xcode-select — no third-party action.
+      # If the macos-15 image lacks Xcode 26, switch this job to runs-on: macos-26.
+      - name: Select newest Xcode (Swift 6.2)
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          swift --version
 
       - name: Cache .build
         uses: actions/cache@v4
