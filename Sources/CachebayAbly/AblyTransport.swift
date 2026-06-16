@@ -62,6 +62,7 @@ public final class AblyTransport: WSTransport, @unchecked Sendable {
     private let resolveChannel: @Sendable (WSContext) async throws -> AblyChannelTarget
     private let decodeMessage: @Sendable (ARTMessage) -> JSONValue?
     private let releaseChannelWhenIdle: Bool
+    private let maintainsPresence: Bool
 
     // Channels are shared across subscriptions (`channels.get` returns the same
     // instance per name), so ref-count them and only release a channel once its
@@ -71,15 +72,21 @@ public final class AblyTransport: WSTransport, @unchecked Sendable {
 
     /// Use an Ably client **you** own and configured (recommended — you control
     /// `authCallback`, `clientId`, and the connection lifecycle).
+    ///
+    /// Set `maintainsPresence: true` for presence-based backends (e.g. GraphQL Pro,
+    /// which reaps any subscription whose channel has no present member). The
+    /// token must then carry the `presence` capability. Default `false` keeps the
+    /// transport a plain pub/sub subscriber.
     public convenience init(
         realtime: ARTRealtime,
         resolveChannel: @escaping @Sendable (WSContext) async throws -> AblyChannelTarget,
         decodeMessage: @escaping @Sendable (ARTMessage) -> JSONValue? = AblyTransport.defaultDecodeMessage,
-        releaseChannelWhenIdle: Bool = true
+        releaseChannelWhenIdle: Bool = true,
+        maintainsPresence: Bool = false
     ) {
         self.init(realtime: realtime, ownsRealtime: false,
                   resolveChannel: resolveChannel, decodeMessage: decodeMessage,
-                  releaseChannelWhenIdle: releaseChannelWhenIdle)
+                  releaseChannelWhenIdle: releaseChannelWhenIdle, maintainsPresence: maintainsPresence)
     }
 
     /// Convenience: the transport builds and owns the `ARTRealtime` from
@@ -89,11 +96,12 @@ public final class AblyTransport: WSTransport, @unchecked Sendable {
         options: ARTClientOptions,
         resolveChannel: @escaping @Sendable (WSContext) async throws -> AblyChannelTarget,
         decodeMessage: @escaping @Sendable (ARTMessage) -> JSONValue? = AblyTransport.defaultDecodeMessage,
-        releaseChannelWhenIdle: Bool = true
+        releaseChannelWhenIdle: Bool = true,
+        maintainsPresence: Bool = false
     ) {
         self.init(realtime: ARTRealtime(options: options), ownsRealtime: true,
                   resolveChannel: resolveChannel, decodeMessage: decodeMessage,
-                  releaseChannelWhenIdle: releaseChannelWhenIdle)
+                  releaseChannelWhenIdle: releaseChannelWhenIdle, maintainsPresence: maintainsPresence)
     }
 
     private init(
@@ -101,13 +109,15 @@ public final class AblyTransport: WSTransport, @unchecked Sendable {
         ownsRealtime: Bool,
         resolveChannel: @escaping @Sendable (WSContext) async throws -> AblyChannelTarget,
         decodeMessage: @escaping @Sendable (ARTMessage) -> JSONValue?,
-        releaseChannelWhenIdle: Bool
+        releaseChannelWhenIdle: Bool,
+        maintainsPresence: Bool
     ) {
         self.realtime = realtime
         self.ownsRealtime = ownsRealtime
         self.resolveChannel = resolveChannel
         self.decodeMessage = decodeMessage
         self.releaseChannelWhenIdle = releaseChannelWhenIdle
+        self.maintainsPresence = maintainsPresence
     }
 
     deinit {
@@ -130,7 +140,7 @@ public final class AblyTransport: WSTransport, @unchecked Sendable {
                     let channel = makeChannel(target)
                     sub.channel = channel
                     sub.channelName = target.name
-                    retain(target.name)
+                    let isFirstOnChannel = retain(target.name)
 
                     // Fatal connection failure → terminate this stream. Transient
                     // disconnect/suspend are left alone (Ably auto-recovers).
@@ -153,6 +163,16 @@ public final class AblyTransport: WSTransport, @unchecked Sendable {
                         sub.messageListener = channel.subscribe(eventName, callback: onMessage)
                     } else {
                         sub.messageListener = channel.subscribe(onMessage)
+                    }
+
+                    // Presence-based backends (e.g. GraphQL Pro) track live
+                    // subscribers via Ably presence (`still_subscribed?` →
+                    // `presence.get`); a channel with no present member is reaped
+                    // and stops delivering. When opted in, enter presence so the
+                    // server keeps the subscription alive — once per channel,
+                    // balanced by a leave in `teardown`.
+                    if maintainsPresence, isFirstOnChannel {
+                        channel.presence.enter(nil) { _ in }
                     }
                 } catch {
                     continuation.finish(throwing: Self.error(from: error, fallback: "Ably subscribe failed"))
@@ -184,14 +204,20 @@ public final class AblyTransport: WSTransport, @unchecked Sendable {
             if let listener = sub.channelStateListener { channel.off(listener) }
         }
         if let listener = sub.connectionListener { realtime.connection.off(listener) }
-        if let name = sub.channelName, releaseRef(name), releaseChannelWhenIdle {
-            realtime.channels.release(name)
+        if let name = sub.channelName, releaseRef(name) {
+            // Last subscriber on this channel — leave presence (matches the enter
+            // in `subscribe`) so a presence-based server reaps the idle sub.
+            if maintainsPresence { sub.channel?.presence.leave(nil) { _ in } }
+            if releaseChannelWhenIdle { realtime.channels.release(name) }
         }
     }
 
-    private func retain(_ name: String) {
+    /// Increments the ref-count; returns `true` when this is the first reference
+    /// on the channel (so the caller enters Ably presence exactly once per channel).
+    private func retain(_ name: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
         channelRefCounts[name, default: 0] += 1
+        return channelRefCounts[name] == 1
     }
 
     /// Decrements the ref-count; returns `true` when this was the last reference.

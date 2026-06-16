@@ -461,8 +461,62 @@ let client = CachebayClient(options: CachebayOptions(
 - A **fatal** Ably state — connection or channel `.failed` (expired token, denied capability) — terminates the subscription stream with a `CombinedError`.
 - **Transient** states (`.disconnected` / `.suspended`) are left alone: Ably reconnects and resumes automatically, so subscribers' `for try await` loops don't error during the gap (same behaviour as the WS transport's auto-reconnect).
 - When the consumer drops the stream, the message listener is removed and the channel is released once its last subscription ends (`releaseChannelWhenIdle`, default `true`).
+- With **`maintainsPresence: true`**, the transport enters Ably presence on each channel on subscribe and leaves on the last teardown (ref-counted). Presence-based backends (e.g. GraphQL Pro) use this to know a subscriber is alive — so the Ably token must then carry the `presence` capability, not just `subscribe`. Default `false` keeps the transport a plain pub/sub subscriber.
 
 > Channel naming and message envelope are a **server↔client convention** — `resolveChannel` + `decodeMessage` are the two hooks you set to match your backend.
+
+### GraphQL Pro (Rails) example
+
+[GraphQL Pro's `AblySubscriptions`](https://graphql-ruby.org/subscriptions/ably_implementation) is the most common Ably backend, and it has two conventions you must match — both shown here. (Getting either wrong fails *silently*: the subscription connects but no data ever arrives.)
+
+**The flow — there's no persistent socket.** Each subscription is registered over plain HTTP: POST the operation to your normal GraphQL endpoint; the server stores it and returns the Ably channel name in the `X-Subscription-ID` response header. The client attaches to that channel; the server publishes results to it.
+
+```swift
+let ablyWS = AblyTransport(
+    realtime: realtime,
+    resolveChannel: { ctx in
+        // Register the subscription over HTTP; the server hands back the channel.
+        var req = URLRequest(url: graphqlURL)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: [
+            "query": ctx.query, "variables": ctx.variables.toFoundation(),
+        ])
+        let (_, res) = try await URLSession.shared.data(for: req)
+        guard let http = res as? HTTPURLResponse,
+              let channel = http.value(forHTTPHeaderField: "X-Subscription-ID"), !channel.isEmpty
+        else { throw MyError.noSubscriptionId }
+        return AblyChannelTarget(name: channel)
+    },
+    // GOTCHA #1 — the envelope. GraphQL Pro does NOT publish a bare
+    // `{data, errors}`. It wraps every frame as
+    //   { "result": { data, errors }, "more": Bool }
+    // under message name "update". Unwrap `result`, or the default decoder finds
+    // no top-level `data`, treats the whole thing as data, and your subscription
+    // field is never seen — frames arrive but resolve to nothing.
+    decodeMessage: { message in
+        guard let decoded = AblyTransport.defaultDecodeMessage(message) else { return nil }
+        if case .object(let obj) = decoded, let result = obj["result"] { return result }
+        return decoded
+    },
+    maintainsPresence: true   // GOTCHA #2 — see below
+)
+```
+
+**GOTCHA #2 — presence is mandatory.** GraphQL Pro tracks live subscribers via Ably **presence** (`still_subscribed?` → `presence.get`); a channel with no present member is reaped (`delete_subscription`) and stops delivering within seconds. Pass **`maintainsPresence: true`** so `AblyTransport` enters/leaves presence for you (see Lifecycle above) — and make sure the Ably token includes the `presence` capability.
+
+**Scope the token (least privilege).** GraphQL Pro channel names are *derivable* — `gqlbdcst:<base64(subscription scope)>:<field>:…`, where the scope is typically the user's global id. A token with capability on `"*"` therefore lets any authenticated client subscribe to *another user's* channels. Scope it to the subscriber's own namespace instead (see [Ably capabilities](https://ably.com/docs/auth/capabilities) — a trailing `*` matches all remaining segments):
+
+```ruby
+# Rails token endpoint. Derive the exact prefix from a real X-Subscription-ID;
+# the scope segment is base64 of whatever your subscription_scope serializes to.
+scope_segment = Base64.strict_encode64(current_user.to_gid.to_s)
+ably.auth.create_token_request(
+  client_id:  current_user.to_gid.to_s,                         # identify the subscriber
+  capability: { "gqlbdcst:#{scope_segment}:*" => ["subscribe", "presence"] },
+)
+```
 
 ---
 
