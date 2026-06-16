@@ -1,24 +1,16 @@
 name: Release cachebay-cli
 
-# Tag-triggered: push a `vX.Y.Z` tag and this builds, signs, and notarizes the
-# macOS-universal `cachebay-cli` artifact bundle, publishes it on the Release,
-# and pins Package.swift to it (checksum) so consumers get the codegen plugin
-# with zero install.
+# Tag-triggered: push a `vX.Y.Z` tag and this builds the macOS-universal
+# `cachebay-cli` artifact bundle (ad-hoc signed — no Apple account needed; see
+# scripts/build-cli-bundle.sh), publishes it on the GitHub Release, and pins
+# Package.swift to it so consumers get the codegen plugin with zero install.
 #
 # The binaryTarget checksum must live IN the tagged commit's Package.swift, but
-# it's only known after building the artifact — so we build, commit the
-# checksum to main, then FORCE-MOVE the tag onto that commit. Pushes use
-# GITHUB_TOKEN, whose events don't trigger new runs, so there's no loop.
+# it's only known after building — so we build, commit the checksum to main,
+# then FORCE-MOVE the tag onto that commit. Pushes use GITHUB_TOKEN, whose
+# events don't trigger new runs, so there's no loop.
 #
-# (workflow_dispatch is kept for manual re-runs.)
-#
-# Required repo secrets:
-#   APPLE_CERT_P12_BASE64    base64 of a "Developer ID Application" .p12
-#   APPLE_CERT_P12_PASSWORD  its password
-#   APPLE_SIGN_IDENTITY      e.g. "Developer ID Application: LockVoid (TEAMID)"
-#   APPLE_NOTARY_KEY_ID      App Store Connect API key id
-#   APPLE_NOTARY_ISSUER_ID   App Store Connect issuer id
-#   APPLE_NOTARY_KEY_P8      contents of the AuthKey_XXXX.p8
+# No secrets required. (workflow_dispatch is kept for manual re-runs.)
 
 on:
   push:
@@ -34,7 +26,7 @@ permissions:
 
 jobs:
   release-cli:
-    runs-on: macos-15   # cargo + codesign + notarytool + shasum; no Swift needed
+    runs-on: macos-15   # cargo + lipo + codesign + shasum; no Swift toolchain needed
     steps:
       - uses: actions/checkout@v4
         with:
@@ -55,42 +47,8 @@ jobs:
       - name: Add Rust targets (rustup is preinstalled on macOS runners)
         run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
-      # Import the Developer ID cert into a temporary keychain — GitHub's
-      # documented recipe ("Installing an Apple certificate on macOS runners"),
-      # built-in `security` only. No third-party action.
-      - name: Install Developer ID signing certificate
-        env:
-          CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
-          CERT_P12_PASSWORD: ${{ secrets.APPLE_CERT_P12_PASSWORD }}
-        run: |
-          CERT_PATH="$RUNNER_TEMP/cert.p12"
-          KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
-          KEYCHAIN_PASSWORD="$(openssl rand -hex 20)"
-
-          echo -n "$CERT_P12_BASE64" | base64 --decode -o "$CERT_PATH"
-
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          security import "$CERT_PATH" -P "$CERT_P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security list-keychains -d user -s "$KEYCHAIN_PATH"
-
-      - name: Write notary API key
-        env:
-          NOTARY_KEY_P8: ${{ secrets.APPLE_NOTARY_KEY_P8 }}
-        run: printf '%s' "$NOTARY_KEY_P8" > "$RUNNER_TEMP/notary.p8"
-
-      - name: Build + sign + notarize artifact bundle
-        # notarytool takes the App Store Connect API key inline — no
-        # store-credentials / keychain-profile step needed.
-        env:
-          CACHEBAY_SIGN_ID: ${{ secrets.APPLE_SIGN_IDENTITY }}
-          CACHEBAY_NOTARY_KEY: ${{ runner.temp }}/notary.p8
-          CACHEBAY_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
-          CACHEBAY_NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
-        run: scripts/build-cli-bundle.sh --sign
+      - name: Build artifact bundle (ad-hoc signed)
+        run: scripts/build-cli-bundle.sh
 
       - name: Pin Package.swift, move tag, publish
         env:
@@ -117,5 +75,5 @@ jobs:
 
           gh release create "$TAG" "$ZIP" \
             --title "$TAG" \
-            --notes "cachebay-cli $TAG — macOS-universal, signed + notarized. Used by the CachebayCodegen SwiftPM plugin." \
+            --notes "cachebay-cli $TAG — macOS-universal, ad-hoc signed. Used by the CachebayCodegen SwiftPM plugin." \
             || gh release upload "$TAG" "$ZIP" --clobber

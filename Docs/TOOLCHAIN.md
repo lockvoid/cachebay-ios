@@ -81,16 +81,25 @@ re-runs.)
 > bypass (or have it open a PR for the `Package.swift` pin) — the commit step
 > pushes straight to `main`.
 
-**Required repo secrets:** `APPLE_CERT_P12_BASE64`, `APPLE_CERT_P12_PASSWORD`,
-`APPLE_SIGN_IDENTITY`, `APPLE_NOTARY_KEY_ID`, `APPLE_NOTARY_ISSUER_ID`,
-`APPLE_NOTARY_KEY_P8`.
+**No secrets required** — see signing below.
 
-### Notarization note
+### Signing: ad-hoc only, no Apple account
 
-A standalone executable can't be *stapled* (stapling needs `.app`/`.dmg`/`.pkg`),
-so Gatekeeper verifies the notarization ticket **online** the first time the
-SwiftPM-downloaded binary runs — fine for online dev machines and CI. For
-fully-offline first runs, wrap the binary in a stapled `.pkg`.
+The release does **not** Developer-ID-sign or notarize, and needs no Apple
+account or secrets. Two facts:
+
+- **Apple Silicon requires a *valid* signature to exec any binary.** `cargo`'s
+  linker ad-hoc-signs each arch, but `lipo` invalidates that, so the script
+  re-signs the universal binary ad-hoc (`codesign --force --sign -`) — free, no
+  identity. (`codesign --verify` then passes.)
+- **Notarization is only for Gatekeeper, which gates *quarantined* downloads.**
+  SwiftPM doesn't set the `com.apple.quarantine` xattr on artifacts it fetches,
+  so Gatekeeper never runs on the plugin's CLI → an ad-hoc-signed binary is
+  enough.
+
+Add Developer ID + notarization **only** if you start distributing the binary
+*outside* SwiftPM (e.g. a browser/`curl` download, which *is* quarantined) or
+actually hit a Gatekeeper block.
 
 ## Fallback: Homebrew / cargo
 
