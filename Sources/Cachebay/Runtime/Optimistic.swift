@@ -395,8 +395,13 @@ public final class Optimistic: @unchecked Sendable {
         lock.unlock()
 
         let b = BuilderImpl(optimistic: self, layer: layer, recording: true)
+        // Atomic for watchers: suspend notifications across the whole closure so
+        // a cache read mid-closure (which internally flushes — Documents.swift:619)
+        // can't leak a half-applied layer. One coalesced `onChange` follows.
+        graph.beginNotificationBatch()
         // Host code — excluded from the span's reported duration.
         span.excludingHost { builder(b) }
+        graph.endNotificationBatch()
         graph.flush()
 
         let weakSelf = self
@@ -435,8 +440,11 @@ public final class Optimistic: @unchecked Sendable {
         // reference; in non-recording mode it's never read.
         let dummy = Layer(id: 0)
         let b = BuilderImpl(optimistic: self, layer: dummy, recording: false)
+        // Atomic for watchers — same rationale as `modifyOptimistic`.
+        graph.beginNotificationBatch()
         // Host code — excluded from the span's reported duration.
         span.excludingHost { builder(b) }
+        graph.endNotificationBatch()
         graph.flush()
     }
 
@@ -619,9 +627,21 @@ public final class Optimistic: @unchecked Sendable {
         // Run the caller's commit closure once, applying its ops
         // directly to the graph (no recording, no layer). The closure
         // captures typed server data from outer scope.
+        //
+        // Batch notifications across the closure: the baseline restore above
+        // rolled the layer's touched records back to their committed baseline
+        // (undoing the optimistic edit), and the closure re-applies the
+        // authoritative server data on top. A cache read inside the closure
+        // (`materialize`/`readQuery` → `graph.flush()`) would otherwise deliver
+        // the rolled-back-but-not-yet-rewritten state to watchers — a frame
+        // where the optimistic value flickers away. Suspending until the
+        // trailing flush makes the commit atomic for observers, matching
+        // `modifyOptimistic` / `applyAutoCommit`.
         let dummy = Layer(id: 0)
         let b = BuilderImpl(optimistic: self, layer: dummy, recording: false)
+        graph.beginNotificationBatch()
         commitBuilder(b)
+        graph.endNotificationBatch()
         graph.flush()
     }
 

@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed — optimistic transactions are atomic for watchers
+
+`modifyOptimistic`, `applyAutoCommit`, and `commit` now coalesce watcher notifications to the closure
+boundary. A cache read inside the builder closure calls `materialize` → `graph.flush()`, which used to
+deliver the **partially-applied** layer to watchers — a query watcher briefly observed one patch
+applied but not the next (a half-applied layer for a frame; e.g. a track un-muting mid-commit). Records
+still land immediately (reads inside the closure see them); only the watcher `onChange` is deferred to a
+single trailing flush, via new `Graph.beginNotificationBatch()` / `endNotificationBatch()` (depth-counted,
+so nested optimistic transactions stay atomic too).
+
+- While a batch is open, **unrelated** watcher emits graph-wide may be briefly coalesced/deferred and
+  delivered on the batch owner's thread — bounded by the closure's duration. Keep optimistic builder
+  closures short (no I/O, no sleeps).
+
 ### Automatic Persisted Queries (APQ) — opt-in, POST
 
 `cachebay-cli` now bakes a `persistedQueryHash` (SHA-256 of the wire-ready `networkQuery`) into every

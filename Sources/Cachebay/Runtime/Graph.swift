@@ -49,6 +49,11 @@ public final class Graph: @unchecked Sendable {
     private var pending: Set<CacheKey> = []
     private var versionClock: UInt32 = 0
     private var isFlushing = false
+    /// While > 0, `flush()` defers delivery — `pending` keeps accumulating so a
+    /// multi-op writer (an optimistic layer) can complete, and tolerate cache
+    /// reads that internally flush, without leaking a half-applied state to
+    /// watchers. See `beginNotificationBatch()`.
+    private var notifySuspendDepth = 0
 
     private let lock = NSRecursiveLock()
 
@@ -243,6 +248,13 @@ public final class Graph: @unchecked Sendable {
     /// loop on the next iteration without recursion.
     public func flush() {
         lock.lock()
+        if notifySuspendDepth > 0 {
+            // Batched (e.g. inside a `modifyOptimistic` closure): keep `pending`
+            // accumulating; the flush after `endNotificationBatch()` delivers it
+            // as one `onChange`, so observers never see a half-applied layer.
+            lock.unlock()
+            return
+        }
         if isFlushing {
             lock.unlock()
             return
@@ -274,6 +286,27 @@ public final class Graph: @unchecked Sendable {
             lock.lock()
         }
         isFlushing = false
+        lock.unlock()
+    }
+
+    /// Suspend `flush()` delivery. While a batch is open, `flush()` is a no-op
+    /// and `pending` keeps accumulating; the matching `endNotificationBatch()`
+    /// followed by a `flush()` delivers the whole batch as a single `onChange`.
+    /// Used by `modifyOptimistic` so an optimistic layer is atomic for watchers
+    /// even when a cache read inside the closure triggers an internal flush.
+    /// Re-entrant (depth-counted).
+    public func beginNotificationBatch() {
+        lock.lock()
+        notifySuspendDepth += 1
+        lock.unlock()
+    }
+
+    /// End a batch opened by `beginNotificationBatch()`. Does not deliver on its
+    /// own — the caller flushes once after, so accumulated `pending` fans out in
+    /// one `onChange`.
+    public func endNotificationBatch() {
+        lock.lock()
+        if notifySuspendDepth > 0 { notifySuspendDepth -= 1 }
         lock.unlock()
     }
 
