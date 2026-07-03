@@ -99,6 +99,37 @@ final class WebSocketReconnectTests: XCTestCase {
             ))
     }
 
+    /// Bounded replacement for a bare `await task.value`. The pumps these
+    /// tests spawn finish only when a stream errors or completes; if that
+    /// callback never arrives (starved cooperative pool, a socket that
+    /// neither connects nor errors), an unbounded await hangs the ENTIRE
+    /// suite run at whichever test happens to be executing. Poll with a
+    /// deadline instead: a stall becomes a clean failure at this line.
+    @discardableResult
+    private func awaitBounded<T: Sendable>(
+        _ task: Task<T, Never>,
+        timeout: TimeInterval = 10,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async -> T? {
+        let result = CaptureBox<T?>(value: nil)
+        Task<Void, Never> {
+            let v = await task.value
+            result.value = v
+        }
+        let deadline = Date().addingTimeInterval(timeout)
+        while result.value == nil, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        guard let value = result.value else {
+            XCTFail(
+                "spawned task did not finish within \(timeout)s — an unbounded `await task.value` here would have hung the whole suite run",
+                file: file, line: line)
+            return nil
+        }
+        return value
+    }
+
     // MARK: - Active subscriber gets an error on drop
 
     func test_activeSubscriber_receivesErrorOnDrop() async throws {
@@ -127,7 +158,7 @@ final class WebSocketReconnectTests: XCTestCase {
         ws.emit(.object(["postUpdated": .object(["__typename": .string("Post"), "id": .string("p1"), "title": .string("hi")])]))
         try await Task.sleep(nanoseconds: 30_000_000)
         ws.dropConnection(allowReconnect: true)
-        await task.value
+        await awaitBounded(task)
 
         XCTAssertEqual(received.value.count, 1, "subscriber should have observed one frame before the drop")
         XCTAssertNotNil(caughtError.value, "subscriber must see the drop as an error so it can recover or surface a UI message")
@@ -149,7 +180,7 @@ final class WebSocketReconnectTests: XCTestCase {
         }
         try await Task.sleep(nanoseconds: 30_000_000)
         ws.dropConnection(allowReconnect: true)
-        _ = await firstTask.value
+        await awaitBounded(firstTask)
 
         // Open a fresh subscription. With reconnect-capable transport,
         // this should deliver frames.
@@ -171,7 +202,7 @@ final class WebSocketReconnectTests: XCTestCase {
         ws.emit(.object(["postUpdated": .object(["__typename": .string("Post"), "id": .string("p1"), "title": .string("after-reconnect")])]))
         try await Task.sleep(nanoseconds: 50_000_000)
         task.cancel()
-        _ = await task.value
+        await awaitBounded(task)
 
         XCTAssertEqual(received.value.count, 1, "post-reconnect subscriber should observe new frames")
     }
@@ -194,7 +225,7 @@ final class WebSocketReconnectTests: XCTestCase {
         // URLSessionWebSocketTransport behaviour where `acked` /
         // `task` aren't reset on socket error.
         ws.dropConnection(allowReconnect: false)
-        _ = await firstTask.value
+        await awaitBounded(firstTask)
 
         // A fresh subscribe must SURFACE the failure to the subscriber
         // (either via finish(throwing:) or an error frame), NOT silently
@@ -211,7 +242,7 @@ final class WebSocketReconnectTests: XCTestCase {
                 caughtError.value = error
             }
         }
-        _ = await task.value
+        await awaitBounded(task)
 
         XCTAssertNotNil(
             caughtError.value,
@@ -280,7 +311,7 @@ final class WebSocketReconnectTests: XCTestCase {
                 return error
             }
         }
-        let err = await task.value
+        guard let err = await awaitBounded(task) else { return }
         XCTAssertNotNil(err, "subscribe with policy.disabled must error out on connect failure")
     }
 
@@ -363,8 +394,8 @@ final class WebSocketReconnectTests: XCTestCase {
         }
 
         await fulfillment(of: [stoppedExpectation], timeout: 5)
-        _ = await consumerTask.value
-        _ = await drainerTask.value
+        await awaitBounded(consumerTask)
+        await awaitBounded(drainerTask)
 
         let delays = scheduledDelays.snapshot()
         XCTAssertEqual(
@@ -414,7 +445,7 @@ final class WebSocketReconnectTests: XCTestCase {
         let consumerTask = Task<Void, Never> {
             do { for try await _ in stream {} } catch { /* expected */  }
         }
-        _ = await consumerTask.value
+        await awaitBounded(consumerTask)
         // Give the reconnector a moment to finalize state transition
         try? await Task.sleep(nanoseconds: 50_000_000)
         if case .stopped(let reason) = ws2.state {
@@ -589,6 +620,11 @@ final class WebSocketReconnectTests: XCTestCase {
         XCTAssertEqual(
             inits.last?["authToken"], .string("NEW"),
             "the new connection_init must carry the updated params, not the stale ones")
+
+        // The fresh connect attempt is parked in waitForAck() (no ack is
+        // ever injected here). Tear it down, or the reconnector + ack
+        // continuation leak into the rest of the suite run.
+        ws.disconnect()
     }
 
     /// `reconnectIfConnected: false` must update the params without
@@ -676,6 +712,10 @@ final class WebSocketReconnectTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(
             pings.count, 3,
             "expected at least 3 ping frames after 3 intervals; got \(pings.count)")
+
+        // The ping timer is parked in the fake clock's sleep and captures
+        // the transport strongly — disconnect so neither outlives the test.
+        ws.disconnect()
     }
 
     /// When the server sends `{"type":"ping"}` (allowed by the spec),
@@ -1196,8 +1236,8 @@ final class WebSocketReconnectTests: XCTestCase {
         let consumer = Task<Void, Never> {
             do { for try await _ in stream {} } catch { /* expected */  }
         }
-        _ = await consumer.value
-        _ = await drainer.value
+        await awaitBounded(consumer)
+        await awaitBounded(drainer)
 
         // Group disconnect events between connecting markers so the
         // assertion targets *per-attempt* duplicates, not the total

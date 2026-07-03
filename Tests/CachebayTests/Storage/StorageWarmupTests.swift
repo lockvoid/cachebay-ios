@@ -323,13 +323,17 @@ final class StorageWarmupTests: XCTestCase {
         }
 
         storage.put(records)
-        // Wait for write-behind to drain.
+        // Wait for write-behind to drain. Bounded: an unbounded wait()
+        // here is sync-over-async — if the flush Task can't be scheduled
+        // it deadlocks the whole suite run instead of failing this test.
         let waitGroup = DispatchSemaphore(value: 0)
         Task {
             try? await storage.flush()
             waitGroup.signal()
         }
-        waitGroup.wait()
+        XCTAssertEqual(
+            waitGroup.wait(timeout: .now() + 30), .success,
+            "storage.flush() did not complete within 30s — write-behind stalled")
         storage.dispose()
     }
 }

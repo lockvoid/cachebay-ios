@@ -201,10 +201,12 @@ final class OptimisticNotificationBatchTests: XCTestCase {
 
         // Controller: open batch, let the writer run inside the window, then end
         // + single trailing flush at depth 0.
+        // All three waits are bounded: a stalled leg must fail THIS test,
+        // not deadlock two GCD threads + the test thread for the whole run.
         DispatchQueue.global(qos: .userInitiated).async {
             graph.beginNotificationBatch()  // depth = 1
             writerStart.signal()
-            writerDone.wait()  // writer's putRecord+flush has happened (swallowed)
+            _ = writerDone.wait(timeout: .now() + 10)  // writer's putRecord+flush has happened (swallowed)
             graph.endNotificationBatch()  // depth = 0
             graph.flush()  // must drain the writer's pending key
             controllerDone.signal()
@@ -212,13 +214,15 @@ final class OptimisticNotificationBatchTests: XCTestCase {
 
         // Writer: its flush runs at depth == 1 → swallowed.
         DispatchQueue.global(qos: .userInitiated).async {
-            writerStart.wait()
+            _ = writerStart.wait(timeout: .now() + 10)
             graph.putRecord("Project:p2", ["updatedAt": .string("crossthread-final")])
             graph.flush()  // no-op while suspended; key stays in pending
             writerDone.signal()
         }
 
-        controllerDone.wait()
+        XCTAssertEqual(
+            controllerDone.wait(timeout: .now() + 10), .success,
+            "batch controller did not finish — cross-queue semaphore chain stalled")
 
         let deadline = Date().addingTimeInterval(2.0)
         while Date() < deadline {
