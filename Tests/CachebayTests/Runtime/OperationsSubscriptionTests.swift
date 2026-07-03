@@ -192,6 +192,125 @@ final class OperationsSubscriptionTests: XCTestCase {
         h.unsubscribe()
     }
 
+    /// REPRODUCTION — Ferment "chat stuck busy until reload" bug.
+    ///
+    /// The passing test above puts the entity at the subscription ROOT
+    /// (`messageAdded` IS the Message). The real chat subscription nests the
+    /// entity UNDER A PAYLOAD WRAPPER — `chatUpdated { chat { id state } }`
+    /// (see `ChatUpdatedSubscription.graphql`) — and a SEPARATE query watcher
+    /// (`ChatQuery`'s `project { chat { ...ChatFields } }`) is what drives the
+    /// composer lock. When the server settles a turn it broadcasts
+    /// `chatUpdated{chat{state:"idle"}}`; if that nested-entity frame does not
+    /// propagate to the `chat(id:)` watcher, the state machine never flips
+    /// busy→idle live and the composer stays wedged on STOP until a full app
+    /// reload refetches the query — exactly the reported symptom.
+    func test_subscription_nestedEntityPayload_triggersSeparateEntityWatcher() async throws {
+        let ws = MockWSTransport(frames: [
+            .object(["chatUpdated": .object(["chat": .object([
+                "__typename": "Chat", "id": "c1", "state": "idle",
+            ])])]),
+        ])
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport(), ws: ws),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
+
+        // Seed the entity 'busy' — the state the composer is wedged on.
+        try client.writeQuery(
+            query: "query Chat($id: ID!) { chat(id: $id) { id state } }",
+            variables: ["id": "c1"],
+            data: .object([
+                "chat": .object(["__typename": "Chat", "id": "c1", "state": "busy"])
+            ])
+        )
+
+        let received = CaptureBox<[String]>(value: [])
+        let h = try client.watchQuery(
+            query: "query Chat($id: ID!) { chat(id: $id) { id state } }",
+            options: WatchQueryOptions(
+                variables: ["id": "c1"],
+                immediate: false,
+                onData: { d in
+                    if let s = d["chat"]?["state"]?.string { received.withLock { $0.append(s) } }
+                }
+            )
+        )
+
+        let stream = try client.executeSubscription(
+            query: "subscription OnChat { chatUpdated { chat { id state } } }"
+        )
+        var consumed = 0
+        for try await _ in stream { consumed += 1; if consumed == 1 { break } }
+        try await Task.sleep(nanoseconds: 30_000_000)
+
+        XCTAssertTrue(
+            received.value.contains("idle"),
+            "a nested-entity subscription frame (chatUpdated { chat }) must notify the separate chat(id:) watcher; got \(received.value) — this is the 'chat stuck busy until reload' bug"
+        )
+        h.unsubscribe()
+    }
+
+    /// REPRODUCTION #2 — the real `ChatQuery` reaches the entity THROUGH ITS
+    /// PARENT: `project(id:) { chat { ...ChatFields } }`, not `chat(id:)` directly
+    /// (as reproduction #1 above did). The subscription writes `Chat:<id>.state`;
+    /// the composer-gate watcher is rooted at `Project:<id>` and only REFERENCES
+    /// `Chat:<id>`. If a subscription-driven entity write does not notify a watcher
+    /// that reaches the entity through a parent ref, the state machine never flips
+    /// busy→idle live — chat stuck busy until reload.
+    func test_subscription_entityWrite_notifiesWatcherRootedAtParent() async throws {
+        let ws = MockWSTransport(frames: [
+            .object(["chatUpdated": .object(["chat": .object([
+                "__typename": "Chat", "id": "c1", "state": "idle",
+            ])])]),
+        ])
+        let client = CachebayClient(
+            options: CachebayOptions(
+                transport: Transport(http: MockHTTPTransport(), ws: ws),
+                cachePolicy: .cacheFirst,
+                suspensionTimeout: 0
+            ))
+
+        // Seed via the PARENT-rooted query, exactly like ChatQuery.
+        let projectChatQuery = "query PC($id: ID!) { project(id: $id) { id chat { id state } } }"
+        try client.writeQuery(
+            query: projectChatQuery,
+            variables: ["id": "p1"],
+            data: .object([
+                "project": .object([
+                    "__typename": "Project", "id": "p1",
+                    "chat": .object(["__typename": "Chat", "id": "c1", "state": "busy"]),
+                ])
+            ])
+        )
+
+        let received = CaptureBox<[String]>(value: [])
+        let h = try client.watchQuery(
+            query: projectChatQuery,
+            options: WatchQueryOptions(
+                variables: ["id": "p1"],
+                immediate: false,
+                onData: { d in
+                    if let s = d["project"]?["chat"]?["state"]?.string { received.withLock { $0.append(s) } }
+                }
+            )
+        )
+
+        let stream = try client.executeSubscription(
+            query: "subscription OnChat { chatUpdated { chat { id state } } }"
+        )
+        var consumed = 0
+        for try await _ in stream { consumed += 1; if consumed == 1 { break } }
+        try await Task.sleep(nanoseconds: 30_000_000)
+
+        XCTAssertTrue(
+            received.value.contains("idle"),
+            "a subscription entity-write (Chat:c1 → idle) must notify the parent-rooted watcher project{chat{state}}; got \(received.value) — this is the 'chat stuck busy until reload' bug"
+        )
+        h.unsubscribe()
+    }
+
     // MARK: - Error frames
 
     /// Mirrors web `handles GraphQL errors in subscription events`.
