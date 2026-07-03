@@ -438,9 +438,13 @@ public final class CachebayClient: @unchecked Sendable {
         return await operations.executeMutation(plan: plan, options: opts)
     }
 
-    public func executeSubscription(query: String, variables: [String: JSONValue] = [:]) throws -> AsyncThrowingStream<OperationResult<JSONValue>, Error> {
+    public func executeSubscription(
+        query: String,
+        variables: [String: JSONValue] = [:],
+        onFrame: (@Sendable (_ frame: JSONValue) -> FrameDisposition)? = nil
+    ) throws -> AsyncThrowingStream<OperationResult<JSONValue>, Error> {
         let plan = try planner.getPlan(.source(query))
-        return operations.executeSubscription(plan: plan, options: ExecuteSubscriptionOptions(variables: variables))
+        return operations.executeSubscription(plan: plan, options: ExecuteSubscriptionOptions(variables: variables, onFrame: onFrame))
     }
 
     // MARK: - Evict

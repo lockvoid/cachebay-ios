@@ -587,6 +587,12 @@ final class StagedWSTransport: WSTransport, @unchecked Sendable {
         c?.yield(OperationResult(data: nil, error: error))
     }
 
+    /// Frame carrying BOTH data and an error (server partial failure).
+    func emit(_ data: JSONValue, error: CombinedError) {
+        lock.lock(); let c = continuation; lock.unlock()
+        c?.yield(OperationResult(data: data, error: error))
+    }
+
     func finish() {
         lock.lock(); let c = continuation; lock.unlock()
         c?.finish()

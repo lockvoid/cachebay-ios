@@ -53,11 +53,34 @@ public struct ExecuteMutationOptions: Sendable {
     }
 }
 
+/// Per-frame disposition returned by a subscription's `onFrame` hook,
+/// evaluated with the raw frame BEFORE normalization.
+public enum FrameDisposition: Sendable, Hashable {
+    /// Today's pipeline: normalize into the store, fire watchers, deliver
+    /// the materialized result.
+    case normalize
+    /// The frame ends here: no store write, no watcher fanout, no data
+    /// delivery. The caller acted inside `onFrame` (e.g. enqueued a
+    /// refetch for a slim "signal" frame). An error piggybacked on the
+    /// frame is still delivered.
+    case skip
+}
+
 /// Options for `client.executeSubscription(query:options:)`.
+///
+/// - `onFrame`: optional per-frame hook, called with the raw frame as the
+///   transport yielded it, before any store work. Return `.skip` to treat
+///   the frame as a pure signal (see `FrameDisposition`). `nil` — the
+///   default — is byte-for-byte the plain pipeline, with no extra work.
 public struct ExecuteSubscriptionOptions: Sendable {
     public var variables: [String: JSONValue]
-    public init(variables: [String: JSONValue] = [:]) {
+    public var onFrame: (@Sendable (_ frame: JSONValue) -> FrameDisposition)?
+    public init(
+        variables: [String: JSONValue] = [:],
+        onFrame: (@Sendable (_ frame: JSONValue) -> FrameDisposition)? = nil
+    ) {
         self.variables = variables
+        self.onFrame = onFrame
     }
 }
 
@@ -366,6 +389,18 @@ public final class Operations: @unchecked Sendable {
                 do {
                     for try await event in stream {
                         if let data = event.data, !isEmptyObject(data) {
+                            // Host decision point: the raw frame, before any
+                            // store work. `.skip` is a pure bypass — no
+                            // normalize, no watcher fanout, no data yield —
+                            // but a piggybacked error still reaches the
+                            // consumer. (Host code runs outside the frame
+                            // span, same as the downstream awaiter.)
+                            if let onFrame = options.onFrame, onFrame(data) == .skip {
+                                if let err = event.error {
+                                    continuation.yield(OperationResult(data: nil, error: err))
+                                }
+                                continue
+                            }
                             // One span per frame — frame work begins at
                             // normalize and ends before yielding to host.
                             let frameSpan = selfRef.profiler?.begin("cachebay.executeSubscription.frame")

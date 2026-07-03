@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added — per-frame normalization opt-out for subscriptions (`onFrame` → `FrameDisposition`)
+
+`executeSubscription` (string, typed stream, typed sync) gains an optional `onFrame` hook, evaluated
+with the **raw frame before any store work**. Return `.normalize` for today's pipeline, or `.skip` for
+a pure bypass: no store write, no watcher fanout, no data delivery — an error piggybacked on the frame
+is still delivered. Built for "subscription as signal": a slim high-frequency frame that deliberately
+omits heavy fields (e.g. to stay under a realtime transport's message cap) must not write a partial
+record where `state` says done but the data isn't there — skip the frame, enqueue a refetch inside
+`onFrame`, and let the follow-up query be the sole writer so the fields land together, atomically.
+
+```swift
+client.executeSubscription(
+    CookUpdated.self, variables: .init(),
+    onFrame: { frame in
+        guard frame.cookUpdated.state == .succeeded else { return .normalize }
+        cookSyncer.enqueueRefetch(key: frame.cookUpdated.id)
+        return .skip
+    },
+    onData: { data in /* normalized frames only */ }
+)
+```
+
+- The typed overloads hand `onFrame` the decoded `Op.Data` built from the raw frame; a frame that
+  fails the typed decode bypasses the hook and falls back to `.normalize` (fail-open — the plain
+  pipeline may still normalize what the typed decode couldn't represent).
+- The hook is per-frame: one stream can interleave normalized and skipped frames freely.
+- `nil` hook (the default) is byte-for-byte the previous pipeline — the extra raw-frame decode is
+  only paid when the hook is set. On normalized frames `onData` still receives the **materialized**
+  result (store round-trip), as before; the hook is the only consumer of the raw decode.
+
 ### Fixed — optimistic transactions are atomic for watchers
 
 `modifyOptimistic`, `applyAutoCommit`, and `commit` now coalesce watcher notifications to the closure

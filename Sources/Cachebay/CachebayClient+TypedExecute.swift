@@ -117,14 +117,26 @@ public extension CachebayClient {
     // MARK: - executeSubscription
 
     /// Stream-style typed subscription. Each event carries an optional `Op.Data`.
+    ///
+    /// `onFrame` receives the DECODED raw frame before normalization; return
+    /// `.skip` to treat it as a pure signal (no store write, no watcher
+    /// fanout, no stream data event). A frame that fails the typed decode
+    /// bypasses the hook and falls back to `.normalize` (fail-open — the
+    /// plain pipeline may still normalize what the typed decode couldn't
+    /// represent).
     func executeSubscription<Op: CachebayOperation>(
         _ op: Op.Type,
-        variables: Op.Variables
+        variables: Op.Variables,
+        onFrame: (@Sendable (_ frame: Op.Data) -> FrameDisposition)? = nil
     ) throws -> AsyncThrowingStream<OperationResult<Op.Data>, Error> {
         let plan = try planner.getPlan(Op.document)
+        var jsonOnFrame: (@Sendable (JSONValue) -> FrameDisposition)? = nil
+        if let onFrame {
+            jsonOnFrame = { json in Op.Data(cachebayJSON: json).map(onFrame) ?? .normalize }
+        }
         let stream = operations.executeSubscription(
             plan: plan,
-            options: ExecuteSubscriptionOptions(variables: variables.__cachebay)
+            options: ExecuteSubscriptionOptions(variables: variables.__cachebay, onFrame: jsonOnFrame)
         )
         return AsyncThrowingStream<OperationResult<Op.Data>, Error> { continuation in
             let task = Task<Void, Never> {
@@ -142,10 +154,12 @@ public extension CachebayClient {
     }
 
     /// Sync subscription. Returns a token; `onData` fires per server frame.
+    /// `onFrame` — see the stream-style overload above.
     @discardableResult
     func executeSubscription<Op: CachebayOperation>(
         _ op: Op.Type,
         variables: Op.Variables,
+        onFrame: (@Sendable (_ frame: Op.Data) -> FrameDisposition)? = nil,
         onData: (@Sendable (_ data: Op.Data) -> Void)? = nil,
         onError: (@Sendable (CombinedError) -> Void)? = nil
     ) -> CachebayToken {
@@ -166,7 +180,7 @@ public extension CachebayClient {
         let task = Task.detached { [weak self] in
             guard let self else { return }
             do {
-                let stream = try self.executeSubscription(op, variables: variables)
+                let stream = try self.executeSubscription(op, variables: variables, onFrame: onFrame)
                 for try await event in stream {
                     if token.isCancelled { return }
                     if let data = event.data { wrappedOnData?(data) }
