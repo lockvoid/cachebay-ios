@@ -177,10 +177,20 @@ public extension CachebayClient {
             }
         }
 
+        // A frame racing token.cancel() must not run the caller's hook (its
+        // side effects — e.g. an enqueued refetch — would fire post-cancel)
+        // nor write the store: hook users opted out of normalization for
+        // frames they judge unsafe, and post-cancel nobody can judge. Gate
+        // to `.skip`. Subscriptions without a hook keep today's behavior
+        // (racing frames normalize until the stream terminates).
+        var gatedOnFrame = onFrame
+        if let hook = onFrame {
+            gatedOnFrame = { [token] frame in token.isCancelled ? .skip : hook(frame) }
+        }
         let task = Task.detached { [weak self] in
             guard let self else { return }
             do {
-                let stream = try self.executeSubscription(op, variables: variables, onFrame: onFrame)
+                let stream = try self.executeSubscription(op, variables: variables, onFrame: gatedOnFrame)
                 for try await event in stream {
                     if token.isCancelled { return }
                     if let data = event.data { wrappedOnData?(data) }

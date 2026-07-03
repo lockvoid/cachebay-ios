@@ -349,6 +349,36 @@ private struct CookUpdatedSub: CachebayOperation {
     )
 }
 
+// Decode-parity fixture: enum, ALIASED field (`note: text`), and a raw
+// JSONValue scalar — the constructs whose raw-frame decode could diverge
+// from the materialized decode.
+private enum CookPhase: String, Sendable, Hashable, CaseIterable {
+    case running = "RUNNING"
+    case succeeded = "SUCCEEDED"
+}
+
+@CachebayData(typename: "")
+private struct CookSignalData: Sendable, Hashable, CachebayValue {
+    let cookUpdated: Cook
+    @CachebayData(typename: "Cook")
+    struct Cook: Identifiable, Sendable, Hashable, CachebayValue {
+        let __typename: String
+        let id: String
+        let phase: GraphQLEnum<CookPhase>
+        let note: String
+        let meta: JSONValue
+    }
+}
+private struct CookSignalSub: CachebayOperation {
+    struct Variables: OperationVariables {
+        var __cachebay: [String: JSONValue] { [:] }
+    }
+    typealias Data = CookSignalData
+    static let document: QueryDocument = .source(
+        "subscription CookSignalSub { cookUpdated { __typename id phase note: text meta } }"
+    )
+}
+
 final class TypedSubscriptionFrameDispositionTests: XCTestCase {
 
     private func makeClient(ws: WSTransport) -> CachebayClient {
@@ -398,6 +428,58 @@ final class TypedSubscriptionFrameDispositionTests: XCTestCase {
             client.graph.getField("Cook:c1", "state")?.string, "failed",
             "store must hold the last NORMALIZED state; the skipped 'succeeded' frame must not have landed"
         )
+        token.cancel()
+    }
+
+    /// Decode parity: the hook's raw-frame decode must agree with the
+    /// materialized decode `onData` receives, across enums
+    /// (known + unknown case), an ALIASED field, and a raw JSONValue
+    /// scalar. Divergence would mean the hook judges a different value
+    /// than the pipeline delivers.
+    func test_typed_rawFrameDecode_matchesMaterializedDecode_enumAliasScalar() {
+        let meta: JSONValue = .object(["temp": .int(180), "tags": .array([.string("slow")])])
+        let ws = MockWSTransport(frames: [
+            .object(["cookUpdated": .object([
+                "__typename": "Cook", "id": "c1",
+                "phase": "RUNNING", "note": "warming", "meta": meta,
+            ])]),
+            .object(["cookUpdated": .object([
+                "__typename": "Cook", "id": "c1",
+                "phase": "BURNED",  // not a CookPhase case → .unknown
+                "note": "uh oh", "meta": meta,
+            ])]),
+        ])
+        let client = makeClient(ws: ws)
+
+        let hookSaw = CaptureBox<[CookSignalData.Cook]>(value: [])
+        let dataSaw = CaptureBox<[CookSignalData.Cook]>(value: [])
+        let exp = expectation(description: "both frames normalized + delivered")
+        exp.expectedFulfillmentCount = 2
+
+        let token = client.executeSubscription(
+            CookSignalSub.self, variables: .init(),
+            onFrame: { frame in
+                hookSaw.withLock { $0.append(frame.cookUpdated) }
+                return .normalize
+            },
+            onData: { data in
+                dataSaw.withLock { $0.append(data.cookUpdated) }
+                exp.fulfill()
+            },
+            onError: { err in XCTFail("unexpected onError: \(err)") }
+        )
+        wait(for: [exp], timeout: 2.0)
+
+        XCTAssertEqual(hookSaw.value.count, 2)
+        XCTAssertEqual(
+            hookSaw.value, dataSaw.value,
+            "raw-frame decode (hook) and materialized decode (onData) must be identical"
+        )
+        XCTAssertEqual(hookSaw.value.first?.phase, .known(.running))
+        XCTAssertEqual(hookSaw.value.last?.phase, .unknown("BURNED"))
+        XCTAssertEqual(hookSaw.value.first?.note, "warming", "aliased field must decode from the raw frame")
+        XCTAssertEqual(hookSaw.value.first?.meta, meta, "JSONValue scalar must survive both paths")
+        XCTAssertEqual(client.graph.getField("Cook:c1", "text")?.string, "uh oh")
         token.cancel()
     }
 
