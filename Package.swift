@@ -28,8 +28,8 @@ let defaultCLIMode = "release"
 let cliMode = ProcessInfo.processInfo.environment["CACHEBAY_CLI"] ?? defaultCLIMode
 
 let cliRepo = "lockvoid/cachebay-ios"          // GitHub <owner>/<repo> for release assets
-let cliReleaseTag = "v1.3.1"
-let cliReleaseChecksum = "c27a7411b83fe28cc57c036a4a49d5d67d04b6b00020c2a35ca58ec144b6ef0b"
+let cliReleaseTag = "v1.4.0"
+let cliReleaseChecksum = "f1915dd1e915a30e8861af39729bb561b0d206937d3af8a5cea5ef13d5214f51"
 
 var products: [Product] = [
     // Runtime client. The library every consumer imports.
