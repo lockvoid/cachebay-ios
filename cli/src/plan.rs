@@ -258,9 +258,20 @@ fn lower_selection_set(
             }
         }
     }
-    // Ensure __typename on every object selection set (matches Swift Compiler.injectRecursive).
-    let has_typename_after_merge = out.iter().any(|f| f.field_name == "__typename");
-    if !seen_typename && !has_typename_after_merge && parent_typename != "" && !out.is_empty() {
+    // Ensure a SHARED __typename on every object selection set (matches Swift
+    // Compiler.injectRecursive). A typename synthesized inside an inline
+    // fragment is narrowed to that concrete type and cannot discriminate other
+    // exhaustive interface cases. Treating any narrowed typename as sufficient
+    // emitted those other cases with `typename: ""`, which made the generated
+    // @CachebayInterface fail to compile.
+    let has_shared_typename = out.iter().any(|f| {
+        f.field_name == "__typename"
+            && f.type_condition
+                .as_deref()
+                .map(|tc| tc == parent_typename)
+                .unwrap_or(true)
+    });
+    if !has_shared_typename && parent_typename != "" && !out.is_empty() {
         out.push(synthetic_typename_field());
     }
     // Dedupe respecting polymorphism: shared fields (no type condition, or
@@ -711,6 +722,65 @@ mod shape_for_type_tests {
         assert!(!outer_nullable(shape_for_type(&Type::NonNullNamed(named("Sub")), false)));
         assert!(outer_nullable(shape_for_type(&Type::Named(named("Sub")), false)));
         assert!(!is_list(shape_for_type(&Type::NonNullNamed(named("Sub")), false)));
+    }
+}
+
+#[cfg(test)]
+mod typename_lowering_tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// Inline fragments synthesize their own narrowed typenames. The enclosing
+    /// interface still needs a shared typename so every exhaustive schema
+    /// implementor can be dispatched and pinned by @CachebayData.
+    #[test]
+    fn interface_adds_shared_typename_when_only_inline_fragment_has_one() {
+        let schema = r#"
+            interface Node { id: ID! }
+            type Alpha implements Node { id: ID!, detail: String }
+            type Beta implements Node { id: ID! }
+            type Query { node: Node! }
+        "#;
+        let operation = r#"
+            query NodeQuery { node { ...NodeFields } }
+
+            fragment NodeFields on Node {
+              id
+              ... on Alpha { detail }
+            }
+        "#;
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("cachebay-plan-{}-{nonce}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let operation_path = dir.join("NodeFields.graphql");
+        std::fs::write(&operation_path, operation).unwrap();
+
+        let ctx = crate::load::build_compiler(
+            schema,
+            std::slice::from_ref(&operation_path),
+            std::slice::from_ref(&dir),
+        )
+        .unwrap();
+        assert!(ctx.diagnostics.is_empty(), "{:?}", ctx.diagnostics);
+        let plans = build_plans(&ctx).unwrap();
+        let plan = plans.iter().find(|p| p.name == "NodeFields").unwrap();
+        let shared_typenames: Vec<_> = plan
+            .root
+            .iter()
+            .filter(|f| {
+                f.field_name == "__typename"
+                    && f.type_condition
+                        .as_deref()
+                        .map(|tc| tc == "Node")
+                        .unwrap_or(true)
+            })
+            .collect();
+
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(shared_typenames.len(), 1, "{:#?}", plan.root);
     }
 }
 

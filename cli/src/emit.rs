@@ -1134,7 +1134,10 @@ fn swift_identifier(s: &str) -> String {
     match s {
         "class" | "struct" | "enum" | "protocol" | "extension" | "func" | "var" | "let"
         | "if" | "else" | "return" | "for" | "while" | "do" | "try" | "catch" | "throw"
-        | "switch" | "case" | "default" | "self" | "init" | "deinit" => format!("`{s}`"),
+        | "switch" | "case" | "default" | "self" | "init" | "deinit" | "in" | "is" | "as"
+        | "nil" | "true" | "false" | "where" | "guard" | "defer" | "import" | "repeat"
+        | "break" | "continue" | "fallthrough" | "subscript" | "typealias" | "static"
+        | "inout" | "operator" | "super" | "internal" | "private" | "public" => format!("`{s}`"),
         _ => s.to_string(),
     }
 }

@@ -187,4 +187,60 @@ final class CachebayDataMacroTests: XCTestCase {
             macros: macros
         )
     }
+
+    // A union/interface may have no fields shared by all concrete members.
+    // Cachebay still emits a Codable placeholder for that branch, and it must
+    // encode as an empty object without requiring explicit `__typename` in the
+    // operation source.
+    func test_emptyCodableStruct_fullExpansion() {
+        assertMacroExpansion(
+            #"""
+            @CachebayData(typename: "")
+            struct Shared: Codable {
+            }
+            """#,
+            expandedSource:
+                #"""
+                struct Shared: Codable {
+
+                    public init() {
+                    }
+
+                    @_spi(Cachebay) public init?(_dataDict dict: [String: Cachebay.JSONValue]) {
+
+                    }
+
+                    @_spi(Cachebay) public func __dataDict() -> [String: Cachebay.JSONValue] {
+                        var d: [String: Cachebay.JSONValue] = [:]
+                        return d
+                    }
+
+                    public init?(cachebayJSON json: Cachebay.JSONValue) {
+                        guard case .object(let d) = json else {
+                            return nil
+                        }
+                        self.init(_dataDict: d)
+                    }
+
+                    public var cachebayJSON: Cachebay.JSONValue {
+                        .object(self.__dataDict())
+                    }
+
+                    nonisolated(unsafe) public static let __cachebayFieldNames: [AnyKeyPath: String] = [:]
+
+                    public enum CodingKeys: CodingKey {
+                    }
+
+                    public init(from decoder: any Decoder) throws {
+                        _ = try decoder.container(keyedBy: CodingKeys.self)
+                    }
+
+                    public func encode(to encoder: any Encoder) throws {
+                        _ = encoder.container(keyedBy: CodingKeys.self)
+                    }
+                }
+                """#,
+            macros: macros
+        )
+    }
 }

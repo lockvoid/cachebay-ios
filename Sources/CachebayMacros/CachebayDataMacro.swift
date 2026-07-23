@@ -217,6 +217,26 @@ extension CachebayDataMacro {
     /// (`decodeIfPresent ?? default`) and optionals (`decodeIfPresent`); encode
     /// writes every field (optionals as explicit `null`, matching a wire payload).
     static func makeCodable(props: [CachebayProperty], typename: String) -> [DeclSyntax] {
+        // A union/interface can legitimately have no fields shared by every
+        // concrete member. Swift forbids an empty raw-value enum, so the usual
+        // `CodingKeys: String` declaration does not compile for that shape.
+        // Keep it Codable as an empty keyed object without manufacturing a
+        // source-level `__typename` property solely for code generation.
+        if props.isEmpty {
+            let codingKeys: DeclSyntax = "public enum CodingKeys: CodingKey {}"
+            let initFrom: DeclSyntax = """
+                public init(from decoder: any Decoder) throws {
+                _ = try decoder.container(keyedBy: CodingKeys.self)
+                }
+                """
+            let encodeTo: DeclSyntax = """
+                public func encode(to encoder: any Encoder) throws {
+                _ = encoder.container(keyedBy: CodingKeys.self)
+                }
+                """
+            return [codingKeys, initFrom, encodeTo]
+        }
+
         let keyCases = props.map { "case \($0.name)" }.joined(separator: "\n")
         let codingKeys: DeclSyntax = """
             public enum CodingKeys: String, CodingKey {
